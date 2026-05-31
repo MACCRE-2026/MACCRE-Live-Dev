@@ -1,0 +1,16 @@
+{
+  "typeCheckingMode": "basic",
+  "include": ["maccre_core", "maccre_mcp.py", "maccre.py"],
+  "exclude": [
+    "maccre_core/_vendor",
+    "maccre_core/tests",
+    "maccre_core/_archive",
+    "_archive",
+    "scripts",
+    ".venv",
+    ".ruff_cache",
+    "**/__pycache__"
+  ],
+  "venvPath": ".",
+  "venv": ".venv"
+}

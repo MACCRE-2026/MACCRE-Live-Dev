@@ -1,0 +1,1 @@
+Topology test T2. Chain: NODE_A → NODE_B (will fail) → RECOVERY.

@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Hoarder (God Mode)",
+  "version": "2.1",
+  "description": "Scraper with All-Frame access.",
+  "permissions": ["activeTab", "scripting", "downloads"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["jszip.min.js", "turndown.js", "content.js"],
+      "css": ["styles.css"],
+      "all_frames": true
+    }
+  ]
+}

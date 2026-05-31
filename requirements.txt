@@ -1,0 +1,5 @@
+# MACCREv2
+# Primary Requirement File Wrapper
+
+-r requirements-sovereign.txt
+-r requirements-optional.txt

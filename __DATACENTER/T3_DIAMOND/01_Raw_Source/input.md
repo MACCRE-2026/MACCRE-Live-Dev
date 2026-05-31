@@ -1,0 +1,1 @@
+Topology test T3. Diamond pattern: ROOT fans out to BRANCH_A and BRANCH_B, both feed MERGE.

@@ -1,0 +1,23 @@
+
+/* The highlighting box for selection mode */
+.gemini-scraper-highlight {
+  outline: 4px solid #00e676 !important;
+  background-color: rgba(0, 230, 118, 0.1) !important;
+  cursor: crosshair !important;
+  transition: all 0.1s ease;
+}
+
+/* A processing overlay so you know it's working */
+.gemini-scraper-overlay {
+  position: fixed; top: 20px; right: 20px; 
+  background: #333; color: white; padding: 15px 20px; 
+  border-radius: 8px; z-index: 99999; font-family: sans-serif;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  font-size: 14px;
+  animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

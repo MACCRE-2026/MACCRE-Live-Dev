@@ -1,0 +1,21 @@
+{
+  "VIDEO_FORMAT": "mp4",
+  "VIDEO_RESOLUTION": "1280x720",
+  "VIDEO_FPS": "24",
+  "VIDEO_CODEC": "libx264",
+  "VIDEO_CRF": "23",
+  "AUDIO_CODEC": "aac",
+  "AUDIO_BITRATE": "192k",
+  "TTS_LANGUAGE_CODE": "en-US",
+  "TTS_VOICE_NAME": "en-US-Journey-F",
+  "TTS_SPEAKING_RATE": "1.0",
+  "TTS_PITCH": "0.0",
+  "IMAGE_MODEL": "imagen-3.0-generate-001",
+  "IMAGE_STYLE": "cinematic",
+  "IMAGE_ASPECT_RATIO": "16:9",
+  "IMAGE_SAMPLES": "1",
+  "OUTPUT_FILENAME": "output",
+  "GENERATE_THUMBNAIL": "TRUE",
+  "FFMPEG_PATH": "ffmpeg",
+  "FFPROBE_PATH": "ffprobe"
+}

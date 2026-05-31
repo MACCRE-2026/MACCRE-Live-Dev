@@ -1,0 +1,1 @@
+Topology test T6. Pre-flight must reject this topology before any agent runs.

@@ -1,0 +1,1 @@
+Topology test T1. You are node SOLO. Confirm you received this message and write your output.

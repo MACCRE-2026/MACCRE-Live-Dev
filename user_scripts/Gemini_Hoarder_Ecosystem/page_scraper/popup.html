@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { width: 280px; padding: 15px; font-family: sans-serif; }
+    button { width: 100%; padding: 10px; margin-bottom: 8px; cursor: pointer; border-radius: 4px; font-weight: bold; border: 1px solid #ccc;}
+    
+    #btn-select { background-color: #e3f2fd; border-color: #2196f3; color: #0d47a1; }
+    #btn-select:hover { background-color: #bbdefb; }
+    
+    #btn-all { background-color: #e8f5e9; border-color: #4caf50; color: #1b5e20; }
+    #btn-all:hover { background-color: #c8e6c9; }
+    
+    #btn-batch { background-color: #fff3e0; border-color: #ff9800; color: #e65100; }
+    #btn-batch:hover { background-color: #ffe0b2; }
+
+    #status { font-size: 12px; color: #666; margin-top: 10px; text-align: center; border-top: 1px solid #eee; padding-top: 10px;}
+  </style>
+</head>
+<body>
+  <h3 style="margin-top:0">Gemini Hoarder</h3>
+  <button id="btn-select">🎯 Select Frame</button>
+  <button id="btn-all">📑 Scrape Page (+Assets)</button>
+  <button id="btn-batch">📚 Batch Archive All</button>
+  <div id="status">Ready</div>
+  <script src="popup.js"></script>
+</body>
+</html>

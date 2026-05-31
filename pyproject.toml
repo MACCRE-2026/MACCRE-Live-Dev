@@ -1,0 +1,22 @@
+[tool.ruff]
+exclude =[
+    ".venv",
+    ".git",
+    "__pycache__",
+    "_archive",
+    "gui/__Deprecated",
+    "maccre_core/orchestration/__Deprecated",
+    "Sovereign-Auth-Drop"
+]
+line-length = 120
+
+[tool.pyright]
+exclude =[
+    "**/node_modules",
+    "**/__pycache__",
+    "_archive",
+    ".venv",
+    "gui/__Deprecated",
+    "maccre_core/orchestration/__Deprecated",
+    "Sovereign-Auth-Drop"
+]

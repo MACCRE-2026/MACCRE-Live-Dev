@@ -1,0 +1,58 @@
+# ── Python runtime ────────────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.spec
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── MACCREv2 Datacenter — per-job run outputs (re-generated, never committed) ─
+__DATACENTER/*/03_Agent_Ledgers/job_*/
+__DATACENTER/*/04_Code_Artifacts/job_*/
+__DATACENTER/*/05_Rendered_Media/job_*/
+
+# Memory pins are transient per-job thought snapshots
+__DATACENTER/*/06_Memory_Pins/
+
+# Session snapshot XLSXes (frozen copies of workbooks, not source)
+__DATACENTER/*/CompletedSessions/
+
+# SQLite databases (runtime state, re-created on launch)
+*.db
+*.db-shm
+*.db-wal
+
+# ── Secrets & vault ───────────────────────────────────────────────────────────
+__DATACENTER/.vault/
+.env
+.env.*
+secrets/
+vault_keys.json
+mcp_config.json
+
+# ── Keep source workbooks, topology CSVs, and agent cards ─────────────────────
+!__DATACENTER/*/MACCRE_Swarm_Request.xlsx
+!__DATACENTER/*/02_Dynamic_Context/topology.csv
+!__DATACENTER/*/02_Dynamic_Context/agent_roster.csv
+!__DATACENTER/*/02_Dynamic_Context/agent_extras.json
+!__DATACENTER/*/01_Raw_Source/input.md
+
+# ── OS noise ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+
+# ── Build / log outputs ───────────────────────────────────────────────────────
+*.log
+build_pipeline.log
+dist_omni/

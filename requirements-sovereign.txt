@@ -1,0 +1,25 @@
+# MACCREv2 SOVEREIGN CORE DEPENDENCIES
+# Phase 1A Triage — Only active imports included.
+#
+# NOTE: openpyxl is intentionally ABSENT. It is vendored into maccre_core/_vendor/
+# and must NEVER be re-installed via pip. See maccre_core/_vendor/README.md.
+
+# Google Core
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-genai>=0.2.0
+
+# State Management / Data Generation
+sqlite-vec>=0.1.6
+# chromadb>=0.4.22  # EXCISED 2026-04-25 — replaced by SovereignPinStore (SQLite FTS5, zero deps)
+
+# Edge / Platform Tools
+requests>=2.31.0
+watchdog>=4.0.0
+win10toast>=0.9
+# pyzmq>=25.0.0  # EXO_DEAD: ZMQ live-session audio pipeline \u2014 paused per handover §1
+
+# CI/CD and Linting
+pyright>=1.1.350
+ruff>=0.3.0
+pytest>=8.0.0

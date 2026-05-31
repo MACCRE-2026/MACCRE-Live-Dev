@@ -1,0 +1,16 @@
+# ruff.toml — MACCREv2 QA pipeline exclusions
+line-length = 120
+
+exclude = [
+    "_archive",
+    "__Deprecated",
+    "*/__Deprecated",
+    "Sovereign-Auth-Drop",
+    "gui/nexus_dashboard.py",
+    ".venv",
+    "__TEST_SANDBOX",
+    "maccre_core/_vendor",
+]
+
+[lint]
+per-file-ignores = { "tests/*" = ["F841"], "scripts/*" = ["E402", "E401"] }

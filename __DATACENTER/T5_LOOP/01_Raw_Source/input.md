@@ -1,0 +1,1 @@
+Topology test T5. REFINER produces a draft. JUDGE evaluates and routes back if insufficient. Loop is bounded.

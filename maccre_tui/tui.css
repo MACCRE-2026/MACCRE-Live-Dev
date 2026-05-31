@@ -1,0 +1,30 @@
+#agent-grid {
+    layout: grid;
+    grid-size: 3;
+    grid-columns: 1fr 1fr 1fr;
+    height: 65%;
+}
+
+AgentPane {
+    border: solid $accent;
+    height: 100%;
+}
+
+#control-panel {
+    height: 25%;
+    border-top: solid $primary;
+}
+
+#routing-controls {
+    width: 40%;
+    padding: 1;
+}
+
+PhysicsMonitor {
+    width: 60%;
+    padding: 1;
+}
+
+#user-input {
+    dock: bottom;
+}

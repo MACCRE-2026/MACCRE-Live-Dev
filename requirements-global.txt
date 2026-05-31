@@ -1,0 +1,20 @@
+# flet==0.82.2  # EXO_DEAD: GUI era — no Flet UI in EXO-GANS scope
+fastapi
+uvicorn
+google-genai
+python-dotenv
+# streamlit  # EXO_DEAD: Dashboard — not wired to active pipeline
+pydantic
+mcp[cli]
+fastmcp
+# chromadb  # EXCISED 2026-04-25 — replaced by SovereignPinStore (SQLite FTS5, zero deps)
+openai
+google-cloud-texttospeech
+edge-tts
+pydub
+psutil
+cryptography
+asyncio
+ffmpeg-python
+pandas
+jinja2

@@ -1,0 +1,9 @@
+{
+  "source_directories": [
+    "maccre_core"
+  ],
+  "search_path":[
+    ".venv/Lib/site-packages"
+  ],
+  "strict": false
+}

@@ -1,0 +1,26 @@
+{
+  "TestAgent": {
+    "top_p": null,
+    "top_k": null,
+    "max_output_tokens": 512,
+    "thinking_budget": 0,
+    "search_grounding": false,
+    "brave_search": false,
+    "url_context": [],
+    "response_format": "text",
+    "safety_level": "minimal",
+    "compute_tier": "cloud"
+  },
+  "DetailAgent": {
+    "top_p": null,
+    "top_k": null,
+    "max_output_tokens": 4096,
+    "thinking_budget": 0,
+    "search_grounding": false,
+    "brave_search": false,
+    "url_context": [],
+    "response_format": "text",
+    "safety_level": "minimal",
+    "compute_tier": "cloud"
+  }
+}

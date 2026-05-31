@@ -1,0 +1,9 @@
+{
+  "CHROMA_COLLECTION": "maccre_swarm",
+  "EMBEDDING_MODEL": "gemini-embedding-001",
+  "CHUNK_SIZE": "800",
+  "CHUNK_OVERLAP": "100",
+  "RETRIEVAL_LIMIT": "10",
+  "SIMILARITY_THRESHOLD": "0.5",
+  "PERSIST_DIRECTORY": "chroma_db"
+}
