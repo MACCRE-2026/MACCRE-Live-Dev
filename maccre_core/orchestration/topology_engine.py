@@ -241,7 +241,102 @@ class TopologyEngine:
                             "detail": f"Next node '{target}' does not exist in topology.",
                         })
 
+
+        # 5. Wait_For targets must exist in topology
+        _wait_for_raw: str = str(cfg.get("wait_for", "") or "").strip()
+        if _wait_for_raw and _wait_for_raw.lower() != "none":
+            _wait_targets = [w.strip() for w in _wait_for_raw.replace("|", ",").split(",") if w.strip()]
+            for _wt in _wait_targets:
+                if _wt not in topology:
+                    issues.append({
+                        "node": node_id,
+                        "field": "wait_for",
+                        "severity": "ERROR",
+                        "detail": f"Wait_For target '{_wt}' does not exist in topology.",
+                    })
+
+            # 5b. Fan-in size warning — large wait_for lists risk context overflow
+            if len(_wait_targets) > 5:
+                issues.append({
+                    "node": node_id,
+                    "field": "wait_for",
+                    "severity": "WARN",
+                    "detail": (
+                        f"Fan-in has {len(_wait_targets)} gathered artifacts — "
+                        "exceeding 5 may saturate the context window."
+                    ),
+                })
+
+
+        # 6. Circular wait_for dependency detection (post-loop, graph-level)
+        # Build an adjacency map: node -> set of nodes it must wait for
+        _wait_graph: dict[str, set[str]] = {}
+        for _nid, _cfg in topology.items():
+            _raw = str(_cfg.get("wait_for", "") or "").strip()
+            if _raw and _raw.lower() != "none":
+                _wait_graph[_nid] = {
+                    w.strip() for w in _raw.replace("|", ",").split(",") if w.strip()
+                }
+            else:
+                _wait_graph[_nid] = set()
+
+        # DFS cycle detection on the wait_for graph
+        _visited: set[str] = set()
+        _in_stack: set[str] = set()
+
+        def _has_cycle(node: str) -> bool:
+            _visited.add(node)
+            _in_stack.add(node)
+            for neighbour in _wait_graph.get(node, set()):
+                if neighbour not in topology:
+                    continue  # already caught by check 5
+                if neighbour not in _visited:
+                    if _has_cycle(neighbour):
+                        return True
+                elif neighbour in _in_stack:
+                    return True
+            _in_stack.discard(node)
+            return False
+
+        for _nid in topology:
+            if _nid not in _visited:
+                if _has_cycle(_nid):
+                    issues.append({
+                        "node": _nid,
+                        "field": "wait_for",
+                        "severity": "ERROR",
+                        "detail": "Circular wait_for dependency detected — topology would deadlock.",
+                    })
+
+        # 7. dialogue_partner must exist in agent_roster.csv when dialogue_rounds > 0
+        import csv as _csv  # noqa: PLC0415
+        from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: PLC0415
+        _roster_path = get_datacenter_path("02_Dynamic_Context", "agent_roster.csv")
+        _roster_names: set[str] = set()
+        if _roster_path.exists():
+            with _roster_path.open(encoding="utf-8") as _rf:
+                for _rrow in _csv.DictReader(_rf):
+                    _rname = str(_rrow.get("AGENT_NAME", "") or "").strip()
+                    if _rname:
+                        _roster_names.add(_rname)
+
+        for _nid, _cfg in topology.items():
+            _dp = str(_cfg.get("dialogue_partner", "") or "").strip()
+            _dr_raw = str(_cfg.get("dialogue_rounds", "0") or "0").strip()
+            try:
+                _dr = int(float(_dr_raw))
+            except (TypeError, ValueError):
+                _dr = 0
+            if _dp and _dr > 0 and _roster_names and _dp not in _roster_names:
+                issues.append({
+                    "node": _nid,
+                    "field": "dialogue_partner",
+                    "severity": "ERROR",
+                    "detail": f"Dialogue partner '{_dp}' not found in agent_roster.csv.",
+                })
+
         return ValidationReport(issues=issues, skipped=False)
+
 
 
 class ValidationReport:

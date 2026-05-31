@@ -468,9 +468,10 @@ def build_t6() -> None:
              "", "0.7", "1", "none", "FAILED",
              "04_Code_Artifacts/T6_VALIDATE/valid_output.md", "", ""],
             # Orphan: nothing routes here. Dead-end: NONEXISTENT_TARGET not defined.
+            # Also has a bad wait_for target to exercise Phase 3 check 5.
             ["ORPHAN_NODE", "TestAgent", "NONEXISTENT_TARGET",
-             "Orphan node — unreachable. Routes to a nonexistent target.",
-             "", "0.7", "1", "none", "FAILED", "", "", ""],
+             "Orphan node — unreachable. Routes to a nonexistent target. Also waits for a ghost node.",
+             "", "0.7", "1", "GHOST_NODE", "FAILED", "", "", ""],
         ],
     )
 
