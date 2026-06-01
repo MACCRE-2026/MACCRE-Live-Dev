@@ -617,6 +617,34 @@ You do NOT need to ask for permission to use them. If your instructions require 
             self.memory_engine.extract_and_store(ledger_content_out, current_node, job_id)
 
             next_node: str = str(node_config["next_node_success"])
+
+            # ── Phase 4: Conditional Routing ─────────────────────────────────────────
+            # If the node's output contains ROUTE_TO:<NODE_ID>, override the static
+            # next_node with the model-specified target.  This enables backward routing
+            # (e.g. JUDGE re-queuing REFINER) without hardcoding the loop in the CSV.
+            #
+            # Safety constraints:
+            #  1. Target must exist in the topology (no phantom routing)
+            #  2. Target must be a valid string (not a terminal sentinel)
+            #  3. The current node's max_recursion already bounds total re-queues
+            import re as _re  # noqa: PLC0415
+            _ROUTE_TO_PATTERN = _re.compile(r"ROUTE_TO:([A-Z][A-Z0-9_]*)", _re.IGNORECASE)
+            _route_match = _ROUTE_TO_PATTERN.search(raw_model_output or "")
+            if _route_match:
+                _candidate = _route_match.group(1).strip().upper()
+                _topology_map = self.topology.get_topology() if self.topology else {}
+                if _candidate and _candidate not in {"STOP", "DONE", "TERMINATE", "FAILED"} and _candidate in _topology_map:
+                    print(
+                        f"[{AGENT_ID}] CONDITIONAL ROUTE: '{next_node}' overridden by "
+                        f"ROUTE_TO:{_candidate} (model-directed)"
+                    )
+                    next_node = _candidate
+                elif _candidate:
+                    print(
+                        f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:{_candidate} ignored "
+                        f"(target not in topology or is terminal sentinel)"
+                    )
+
             ops_log.node_routed(
                 agent_name=str(node_config.get("agent_name", current_node)),
                 next_node=next_node,

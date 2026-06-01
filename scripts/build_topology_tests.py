@@ -415,20 +415,29 @@ def build_t5() -> None:
              "", "0.7", "1", "none", "FAILED",
              "04_Code_Artifacts/T5_LOOP/init.md", "", ""],
             ["REFINER", "TestAgent", "JUDGE",
-             "You are REFINER. Write a haiku (3 lines, 5-7-5 syllables) about distributed systems. "
-             "Call write_file to save to: 04_Code_Artifacts/T5_LOOP/refiner_draft.md",
+             "You are REFINER writing a haiku about distributed systems. "
+             "TWO-PHASE RULE — read your context first: "
+             "Phase 1 (no CRITIQUE block in context): Write a haiku where the MIDDLE line "
+             "has exactly 6 syllables (intentionally wrong — do NOT correct this). "
+             "Example structure: Line1=5syl, Line2=6syl(wrong), Line3=5syl. "
+             "Call write_file to save to: 04_Code_Artifacts/T5_LOOP/refiner_draft.md "
+             "Phase 2 (CRITIQUE block IS in context): Fix the middle line to exactly 7 syllables. "
+             "Prefix your haiku with 'REVISED:'. "
+             "Call write_file to overwrite: 04_Code_Artifacts/T5_LOOP/refiner_draft.md",
              "", "0.7", "1", "none", "FAILED",
              "04_Code_Artifacts/T5_LOOP/refiner_draft.md", "", ""],
-            # JUDGE: routes to REFINER on first pass, STOP on second.
-            # max_recursion=3 ensures the loop terminates even if JUDGE keeps rejecting.
+            # JUDGE: rejects when middle line ≠ 7 syllables, accepts when it sees 'REVISED:'.
+            # CRITICAL: emit ROUTE_TO: as the FIRST word of plain text — no write_file on reject.
             ["JUDGE", "JudgeAgent", "STOP",
-             "You are JUDGE evaluating REFINER's haiku. "
-             "Check the [PREVIOUS NODE OUTPUT] for the haiku. "
-             "IMPORTANT RULE: If this is the FIRST time you are evaluating (no prior judgment in context), "
-             "REJECT it and output exactly: ROUTE_TO:REFINER and a brief critique. "
-             "If you have already rejected once (prior judgment exists in context), ACCEPT it and "
-             "output: ROUTE_TO:STOP and call write_file to save the accepted haiku to: "
-             "04_Code_Artifacts/T5_LOOP/accepted_haiku.md",
+             "You are JUDGE evaluating a haiku. Read the [PREVIOUS NODE OUTPUT] haiku carefully. "
+             "TASK: Count the syllables in each line of the haiku. "
+             "DECISION RULE — choose exactly one path: "
+             "PATH A — The middle line does NOT have 7 syllables (it has 6 or another wrong count): "
+             "Your entire response must be: ROUTE_TO:REFINER\n\nCRITIQUE: [count each line's syllables, state which line is wrong and by how many]. "
+             "Do NOT call write_file in this path. "
+             "PATH B — The haiku starts with 'REVISED:' AND the middle line has exactly 7 syllables: "
+             "Your response must start with: ROUTE_TO:STOP\n\nThe haiku is accepted. "
+             "Then call write_file to save the accepted haiku to: 04_Code_Artifacts/T5_LOOP/accepted_haiku.md",
              "", "0.5", "3", "none", "FAILED",
              "04_Code_Artifacts/T5_LOOP/accepted_haiku.md", "", ""],
         ],
