@@ -7,6 +7,8 @@
     "maccre_core/_archive",
     "_archive",
     "scripts",
+    "maccre_tui",
+    "user_scripts",
     ".venv",
     ".ruff_cache",
     "**/__pycache__"
