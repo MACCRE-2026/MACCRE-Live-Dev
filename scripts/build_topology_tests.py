@@ -1,17 +1,18 @@
 """
 scripts/build_topology_tests.py
 ================================
-Builds test workbooks for T1-T6 edge-case topology validation.
+Builds test workbooks for T1-T7 edge-case topology validation.
 
 Each test gets its own project silo under __DATACENTER and a populated
 MACCRE_Swarm_Request.xlsx. Run all tests via:
 
-    python maccre.py launch T1_SMOKE   --yes
-    python maccre.py launch T2_FAILURE --yes
-    python maccre.py launch T3_DIAMOND --yes
-    python maccre.py launch T4_RACE    --yes
-    python maccre.py launch T5_LOOP    --yes
+    python maccre.py launch T1_SMOKE    --yes
+    python maccre.py launch T2_FAILURE  --yes
+    python maccre.py launch T3_DIAMOND  --yes
+    python maccre.py launch T4_RACE     --yes
+    python maccre.py launch T5_LOOP     --yes
     python maccre.py launch T6_VALIDATE --yes  # should FAIL at pre-flight
+    python maccre.py launch T7_DIALOGUE --yes  # DialogueRunner mid-chain
 
 MACCREv2 Law Rev 19.0 compliant.
 """
@@ -486,7 +487,84 @@ def build_t6() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN
+# T7 — DIALOGUE MID-CHAIN
+# ══════════════════════════════════════════════════════════════════════════════
+def build_t7() -> None:
+    """
+    Topology:
+        BRIEFER → DEBATER (DialogueRunner: ANALYST ↔ SKEPTIC, 2 rounds) → VERDICT → STOP
+
+    Tests: DialogueRunner fires correctly when it is NOT the first node.
+    The BRIEFER output is the payload fed into the dialogue context.
+    Pass:
+      - DEBATER ledger contains multi-turn dialogue (ANALYST/SKEPTIC turns visible)
+      - VERDICT ledger exists and references the debate output
+      - No SESSION_ID token in any artifact path
+    """
+    _ANALYST_PERSONA = (
+        "You are ANALYST, a rigorous researcher who presents evidence-based arguments. "
+        "Build on prior turns, cite the briefing context, and be concise (2-3 sentences per turn)."
+    )
+    _SKEPTIC_PERSONA = (
+        "You are SKEPTIC, a critical thinker who challenges assumptions and identifies gaps. "
+        "Push back on ANALYST's claims with sharp, specific counter-arguments (2-3 sentences)."
+    )
+
+    wb = _copy_template("T7_DIALOGUE")
+    _populate(
+        wb_path=wb,
+        project_id="T7_DIALOGUE",
+        description="DialogueRunner mid-chain — BRIEFER non-dialogue node feeds DEBATER DialogueRunner",
+        start_node="BRIEFER",
+        payload=(
+            "Topology test T7. Topic for debate: "
+            "'Is a fully autonomous multi-agent AI system safer with static topologies "
+            "or adaptive conditional routing?' "
+            "BRIEFER will summarise the question, DEBATER will debate it, VERDICT will decide."
+        ),
+        agents=[
+            # BRIEFER uses generic test agent
+            ["TestAgent", "Minimal test agent", "cloud",
+             "gemini-2.5-flash", "0.7", "", "", "1024", "0",
+             "FALSE", "FALSE", "", "text", "minimal", "write_file", _TEST_PERSONA],
+            # ANALYST — dialogue side A
+            ["AnalystAgent", "Evidence-based researcher", "cloud",
+             "gemini-2.5-flash", "0.9", "", "", "1024", "0",
+             "FALSE", "FALSE", "", "text", "minimal", "none", _ANALYST_PERSONA],
+            # SKEPTIC — dialogue side B (dialogue_partner)
+            ["SkepticAgent", "Critical challenger", "cloud",
+             "gemini-2.5-flash", "0.9", "", "", "1024", "0",
+             "FALSE", "FALSE", "", "text", "minimal", "none", _SKEPTIC_PERSONA],
+        ],
+        topology=[
+            # BRIEFER: non-dialogue node, writes a structured brief from the payload
+            ["BRIEFER", "TestAgent", "DEBATER",
+             "You are BRIEFER in topology test T7. The [PREVIOUS NODE OUTPUT] contains a debate topic. "
+             "Write a concise 3-paragraph research brief: "
+             "(1) Frame the question. (2) Arguments for static topologies. "
+             "(3) Arguments for adaptive/conditional routing. "
+             "Call write_file to save to: 04_Code_Artifacts/T7_DIALOGUE/briefing.md",
+             "", "0.7", "2", "none", "FAILED",
+             "04_Code_Artifacts/T7_DIALOGUE/briefing.md", "", ""],
+            # DEBATER: DialogueRunner mid-chain — ANALYST opens, SKEPTIC responds, 2 rounds
+            ["DEBATER", "AnalystAgent", "VERDICT",
+             "You are ANALYST opening a structured debate on the briefing you have received. "
+             "State your position on adaptive/conditional routing being safer. "
+             "Be direct and evidence-based. Your debate partner SKEPTIC will challenge you.",
+             "", "0.9", "3", "none", "FAILED",
+             "04_Code_Artifacts/T7_DIALOGUE/debate_log.md",
+             "SkepticAgent", "2"],
+            # VERDICT: fan-in waits for DEBATER artifact, writes final decision
+            ["VERDICT", "TestAgent", "STOP",
+             "You are VERDICT in topology test T7. "
+             "The [GATHERED ARTIFACT: DEBATER] block above contains a full multi-turn debate. "
+             "Read both sides and write a 2-paragraph verdict: which position is stronger and why. "
+             "Call write_file to save to: 04_Code_Artifacts/T7_DIALOGUE/verdict.md",
+             "", "0.7", "2", "DEBATER", "FAILED",
+             "04_Code_Artifacts/T7_DIALOGUE/verdict.md", "", ""],
+        ],
+    )
+
 # ══════════════════════════════════════════════════════════════════════════════
 def main() -> None:
     print("\n[BUILD TOPOLOGY TESTS]")
@@ -502,6 +580,7 @@ def main() -> None:
         ("T4_RACE",     build_t4),
         ("T5_LOOP",     build_t5),
         ("T6_VALIDATE", build_t6),
+        ("T7_DIALOGUE", build_t7),
     ]
 
     for name, fn in builders:
@@ -510,12 +589,13 @@ def main() -> None:
 
     print("\n[DONE] All test workbooks written.")
     print("\nLaunch order (after EXO_TEST run completes):")
-    print("  python maccre.py launch T1_SMOKE   --yes   # should complete clean")
-    print("  python maccre.py launch T2_FAILURE --yes   # RECOVERY must fire, NODE_C must NOT")
-    print("  python maccre.py launch T3_DIAMOND --yes   # MERGE must see both GATHERED ARTIFACTs")
-    print("  python maccre.py launch T4_RACE    --yes   # MERGE must wait for SLOW_NODE")
-    print("  python maccre.py launch T5_LOOP    --yes   # REFINER ledger must appear 2+ times")
-    print("  python maccre.py launch T6_VALIDATE --yes  # must FAIL at pre-flight, zero cost")
+    print("  python maccre.py launch T1_SMOKE    --yes   # should complete clean")
+    print("  python maccre.py launch T2_FAILURE  --yes   # RECOVERY must fire, NODE_C must NOT")
+    print("  python maccre.py launch T3_DIAMOND  --yes   # MERGE must see both GATHERED ARTIFACTs")
+    print("  python maccre.py launch T4_RACE     --yes   # MERGE must wait for SLOW_NODE")
+    print("  python maccre.py launch T5_LOOP     --yes   # REFINER ledger must appear 2+ times")
+    print("  python maccre.py launch T6_VALIDATE --yes   # must FAIL at pre-flight, zero cost")
+    print("  python maccre.py launch T7_DIALOGUE --yes   # DialogueRunner must fire mid-chain")
 
 
 if __name__ == "__main__":

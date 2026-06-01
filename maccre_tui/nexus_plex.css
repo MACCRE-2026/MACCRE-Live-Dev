@@ -1,0 +1,226 @@
+/* nexus_plex.css — Nexus_Plex Topology Builder TUI */
+
+/* ── Global ──────────────────────────────────────────────────────────────── */
+Screen {
+    background: #0d1117;
+}
+
+Header {
+    background: #161b22;
+    color: #58a6ff;
+    text-style: bold;
+}
+
+Footer {
+    background: #161b22;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 1 2;
+}
+
+/* ── Project Browser ──────────────────────────────────────────────────────── */
+#proj-label {
+    color: #8b949e;
+    margin-bottom: 1;
+}
+
+#proj-toolbar {
+    height: 3;
+    margin-bottom: 1;
+}
+
+#proj-toolbar Input {
+    width: 1fr;
+    background: #21262d;
+    border: tall #30363d;
+    color: #e6edf3;
+}
+
+#proj-toolbar Input:focus {
+    border: tall #58a6ff;
+}
+
+#btn-create-proj {
+    margin-left: 1;
+    min-width: 12;
+}
+
+#btn-refresh-proj {
+    margin-left: 1;
+    min-width: 10;
+}
+
+/* ── Topology Editor ──────────────────────────────────────────────────────── */
+#topo-toolbar {
+    height: 3;
+    margin-bottom: 1;
+}
+
+#topo-toolbar Button {
+    margin-left: 1;
+    min-width: 12;
+}
+
+.status-label {
+    color: #58a6ff;
+    content-align: left middle;
+    width: 1fr;
+    padding: 0 1;
+}
+
+/* ── DataTable shared ─────────────────────────────────────────────────────── */
+DataTable {
+    height: 1fr;
+    background: #161b22;
+    border: solid #30363d;
+}
+
+DataTable > .datatable--header {
+    background: #21262d;
+    color: #58a6ff;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #1f6feb;
+    color: #ffffff;
+}
+
+DataTable > .datatable--even-row {
+    background: #0d1117;
+}
+
+DataTable > .datatable--odd-row {
+    background: #161b22;
+}
+
+/* ── Launch Monitor ───────────────────────────────────────────────────────── */
+#launch-toolbar {
+    height: 3;
+    margin-bottom: 1;
+}
+
+#launch-toolbar Button {
+    margin-left: 1;
+    min-width: 10;
+}
+
+#log-scroll {
+    height: 1fr;
+    background: #0d1117;
+    border: solid #30363d;
+}
+
+#launch-log {
+    background: #0d1117;
+    color: #e6edf3;
+    padding: 1;
+}
+
+/* ── Modal ────────────────────────────────────────────────────────────────── */
+NodeEditorModal {
+    background: rgba(0, 0, 0, 0.85);
+}
+
+#modal-container {
+    background: #161b22;
+    border: thick #58a6ff;
+    width: 82;
+    height: auto;
+    max-height: 90vh;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#modal-title {
+    color: #58a6ff;
+    text-style: bold;
+    text-align: center;
+    margin-bottom: 1;
+}
+
+.field-label {
+    color: #8b949e;
+    margin-top: 1;
+    text-style: italic;
+}
+
+NodeEditorModal Input {
+    background: #21262d;
+    border: tall #30363d;
+    color: #e6edf3;
+    margin-bottom: 0;
+}
+
+NodeEditorModal Input:focus {
+    border: tall #58a6ff;
+}
+
+#modal-buttons {
+    margin-top: 2;
+    height: 3;
+    align-horizontal: right;
+}
+
+#btn-cancel {
+    margin-right: 1;
+    min-width: 10;
+}
+
+#btn-save {
+    min-width: 10;
+}
+
+/* ── Buttons global ───────────────────────────────────────────────────────── */
+Button.-success {
+    background: #238636;
+    color: #ffffff;
+}
+
+Button.-success:hover {
+    background: #2ea043;
+}
+
+Button.-error {
+    background: #da3633;
+    color: #ffffff;
+}
+
+Button.-error:hover {
+    background: #f85149;
+}
+
+Button.-primary {
+    background: #1f6feb;
+    color: #ffffff;
+}
+
+Button.-primary:hover {
+    background: #388bfd;
+}
+
+Button.-default {
+    background: #21262d;
+    color: #c9d1d9;
+    border: tall #30363d;
+}
+
+Button.-default:hover {
+    background: #30363d;
+}
+
+/* ── Agents tab ───────────────────────────────────────────────────────────── */
+#agents-label {
+    color: #8b949e;
+    margin-bottom: 1;
+}
+
+/* ── New project input ────────────────────────────────────────────────────── */
+#new-proj-input {
+    width: 30;
+}
