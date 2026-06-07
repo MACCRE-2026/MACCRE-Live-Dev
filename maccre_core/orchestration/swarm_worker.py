@@ -491,7 +491,15 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 # step the artifact-coherent routing block below cannot find the file
                 # and emits WARNING: artifact_path not found — falling back to ledger.
                 if _raw_artifact_path:
-                    _dlg_art_abs: Path = get_datacenter_path(*_raw_artifact_path.split("/"))
+                    # Mirror the routing block's auto-scope: if the path starts with
+                    # 04_Code_Artifacts/ and the job_id isn't already injected, insert it
+                    # so the transcript lands at the same location the routing block
+                    # will look for (e.g. 04_Code_Artifacts/job_xxx/project/file.md).
+                    _ART_PFX = "04_Code_Artifacts/"
+                    _dlg_art_rel = _raw_artifact_path
+                    if _dlg_art_rel.startswith(_ART_PFX) and job_id not in _dlg_art_rel:
+                        _dlg_art_rel = f"{_ART_PFX}{job_id}/{_dlg_art_rel[len(_ART_PFX):]}"
+                    _dlg_art_abs: Path = get_datacenter_path(*_dlg_art_rel.split("/"))
                     _dlg_art_abs.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         _dlg_art_abs.write_text(final_output_text, encoding="utf-8")
@@ -502,7 +510,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     except Exception as _dlg_write_err:  # noqa: BLE001
                         print(
                             f"[{AGENT_ID}] WARNING: Could not write dialogue artifact "
-                            f"'{_raw_artifact_path}': {_dlg_write_err}"
+                            f"'{_dlg_art_rel}': {_dlg_write_err}"
                         )
 
             elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes"):
