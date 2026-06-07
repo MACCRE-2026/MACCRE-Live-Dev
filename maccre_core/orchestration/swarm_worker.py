@@ -485,6 +485,26 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 )
                 final_output_text, total_cost = _dialogue_runner.run(current_payload)
 
+                # ── Dialogue transcript → artifact_path ───────────────────────────────
+                # When a dialogue node declares an artifact_path, write the full
+                # transcript there immediately after the run completes.  Without this
+                # step the artifact-coherent routing block below cannot find the file
+                # and emits WARNING: artifact_path not found — falling back to ledger.
+                if _raw_artifact_path:
+                    _dlg_art_abs: Path = get_datacenter_path(*_raw_artifact_path.split("/"))
+                    _dlg_art_abs.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        _dlg_art_abs.write_text(final_output_text, encoding="utf-8")
+                        print(
+                            f"[{AGENT_ID}] DialogueRunner transcript written → "
+                            f"{_dlg_art_abs}"
+                        )
+                    except Exception as _dlg_write_err:  # noqa: BLE001
+                        print(
+                            f"[{AGENT_ID}] WARNING: Could not write dialogue artifact "
+                            f"'{_raw_artifact_path}': {_dlg_write_err}"
+                        )
+
             elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes"):
 
                 import asyncio
