@@ -6,10 +6,8 @@ import os
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.path.insert(0, '.')
-import maccre_core
 os.environ['MACCRE_ACTIVE_PROJECT'] = 'EXO_TEST'
 from maccre_core.utils.path_resolver import get_maccre_root
-from pathlib import Path
 
 dc = get_maccre_root() / '__DATACENTER' / 'EXO_TEST'
 

@@ -170,8 +170,8 @@ def ignite_swarm(payload_path_relative: str, starting_node: str = "OSINT") -> st
     """
     try:
         from maccre_core.orchestration.local_broker import LocalMessageBroker
-        import uuid
-        
+        from maccre_core.utils.session_manager import generate_session_id
+
         if payload_path_relative and payload_path_relative.lower() != "none":
             full_path = get_datacenter_path("01_Raw_Source", payload_path_relative)
             if not full_path.exists():
@@ -179,8 +179,8 @@ def ignite_swarm(payload_path_relative: str, starting_node: str = "OSINT") -> st
             payload_str = str(full_path)
         else:
             payload_str = "none"
-            
-        job_id = f"job_{uuid.uuid4().hex[:8]}"
+
+        job_id = f"job_{generate_session_id()}"
         broker = LocalMessageBroker()
         broker.inject_task(job_id=job_id, payload_path=payload_str, starting_node=starting_node)
         return f"[ADMIN_SUCCESS] Swarm Ignited! Job {job_id} dispatched starting at node '{starting_node}'."

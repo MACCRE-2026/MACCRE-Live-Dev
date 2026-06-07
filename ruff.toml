@@ -10,6 +10,7 @@ exclude = [
     ".venv",
     "__TEST_SANDBOX",
     "maccre_core/_vendor",
+    "user_scripts",       # Third-party ingestion utility scripts — not EXO_GANS source
 ]
 
 [lint]

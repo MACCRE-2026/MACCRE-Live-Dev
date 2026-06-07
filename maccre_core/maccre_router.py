@@ -233,6 +233,9 @@ class UniversalRouter:
         _use_grounding: bool = "google_search" in _tool_names
         _filtered_tools = ",".join(t for t in _tool_names if t != "google_search")
         active_tools = get_tools_from_sheet(_filtered_tools)
+        # Initialise at function scope so all routing branches (Gemini, edge, Groq…)
+        # can safely reference it — avoids Pyright reportUnboundVariable on the edge path.
+        _resolved_schema: dict[str, Any] | None = None
 
         if "gemini" in model_lower:
             if not self.gemini_client:
@@ -250,7 +253,6 @@ class UniversalRouter:
                     for s in (generate_universal_json_schema(t) for t in active_tools)
                 ]
                 
-            _resolved_schema: dict[str, Any] | None = None
             if response_schema:
                 if isinstance(response_schema, dict):
                     _resolved_schema = response_schema
@@ -652,8 +654,7 @@ class AgentRouter:
             f"[PRELOADED CONTEXT]\n{preloaded_context}\n\n[USER MESSAGE]\n{message}"
             if preloaded_context else message
         )
-        
-        tier = "edge" if effective_model.lower().startswith("edge-") else ("local" if ("gemma" in effective_model.lower() or "llama" in effective_model.lower()) else "cloud")
+
 
         try:
             # Replaces OmniDaemon logic natively with the Sovereign UniversalRouter

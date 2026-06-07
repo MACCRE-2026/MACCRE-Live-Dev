@@ -34,7 +34,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import uuid
+
 from pathlib import Path
 
 # ── C-Level Stdout Guard ──────────────────────────────────────────────────────
@@ -184,9 +184,28 @@ def _launch_watcher(job_id: str, project: str) -> None:
 
 
 def ignite_swarm(payload_path: str, starting_node: str = "OSINT") -> None:
-    """Injects a payload into the SQLite WAL and ignites the pipeline."""
-    job_id = f"job_{uuid.uuid4().hex[:8]}"
+    """Injects a payload into the SQLite WAL and ignites the pipeline.
+
+    job_id format: ``job_{YYYYMMDD-HHMMSS-{4rand}}`` — human-readable,
+    timestamped, and registered to project_registry.db so every launch
+    path (not just ``global``) has a full audit record.
+    """
+    from maccre_core.utils.session_manager import (  # noqa: PLC0415
+        generate_session_id,
+        register_project,
+        register_session,
+    )
     project = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
+    job_id = f"job_{generate_session_id()}"  # e.g. job_20260607-161715-a3k9
+
+    # Register every launch to the audit trail — previously only the
+    # ``global`` command path did this.
+    register_project(project, description="")
+    register_session(
+        project_name=project,
+        session_id=job_id,
+        workbook_type="launch",
+    )
 
     try:
         if payload_path and payload_path.lower() != "none" and not os.path.exists(payload_path):
@@ -345,7 +364,9 @@ def global_command(workbook_path: str = "", yes: bool = False, skip_preflight: b
         _start_node = _parsed.start_node or "START"
         _payload_file = _parsed.payload_path.strip() if _parsed.payload_path.strip() else "none"
 
-        _job_id = f"job_{session_id}"
+        # job_id IS the session_id — same format generator, no bridge needed.
+        # session_id was already registered above via register_session().
+        _job_id = f"job_{session_id}"  # session_id already YYYYMMDD-HHMMSS-{4rand}
         _broker = LocalMessageBroker(str(get_datacenter_path("swarm_queue.db")))
         _broker.inject_task(
             job_id=_job_id,
@@ -406,9 +427,9 @@ def launch_command(
         from maccre_core.utils.path_resolver import get_datacenter_path as _gdcp  # noqa: PLC0415
         if from_node:
             from maccre_core.orchestration.local_broker import LocalMessageBroker  # noqa: PLC0415
-            import uuid as _uuid  # noqa: PLC0415
+            from maccre_core.utils.session_manager import generate_session_id  # noqa: PLC0415
             _payload = str(_gdcp("01_Raw_Source/input.md"))
-            _retry_id = f"job_resume_{_uuid.uuid4().hex[:8]}"
+            _retry_id = f"job_{generate_session_id('resume')}"  # e.g. job_20260607-162035-a3k9-resume
             broker = LocalMessageBroker()
             broker.inject_task(
                 job_id=_retry_id,
@@ -680,7 +701,8 @@ def run_command(
             sys.exit(0)
 
     # ── Inject + run ──────────────────────────────────────────────────────────
-    job_id = f"job_resume_{uuid.uuid4().hex[:8]}"
+    from maccre_core.utils.session_manager import generate_session_id  # noqa: PLC0415
+    job_id = f"job_{generate_session_id('resume')}"  # e.g. job_20260607-162035-a3k9-resume
     _db = str(dc_root / "swarm_queue.db")
     _broker = _Broker(_db)
     _broker.inject_task(

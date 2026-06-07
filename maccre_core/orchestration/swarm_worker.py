@@ -216,14 +216,14 @@ class UniversalSwarmWorker:
         self._is_sleeping = False  # Wake up
         row_id: int = int(task["id"])
         job_id: str = str(task["job_id"])
-        session_id: str = str(task.get("session_id", job_id))
         project_id: str = str(task.get("project_id", "UNNAMED"))
         payload_path: str = str(task["payload_path"])
         current_node: str = str(task.get("current_node", "START"))
 
         # Boot dual-tier telemetry
+        # job_id IS the session ID — unified format: job_{YYYYMMDD-HHMMSS-{4rand}}
         from maccre_core.logger import setup_session_loggers
-        setup_session_loggers(project_id, session_id)
+        setup_session_loggers(project_id, job_id)
         # source_payload_path: the ORIGINAL user document — never mutated by routing
         source_payload_path: str = str(task.get("source_payload_path") or payload_path)
 

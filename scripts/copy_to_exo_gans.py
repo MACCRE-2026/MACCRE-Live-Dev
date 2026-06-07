@@ -1,7 +1,6 @@
 import os
 import shutil
 from pathlib import Path
-import sys
 
 DRY_RUN = os.environ.get("DRY_RUN", "TRUE").upper() == "TRUE"
 
