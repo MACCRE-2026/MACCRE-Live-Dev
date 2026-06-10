@@ -188,6 +188,53 @@ def expand_macro(
             
         next_nodes_to_queue.append(w1_id)
         
+    elif macro_type.lower() == "crucible":
+        opt_id = f"C_OPT_{macro_id}"
+        pess_id = f"C_PESS_{macro_id}"
+        mag_id = f"C_MAG_{macro_id}"
+        deb_id = f"C_DEB_{macro_id}"
+        jury_id = f"C_JURY_{macro_id}"
+        
+        ephemeral_nodes[opt_id] = {
+            "prompt": "You are the Optimist Advocate. Read the source payload. Build the absolute strongest, most rigorous case FOR the premise. If you received feedback from the Magistrate, you must rewrite your argument to address all critiques.",
+            "next_node_success": mag_id, "wait_for": "none", "temperature": 1.0, "model": "gemini-2.5-flash", "agent": "Crucible_Optimist"
+        }
+        ephemeral_nodes[pess_id] = {
+            "prompt": "You are the Pessimist Advocate. Read the source payload. Build the absolute strongest, most rigorous case AGAINST the premise. If you received feedback from the Magistrate, you must rewrite your argument to address all critiques.",
+            "next_node_success": mag_id, "wait_for": "none", "temperature": 1.0, "model": "gemini-2.5-flash", "agent": "Crucible_Pessimist"
+        }
+        ephemeral_nodes[mag_id] = {
+            "prompt": (
+                "You are the Crucible Magistrate. Review the arguments from the Optimist and Pessimist in the Gathered Artifact blocks. "
+                "Score each argument on a scale of 0 to 100 based on logical rigor, exhaustiveness, and evidence.\n\n"
+                "CONDITIONAL ROUTING RULES:\n"
+                f"1. If the Optimist scores below 90, you MUST output: ROUTE_TO:{opt_id} along with strict critique.\n"
+                f"2. If the Pessimist scores below 90, you MUST output: ROUTE_TO:{pess_id} along with strict critique.\n"
+                "3. If BOTH score 90 or above, accept the arguments and output: ROUTE_TO:STOP (The engine will automatically proceed to the debate).\n"
+                "You may only route to one node at a time. Pick the weakest argument to revise first if both fail."
+            ),
+            "next_node_success": deb_id, "wait_for": f"{opt_id},{pess_id}", "temperature": 0.2, "model": "gemini-2.5-pro", "agent": "Crucible_Magistrate"
+        }
+        ephemeral_nodes[deb_id] = {
+            "prompt": "You are the Crucible Host. The Magistrate has approved both arguments. Open the debate by summarizing the core conflict in two sentences, then pose a challenging question to both the Optimist and Pessimist.",
+            "next_node_success": jury_id, "wait_for": mag_id, "temperature": 0.8, "model": "gemini-2.5-flash", "agent": "Crucible_Host",
+            "dialogue_partner": "Crucible_Optimist|Crucible_Pessimist",
+            "dialogue_rounds": 2
+        }
+        ephemeral_nodes[jury_id] = {
+            "prompt": "You are the Crucible Jury. Read the full debate transcript. Deliver a final, binding synthesis and verdict. Which side won the debate and why? What is the undeniable truth synthesized from both perspectives?",
+            "next_node_success": next_node, "wait_for": deb_id, "temperature": 0.4, "model": "gemini-2.5-pro", "agent": "Crucible_Jury"
+        }
+        
+        for k in ephemeral_nodes:
+            ephemeral_nodes[k]["artifact_path"] = ""
+            ephemeral_nodes[k]["next_node_failure"] = "FAILED"
+            ephemeral_nodes[k]["tools_allowed"] = "none"
+            ephemeral_nodes[k]["max_recursion"] = 5  # Give the loop some breathing room
+            ephemeral_nodes[k]["agent_name"] = ephemeral_nodes[k]["agent"]
+            
+        next_nodes_to_queue.extend([opt_id, pess_id])
+        
     else:
         print(f"[MACRO_FACTORY] Unknown macro type: {macro_type}")
         broker.route_task(row_id, job_id, "FAILED", payload_path, source_payload_path=source_payload_path)
