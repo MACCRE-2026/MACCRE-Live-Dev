@@ -306,6 +306,23 @@ You do NOT need to ask for permission to use them. If your instructions require 
 """
             swarm_memories = self._load_memory_pins()
             system_prompt = base_prompt + _GLOBAL_ARCHITECTURE + swarm_memories
+            
+            # Retrieve agent name for potential macro interception
+            agent_name = str(node_config.get("agent_name", current_node))
+            if agent_name.upper().startswith("MACRO:"):
+                from maccre_core.orchestration.macro_factory import expand_macro
+                expand_macro(
+                    agent_name=agent_name,
+                    current_node=current_node,
+                    next_node=str(node_config["next_node_success"]),
+                    job_id=job_id,
+                    payload_path=payload_path,
+                    source_payload_path=source_payload_path,
+                    broker=self.broker,
+                    row_id=row_id
+                )
+                print(f"[{AGENT_ID}] Macro expansion complete. Yielding worker.")
+                return
 
             # ── Dual-Payload Construction ─────────────────────────────────────
             # Each node receives:
@@ -603,6 +620,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         system_prompt=system_prompt,
                         tools_str=tools_str,
                         temperature=float(node_config["temperature"]),
+                        expect_multiple_reads=True,
                     )
                     total_cost += turn_cost
 
@@ -643,6 +661,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                             system_prompt=system_prompt,
                             tools_str="none",
                             temperature=float(node_config["temperature"]),
+                            expect_multiple_reads=True,
                         )
                         total_cost += close_cost
                         final_output_text = close_text

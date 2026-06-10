@@ -60,6 +60,7 @@ from maccre_core._net.model_registry import get_registry, ModelRegistry
 from maccre_core.orchestration.windows_vault import get_native_credential
 from maccre_core.orchestration.telemetry_db import log_thought
 from maccre_core.tools.tool_registry import get_tools_from_sheet, generate_universal_json_schema
+from maccre_core.orchestration.cache_manager import CacheManager
 
 
 from dataclasses import dataclass, field
@@ -182,6 +183,8 @@ class UniversalRouter:
             self.gemini_client = None
             self._model_registry = get_registry("")
             self._sentinel = None
+            
+        self._cache_manager = CacheManager()
 
         # Anthropic (lazy import — only loaded when a claude-* model is requested)
         self.anthropic_key = get_native_credential("MACCRE_Sovereign_Anthropic")
@@ -204,6 +207,7 @@ class UniversalRouter:
         temperature: float,
         conversation_history: list[dict[str, str]] | None = None,
         response_schema: Any | None = None,
+        expect_multiple_reads: bool = False,
     ) -> tuple[str, float]:
         """Universal Dispatcher. Routes to the correct vendor based on ``model_name``.
 
@@ -289,6 +293,20 @@ class UniversalRouter:
                     else:
                         contents = [user_turn(*_mm_parts)]
 
+                    # ── Evaluate Context Caching ───────────────────────────────────────
+                    _cached_uri = None
+                    if expect_multiple_reads and self.gemini_client:
+                        # Heuristic: 120,000 chars roughly equals ~30k tokens. Threshold is 32k.
+                        if len(payload) >= 120_000:
+                            logger.info("[ROUTER] Payload exceeds 120k chars and expects multiple reads. Evaluating Cache...")
+                            _cached_uri = self._cache_manager.get_or_create_cache(
+                                client=self.gemini_client,
+                                model=_attempt_model,
+                                contents=contents,
+                                system_instruction=system_prompt if system_prompt else None,
+                                ttl_seconds=3600
+                            )
+
                     import time as _t0  # noqa: PLC0415
                     _t0_start = _t0.monotonic()
                     # Sovereign pipeline: BLOCK_NONE on all harm categories.
@@ -300,21 +318,25 @@ class UniversalRouter:
                         {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                     ]
+                    
+                    # NOTE: If we use context caching, the contents array must be EMPTY or only contain 
+                    # new delta tokens. Since we cache the entire contents block here, we pass empty contents.
+                    # Wait, the Gemini API requires the exact contents matched. If we pass the full payload to cache,
+                    # the prompt to generateContent must be empty except for the cachedContent URI.
+                    _req_contents = [] if _cached_uri else contents
+                    
                     response: GeminiResponse = self.gemini_client.generate_content(
                         model=_attempt_model,
-                        contents=contents,
+                        contents=_req_contents,
                         system_instruction=system_prompt if system_prompt else None,
                         temperature=temperature,
                         tool_declarations=tool_declarations,
                         search_grounding=_use_grounding,
-                        # When grounding is active, leave mode=AUTO so the model can freely
-                        # interleave native Google Search (transparent) with user function
-                        # calls (write_file etc.).  mode=ANY would force a function call on
-                        # every turn, which conflicts with grounding behaviour.
                         disable_auto_function_calling=bool(tool_declarations) and not _use_grounding,
                         response_schema=_resolved_schema,
                         safety_settings=_safety_off,
                         max_output_tokens=8192,
+                        cached_content_uri=_cached_uri,
                     )
                     _latency_ms = (_t0.monotonic() - _t0_start) * 1000.0
 
