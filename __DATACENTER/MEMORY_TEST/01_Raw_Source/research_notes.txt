@@ -1,0 +1,10 @@
+# Historical Notes on MACCRE
+
+The Multi-Agent Conversational Concept Refinement Engine (MACCRE) was envisioned as a global nervous system for autonomous AI swarms. 
+It utilizes a 5-Tier Datacenter architecture to isolate context streams.
+Its memory is broken into three silos:
+1. Ephemeral Session DBs
+2. Project Memory Canon
+3. Global Swarm Memory
+
+These memory modules allow agents to cross-communicate without direct conversational injection.

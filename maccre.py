@@ -283,6 +283,21 @@ def canonize_session(project: str, session: str) -> None:
     print("[CANONIZE] Complete.")
 
 
+def canonize_project(project: str) -> None:
+    """Executes the L2 → L3 memory promotion."""
+    logger.info("[CANONIZE] Promoting Project '%s' → GLOBAL...", project)
+    print(f"[CANONIZE] Promoting Project '{project}' → GLOBAL...")
+    try:
+        from maccre_core.tools.rag_tools import canonize_project_to_global  # noqa: PLC0415
+        merge_res = canonize_project_to_global(project_name=project)
+        logger.info("[CANONIZE] Complete. Result: %s", merge_res)
+        print(f" ✓ {merge_res}")
+        print("[CANONIZE] Complete.")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[CANONIZE] Project promotion failed: %s", exc)
+        print(f" ⚠  Project promotion failed: {exc}")
+
+
 def global_command(workbook_path: str = "", yes: bool = False, skip_preflight: bool = False) -> None:
     """Process MACCRE_Global.xlsx — create project, materialise swarm, optionally ignite."""
     from maccre_core.tools.workbook_engine import check_workbook_completeness, render_execution_plan  # noqa: PLC0415
@@ -1004,10 +1019,10 @@ def main() -> None:
 
     # canonize
     canonize_parser = subparsers.add_parser(
-        "canonize", help="Merge L1 session memory into L2 project memory"
+        "canonize", help="Merge L1 session memory into L2 project memory, or L2 to L3 global"
     )
     canonize_parser.add_argument("--project", required=True, help="Project ID")
-    canonize_parser.add_argument("--session", required=True, help="Session ID")
+    canonize_parser.add_argument("--session", default="", help="Session ID (leave empty to canonize project to global)")
 
     # mcp
     subparsers.add_parser("mcp", help="Start the MACCRE MCP server (agentic interface)")
@@ -1148,7 +1163,10 @@ def main() -> None:
     elif args.command == "status":
         check_status()
     elif args.command == "canonize":
-        canonize_session(args.project, args.session)
+        if args.session:
+            canonize_session(args.project, args.session)
+        else:
+            canonize_project(args.project)
     elif args.command == "chat":
         print("[DEPRECATED] The 'chat' command has been retired. Use 'maccre.py mcp' instead.")
     elif args.command == "mcp":

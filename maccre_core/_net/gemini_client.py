@@ -174,6 +174,7 @@ def _build_request_body(
     disable_auto_function_calling: bool,
     response_schema: dict[str, Any] | None = None,
     safety_settings: list[dict[str, str]] | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"contents": contents}
 
@@ -181,6 +182,8 @@ def _build_request_body(
         body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
     gen_config: dict[str, Any] = {"temperature": temperature}
+    if max_output_tokens is not None:
+        gen_config["maxOutputTokens"] = max_output_tokens
     body["generationConfig"] = gen_config
 
     if response_schema:
@@ -372,6 +375,7 @@ class GeminiClient:
         disable_auto_function_calling: bool = True,
         response_schema: dict[str, Any] | None = None,
         safety_settings: list[dict[str, str]] | None = None,
+        max_output_tokens: int | None = None,
     ) -> GeminiResponse:
         """Standard (non-streaming) generate call.
 
@@ -392,6 +396,7 @@ class GeminiClient:
             tool_declarations, search_grounding, disable_auto_function_calling,
             response_schema=response_schema,
             safety_settings=safety_settings,
+            max_output_tokens=max_output_tokens,
         )
         req = _make_req(
             self._url(model, "generateContent"),
@@ -409,6 +414,7 @@ class GeminiClient:
         search_grounding: bool = False,
         response_schema: dict[str, Any] | None = None,
         safety_settings: list[dict[str, str]] | None = None,
+        max_output_tokens: int | None = None,
     ) -> Generator[str, None, None]:
         """Streaming generation — yields text tokens as they arrive.
 
@@ -429,6 +435,7 @@ class GeminiClient:
             tool_declarations, search_grounding, False,
             response_schema=response_schema,
             safety_settings=safety_settings,
+            max_output_tokens=max_output_tokens,
         )
         url = self._url(model, "streamGenerateContent") + "&alt=sse"
         req = _make_req(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"))

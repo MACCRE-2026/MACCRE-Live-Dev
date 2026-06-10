@@ -95,6 +95,7 @@ class ParsedWorkbook:
     pipeline_config: dict[str, str]
     memory_config: dict[str, str]
     vault_refs: dict[str, str]
+    linked_projects: list[str]
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -303,6 +304,12 @@ def parse_workbook(path: Path) -> ParsedWorkbook:
     pipeline_config = _kv_sheet(wb["PIPELINE_CONFIG"]) if "PIPELINE_CONFIG" in sheet_names else {}
     memory_config   = _kv_sheet(wb["MEMORY_CONFIG"])   if "MEMORY_CONFIG" in sheet_names else {}
     vault_refs      = _kv_sheet(wb["VAULT_KEYS"])       if "VAULT_KEYS" in sheet_names else {}
+    
+    linked_projects: list[str] = []
+    if "PROJECT_DEFINITION" in sheet_names:
+        proj_def = _kv_sheet(wb["PROJECT_DEFINITION"])
+        lp_raw = proj_def.get("LINKED_PROJECTS", "")
+        linked_projects = [lp.strip() for lp in lp_raw.split(",") if lp.strip()]
 
     wb.close()
 
@@ -325,6 +332,7 @@ def parse_workbook(path: Path) -> ParsedWorkbook:
         pipeline_config=pipeline_config,
         memory_config=memory_config,
         vault_refs=vault_refs,
+        linked_projects=linked_projects,
     )
 
 
@@ -412,6 +420,13 @@ def materialise_from_sheet(path: Path) -> str:
             (ctx_dir / "memory_config.json").write_text(
                 json.dumps(parsed.memory_config, indent=2), encoding="utf-8"
             )
+        # project_schema.json
+        if parsed.linked_projects:
+            schema_payload = {"linked_projects": parsed.linked_projects}
+            (ctx_dir / "project_schema.json").write_text(
+                json.dumps(schema_payload, indent=2), encoding="utf-8"
+            )
+            
     except Exception as exc:  # noqa: BLE001
         logger.warning("[SheetParser] Failed to write config sidecars: %s", exc)
 

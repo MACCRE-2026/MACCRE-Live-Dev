@@ -89,6 +89,59 @@ class _AgentSession:
         )
         return response_text
 
+    # ── Time Travel API ───────────────────────────────────────────────────────
+
+    def to_checkpoint(self) -> dict[str, Any]:
+        """Serialise this session's full state to a JSON-safe dict."""
+        return {
+            "label": self.label,
+            "model": self.model,
+            "system_prompt": self.system_prompt,
+            "temperature": self.temperature,
+            "tools_str": self.tools_str,
+            "history": list(self.history),
+            "total_cost": self.total_cost,
+        }
+
+    @classmethod
+    def from_checkpoint(cls, data: dict[str, Any]) -> "_AgentSession":
+        """Reconstruct an _AgentSession from a checkpoint dict."""
+        session = cls(
+            label=str(data["label"]),
+            model=str(data["model"]),
+            system_prompt=str(data["system_prompt"]),
+            temperature=float(data["temperature"]),
+            tools_str=str(data.get("tools_str", "none")),
+        )
+        session.history = list(data.get("history", []))
+        session.total_cost = float(data.get("total_cost", 0.0))
+        return session
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ParticipantConfig — typed spec for GroupDialogueRunner participants
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class ParticipantConfig:
+    """
+    Configuration for one participant in a GroupDialogueRunner session.
+
+    Fields map 1:1 to what the workbook author specifies in the AGENTS sheet
+    and the topology's Dialogue_Partner column.  The swarm_worker loads agent
+    cards / roster rows and constructs these before handing off to the runner.
+    """
+
+    label: str           # human-readable label used in transcript headers
+    model: str           # model ID, e.g. "gemini-2.5-flash"
+    system_prompt: str   # persona / instructions string
+    temperature: float   # sampling temperature
+    tools_str: str = "none"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DialogueRunner — original 2-agent pair runner (unchanged)
+# ─────────────────────────────────────────────────────────────────────────────
 
 class DialogueRunner:
     """
@@ -152,7 +205,7 @@ class DialogueRunner:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def run(self, initial_message: str) -> tuple[str, float]:
+    def run(self, initial_message: str) -> tuple[str, str, float]:
         """
         Execute the full dialogue and return the merged transcript.
 
@@ -169,7 +222,7 @@ class DialogueRunner:
                              Typically the user's research payload.
 
         Returns:
-            ``(transcript_str, total_cost_usd)``
+            ``(transcript_str, final_turn, total_cost_usd)``
         """
         transcript_parts: list[str] = []
 
@@ -227,7 +280,7 @@ class DialogueRunner:
             self._num_rounds, total_cost,
         )
         print(f"[DialogueRunner] ✓ Complete — {self._num_rounds} rounds | cost=${total_cost:.6f}")
-        return transcript, total_cost
+        return transcript, a_reply, total_cost
 
     @property
     def agent_a_history(self) -> list[dict[str, str]]:
@@ -243,3 +296,258 @@ class DialogueRunner:
     def total_cost(self) -> float:
         """Accumulated cost across both agents for the full dialogue."""
         return self._agent_a.total_cost + self._agent_b.total_cost
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GroupDialogueRunner — one host + N participants, all persistent sessions
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GroupDialogueRunner:
+    """
+    Persistent group dialogue: one host agent orchestrates N participant agents.
+
+    Every agent — host and all participants — has an independent ``_AgentSession``
+    whose conversation history grows on every turn.  This gives each agent the
+    same "open AI Studio chat tab" experience as the two-agent ``DialogueRunner``:
+
+    Host's tab sees:
+        [user: all initial drafts / payload]
+        [model: host reply round 0]
+        [user: formatted bundle of all participant replies round 1]
+        [model: host reply round 1]
+        ...
+
+    Each participant's tab sees:
+        [user: host reply round 0]
+        [model: participant reply round 1]
+        [user: host reply round 1]
+        [model: participant reply round 2]
+        ...
+
+    Workbook configuration (no new columns required):
+        Dialogue_Partner  = "AgentB|AgentC|AgentD"   ← pipe-separated → group mode
+        Dialogue_Rounds   = 5                          ← number of full host→all→host cycles
+
+    The node running the topology row IS the host.  Partners in Dialogue_Partner
+    are the participants, loaded from agent_roster.csv or {name}.json cards.
+
+    Time Travel:
+        checkpoint = runner.to_checkpoint()        # dict — JSON-serialisable
+        runner2    = GroupDialogueRunner.from_checkpoint(router, checkpoint)
+        runner2.run(next_message)                  # resumes from exact round/history
+    """
+
+    # ── Separator used when combining participant replies for the host ─────────
+    _SECTION_SEP: str = "\n\n" + "═" * 50 + "\n\n"
+
+    def __init__(
+        self,
+        router: Any,
+        host_model: str,
+        host_system: str,
+        host_temperature: float,
+        host_label: str,
+        participants: list[ParticipantConfig],
+        num_rounds: int = 3,
+        host_tools: str = "none",
+    ) -> None:
+        if not participants:
+            raise ValueError("GroupDialogueRunner requires at least one participant.")
+
+        self._router = router
+        self._num_rounds = max(1, num_rounds)
+
+        self._host = _AgentSession(
+            label=host_label,
+            model=host_model,
+            system_prompt=host_system,
+            temperature=host_temperature,
+            tools_str=host_tools,
+        )
+        self._participants: list[_AgentSession] = [
+            _AgentSession(
+                label=p.label,
+                model=p.model,
+                system_prompt=p.system_prompt,
+                temperature=p.temperature,
+                tools_str=p.tools_str,
+            )
+            for p in participants
+        ]
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def run(self, initial_message: str) -> tuple[str, str, float]:
+        """
+        Execute the full group dialogue and return the merged transcript.
+
+        Flow per run():
+            Round 0 — host opens on ``initial_message``:
+                host.send(initial_message) → host_reply_0
+            Rounds 1..N — for each round:
+                for each participant p:
+                    p.send(host_reply_prev) → p_reply
+                combined = _combine_replies(all p_replies)
+                host.send(combined)        → host_reply_round
+
+        The final host reply is the natural synthesis / closing statement,
+        suitable for writing to the declared artifact_path downstream.
+
+        Args:
+            initial_message: The seed content the host receives first.
+                             For Gretchen: the fan-in block of all raw drafts.
+
+        Returns:
+            ``(transcript_str, final_turn, total_cost_usd)``
+        """
+        transcript_parts: list[str] = []
+        p_labels = ", ".join(p.label for p in self._participants)
+
+        logger.info(
+            "[GroupDialogueRunner] Starting: host=%s | participants=[%s] | rounds=%d",
+            self._host.label, p_labels, self._num_rounds,
+        )
+        print(
+            f"[GroupDialogueRunner] HOST={self._host.label} | "
+            f"PARTICIPANTS=[{p_labels}] | rounds={self._num_rounds}"
+        )
+
+        # ── Round 0: host opens ───────────────────────────────────────────────
+        print(f"[GroupDialogueRunner] ── Round 0: {self._host.label} opening ──")
+        host_reply = self._host.send(self._router, initial_message)
+        transcript_parts.append(f"[{self._host.label} — Opening]\n{host_reply}")
+
+        # ── Rounds 1..N: participants respond, host synthesises ───────────────
+        for round_idx in range(1, self._num_rounds + 1):
+            p_replies: list[tuple[str, str]] = []
+
+            for participant in self._participants:
+                print(
+                    f"[GroupDialogueRunner] ── Round {round_idx}: "
+                    f"{participant.label} responding ──"
+                )
+                p_reply = participant.send(self._router, host_reply)
+                p_replies.append((participant.label, p_reply))
+                transcript_parts.append(
+                    f"[{participant.label} — Round {round_idx}]\n{p_reply}"
+                )
+
+            # Combine all participant replies into one host user-turn
+            combined = self._combine_replies(p_replies)
+
+            is_final = round_idx == self._num_rounds
+            round_label = "Final Synthesis" if is_final else f"Round {round_idx}"
+            print(
+                f"[GroupDialogueRunner] ── {round_label}: "
+                f"{self._host.label} responding ──"
+            )
+            host_reply = self._host.send(self._router, combined)
+            transcript_parts.append(
+                f"[{self._host.label} — {round_label}]\n{host_reply}"
+            )
+
+        total_cost = self._host.total_cost + sum(
+            p.total_cost for p in self._participants
+        )
+        transcript = "\n\n" + (
+            "\n\n─────────────────────────────────────────\n\n".join(transcript_parts)
+        )
+
+        logger.info(
+            "[GroupDialogueRunner] Complete | rounds=%d | participants=%d | total_cost=%.6f",
+            self._num_rounds, len(self._participants), total_cost,
+        )
+        print(
+            f"[GroupDialogueRunner] ✓ Complete — {self._num_rounds} rounds | "
+            f"{len(self._participants)} participants | cost=${total_cost:.6f}"
+        )
+        return transcript, host_reply, total_cost
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _combine_replies(replies: list[tuple[str, str]]) -> str:
+        """
+        Format N participant replies into one combined message for the host.
+
+        Each section is clearly labelled so the host can address each participant
+        individually in its response.  This mirrors manually copy-pasting replies
+        from multiple AI Studio tabs into a single message.
+        """
+        sections: list[str] = []
+        for label, text in replies:
+            header = f"══ {label} " + "═" * max(0, 46 - len(label))
+            sections.append(f"{header}\n\n{text}")
+        return GroupDialogueRunner._SECTION_SEP.join(sections)
+
+    # ── Time Travel API ───────────────────────────────────────────────────────
+
+    def to_checkpoint(self) -> dict[str, Any]:
+        """
+        Serialise the full runner state to a JSON-safe dict.
+
+        Captures every agent's complete conversation history so the session
+        can be restored, forked, or replayed at any round.
+
+        Schema::
+
+            {
+              "runner_type": "group",
+              "num_rounds": 5,
+              "host": {_AgentSession checkpoint},
+              "participants": [{_AgentSession checkpoint}, ...]
+            }
+        """
+        return {
+            "runner_type": "group",
+            "num_rounds": self._num_rounds,
+            "host": self._host.to_checkpoint(),
+            "participants": [p.to_checkpoint() for p in self._participants],
+        }
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        router: Any,
+        checkpoint: dict[str, Any],
+    ) -> "GroupDialogueRunner":
+        """
+        Reconstruct a ``GroupDialogueRunner`` from a checkpoint dict.
+
+        The restored runner has every agent's full history intact — calling
+        ``.run()`` on it continues the dialogue from exactly where it was
+        saved, giving Time Travel the ability to drop agents back into their
+        context windows at any prior round.
+
+        Args:
+            router:     Live ``UniversalRouter`` instance.
+            checkpoint: Dict previously produced by ``to_checkpoint()``.
+
+        Returns:
+            Fully restored ``GroupDialogueRunner`` ready to continue.
+        """
+        runner: GroupDialogueRunner = cls.__new__(cls)
+        runner._router = router
+        runner._num_rounds = int(checkpoint.get("num_rounds", 3))
+        runner._host = _AgentSession.from_checkpoint(checkpoint["host"])
+        runner._participants = [
+            _AgentSession.from_checkpoint(p) for p in checkpoint["participants"]
+        ]
+        return runner
+
+    # ── Properties ────────────────────────────────────────────────────────────
+
+    @property
+    def host_history(self) -> list[dict[str, str]]:
+        """Full conversation history for the host agent (read-only view)."""
+        return list(self._host.history)
+
+    @property
+    def participant_histories(self) -> dict[str, list[dict[str, str]]]:
+        """Full conversation histories for all participants, keyed by label."""
+        return {p.label: list(p.history) for p in self._participants}
+
+    @property
+    def total_cost(self) -> float:
+        """Accumulated cost across all agents for the full session."""
+        return self._host.total_cost + sum(p.total_cost for p in self._participants)

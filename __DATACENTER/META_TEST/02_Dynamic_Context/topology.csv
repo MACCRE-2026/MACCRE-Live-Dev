@@ -1,0 +1,2 @@
+Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds
+START_CONVO,MemoryReporter,,STOP,0.7,,none,FAILED,3,,,SourceReader|Synthesizer,2

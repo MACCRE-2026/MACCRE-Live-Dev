@@ -591,6 +591,7 @@ def build_global_workbook(output_path: Path, project_id: str = "") -> None:
         "★ NODE_ID", "★ AGENT_NAME", "★ NEXT_NODE",
         "MODEL_OVERRIDE", "TEMPERATURE", "INSTRUCTION_OVERRIDE",
         "WAIT_FOR", "FAILURE_TARGET", "MAX_RECURSION", "ARTIFACT_PATH",
+        "DIALOGUE_PARTNER", "DIALOGUE_ROUNDS"
     ]
     _write_sheet_header(ws_topo, "SWARM TOPOLOGY", topo_cols)
     if topo_rows:
@@ -605,9 +606,11 @@ def build_global_workbook(output_path: Path, project_id: str = "") -> None:
             ws_topo.cell(row=i, column=8,  value=str(row.get("Failure_Target", "")))
             ws_topo.cell(row=i, column=9,  value=str(row.get("Max_Recursion", "3")))
             ws_topo.cell(row=i, column=10, value=str(row.get("Artifact_Path", "")))
+            ws_topo.cell(row=i, column=11, value=str(row.get("Dialogue_Partner", "")))
+            ws_topo.cell(row=i, column=12, value=str(row.get("Dialogue_Rounds", "0")))
     else:
         eg2 = ["NODE_01", "MyAgent", "STOP", "", "1.0",
-               "Write a brief from the payload.", "", "STOP", "3", ""]
+               "Write a brief from the payload.", "", "STOP", "3", "", "", "0"]
         for ci, v in enumerate(eg2, start=1):
             c = ws_topo.cell(row=3, column=ci, value=v)
             c.font = Font(name="Calibri", size=10, color="888888", italic=True)
@@ -630,7 +633,7 @@ def build_global_workbook(output_path: Path, project_id: str = "") -> None:
     _add_dv(ws_topo, f"D3:D{topo_end}", model_range)
     _add_dv(ws_topo, f"H3:H{topo_end}", f'"{next_nodes_inline[:250]}"')  # FAILURE_TARGET
     _set_col_widths(ws_topo, [18, 22, 22, 22, 12, 45, 28, 22, 14, 35])
-    _write_side_panel(ws_topo, gap_col=11, panel_col=12, content=PANEL_TOPOLOGY)
+    _write_side_panel(ws_topo, gap_col=13, panel_col=14, content=PANEL_TOPOLOGY)
 
     # ── Remaining sheets (unchanged structure) ──────────────────────────────
     # Derive the default start node from the first topology row

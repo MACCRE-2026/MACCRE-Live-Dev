@@ -119,8 +119,8 @@ class UniversalSwarmWorker:
     async def _run_live_session(self, model_id: str, system_prompt: str, current_payload: str, job_id: str, current_node: str) -> str:
         """Stream 4: Establish Live WebSocket session and listen for ScoreKeeper interrupts."""
         import asyncio
-        import zmq
-        import zmq.asyncio
+        import zmq  # type: ignore
+        import zmq.asyncio  # type: ignore
         from maccre_core._net.live_client import GeminiLiveClient
 
         from maccre_core.orchestration.windows_vault import get_native_credential
@@ -437,81 +437,153 @@ You do NOT need to ask for permission to use them. If your instructions require 
             _dialogue_rounds: int = _dialogue_rounds_peek
 
             if _dialogue_partner and _dialogue_rounds > 0:
-                # ── DIALOGUE MODE ──────────────────────────────────────────────
-                # Load partner agent config from agent_roster.csv so we can
-                # pull their model, temperature, and persona independently.
-                from maccre_core.orchestration.dialogue_runner import DialogueRunner  # noqa: PLC0415
-
-                _roster_path = get_datacenter_path("02_Dynamic_Context", "agent_roster.csv")
-                _partner_system = ""
-                _partner_model = model_id
-                _partner_temp = float(node_config.get("temperature", 1.0))
-
-                if _roster_path.exists():
-                    import csv  # noqa: PLC0415
-                    with _roster_path.open(encoding="utf-8") as _rf:
-                        for _row in csv.DictReader(_rf):
-                            if _row.get("AGENT_NAME", "").strip() == _dialogue_partner:
-                                _partner_system = str(_row.get("PERSONA", "") or "")
-                                _partner_model  = str(_row.get("MODEL", model_id) or model_id)
-                                _partner_temp   = float(_row.get("TEMPERATURE", _partner_temp) or _partner_temp)
-                                break
-
-                if not _partner_system:
-                    _partner_card = get_datacenter_path("02_Dynamic_Context", f"{_dialogue_partner}.json")
-                    if _partner_card.exists():
-                        import json as _json  # noqa: PLC0415
-                        _pdata = _json.loads(_partner_card.read_text(encoding="utf-8"))
-                        _partner_system = str(_pdata.get("persona", "") or _pdata.get("system_prompt", ""))
-                        _partner_model  = str(_pdata.get("model", _partner_model) or _partner_model)
-                        _partner_temp   = float(_pdata.get("temperature", _partner_temp) or _partner_temp)
-
-                print(
-                    f"[{AGENT_ID}] DIALOGUE MODE: {current_node} ↔ {_dialogue_partner} "
-                    f"| rounds={_dialogue_rounds} | partner_model={_partner_model}"
+                # ── DIALOGUE MODE (pair or group) ──────────────────────────────
+                # Shared helper: load one agent's config from agent_roster.csv
+                # or a {name}.json agent card in 02_Dynamic_Context/.
+                # Lookup priority: roster CSV → .json card → defaults.
+                # Reads all known persona key variants: PERSONA, persona,
+                # system_prompt, instructions (the key used by real agent cards).
+                import csv as _csv  # noqa: PLC0415
+                import json as _json  # noqa: PLC0415
+                from maccre_core.orchestration.dialogue_runner import (  # noqa: PLC0415
+                    DialogueRunner,
+                    GroupDialogueRunner,
+                    ParticipantConfig,
                 )
 
-                _dialogue_runner = DialogueRunner(
-                    router=self.router,
-                    agent_a_model=model_id,
-                    agent_a_system=system_prompt,
-                    agent_a_temperature=float(node_config.get("temperature", 1.0)),
-                    agent_b_model=_partner_model,
-                    agent_b_system=_partner_system,
-                    agent_b_temperature=_partner_temp,
-                    num_rounds=_dialogue_rounds,
-                    agent_a_label=str(node_config.get("agent", current_node)),
-                    agent_b_label=_dialogue_partner,
-                )
-                final_output_text, total_cost = _dialogue_runner.run(current_payload)
+                def _load_agent_cfg(
+                    name: str,
+                    default_model: str,
+                    default_temp: float,
+                ) -> tuple[str, str, float, str]:
+                    """Return (system_prompt, model_id, temperature, tools_str) for *name*."""
+                    _sys = ""
+                    _mdl = default_model
+                    _tmp = default_temp
+                    _tls = "none"
+                    _extras = get_datacenter_path("02_Dynamic_Context", "agent_extras.json")
+                    if _extras.exists():
+                        try:
+                            _exd = _json.loads(_extras.read_text(encoding="utf-8"))
+                            if _exd.get(name, {}).get("search_grounding"):
+                                _tls = "google_search"
+                        except Exception:
+                            pass
+                    _roster = get_datacenter_path("02_Dynamic_Context", "agent_roster.csv")
+                    if _roster.exists():
+                        with _roster.open(encoding="utf-8") as _rf:
+                            for _row in _csv.DictReader(_rf):
+                                if _row.get("AGENT_NAME", "").strip() == name:
+                                    _sys = str(
+                                        _row.get("PERSONA", "")
+                                        or _row.get("instructions", "")
+                                        or ""
+                                    )
+                                    _mdl = str(_row.get("MODEL", _mdl) or _mdl)
+                                    _tmp = float(_row.get("TEMPERATURE", _tmp) or _tmp)
+                                    break
+                    if not _sys:
+                        _card = get_datacenter_path("02_Dynamic_Context", f"{name}.json")
+                        if _card.exists():
+                            _pd = _json.loads(_card.read_text(encoding="utf-8"))
+                            # Accept all known persona key variants
+                            _sys = str(
+                                _pd.get("instructions", "")
+                                or _pd.get("persona", "")
+                                or _pd.get("system_prompt", "")
+                                or ""
+                            )
+                            _mdl = str(_pd.get("model", _mdl) or _mdl)
+                            _tmp = float(_pd.get("temperature", _tmp) or _tmp)
+                    return _sys, _mdl, _tmp, _tls
 
-                # ── Dialogue transcript → artifact_path ───────────────────────────────
-                # When a dialogue node declares an artifact_path, write the full
-                # transcript there immediately after the run completes.  Without this
-                # step the artifact-coherent routing block below cannot find the file
-                # and emits WARNING: artifact_path not found — falling back to ledger.
-                if _raw_artifact_path:
-                    # Mirror the routing block's auto-scope: if the path starts with
-                    # 04_Code_Artifacts/ and the job_id isn't already injected, insert it
-                    # so the transcript lands at the same location the routing block
-                    # will look for (e.g. 04_Code_Artifacts/job_xxx/project/file.md).
+                # ── Detect pair vs group by presence of pipe separator ─────────
+                _partner_names = [
+                    n.strip() for n in _dialogue_partner.split("|") if n.strip()
+                ]
+                _host_temp = float(node_config.get("temperature", 1.0))
+                _host_label = str(node_config.get("agent", current_node))
+
+                # ── Shared transcript → artifact write block ──────────────────
+                def _write_dialogue_artifact(text: str) -> None:
                     _ART_PFX = "04_Code_Artifacts/"
-                    _dlg_art_rel = _raw_artifact_path
-                    if _dlg_art_rel.startswith(_ART_PFX) and job_id not in _dlg_art_rel:
-                        _dlg_art_rel = f"{_ART_PFX}{job_id}/{_dlg_art_rel[len(_ART_PFX):]}"
-                    _dlg_art_abs: Path = get_datacenter_path(*_dlg_art_rel.split("/"))
-                    _dlg_art_abs.parent.mkdir(parents=True, exist_ok=True)
+                    _rel = _raw_artifact_path
+                    if not _rel:
+                        # Auto-persist dialogue artifact if explicit path is omitted
+                        _rel = f"{_ART_PFX}{job_id}/dialogue_transcript_{current_node}.md"
+                        
+                    if _rel.startswith(_ART_PFX) and job_id not in _rel:
+                        _rel = f"{_ART_PFX}{job_id}/{_rel[len(_ART_PFX):]}"
+                    _abs: Path = get_datacenter_path(*_rel.split("/"))
+                    _abs.parent.mkdir(parents=True, exist_ok=True)
                     try:
-                        _dlg_art_abs.write_text(final_output_text, encoding="utf-8")
-                        print(
-                            f"[{AGENT_ID}] DialogueRunner transcript written → "
-                            f"{_dlg_art_abs}"
+                        _abs.write_text(text, encoding="utf-8")
+                        print(f"[{AGENT_ID}] Dialogue transcript written → {_abs}")
+                    except Exception as _we:  # noqa: BLE001
+                        print(f"[{AGENT_ID}] WARNING: Could not write dialogue artifact '{_rel}': {_we}")
+
+                if len(_partner_names) == 1:
+                    # ── PAIR DIALOGUE (original DialogueRunner) ───────────────
+                    _partner = _partner_names[0]
+                    _, _, _, _host_tls = _load_agent_cfg(_host_label, model_id, _host_temp)
+                    _p_sys, _p_mdl, _p_tmp, _p_tls = _load_agent_cfg(_partner, model_id, _host_temp)
+                    print(
+                        f"[{AGENT_ID}] DIALOGUE MODE: {current_node} ↔ {_partner} "
+                        f"| rounds={_dialogue_rounds} | partner_model={_p_mdl}"
+                    )
+                    _pair_runner = DialogueRunner(
+                        router=self.router,
+                        agent_a_model=model_id,
+                        agent_a_system=system_prompt,
+                        agent_a_temperature=_host_temp,
+                        agent_b_model=_p_mdl,
+                        agent_b_system=_p_sys,
+                        agent_b_temperature=_p_tmp,
+                        num_rounds=_dialogue_rounds,
+                        agent_a_label=_host_label,
+                        agent_b_label=_partner,
+                        agent_a_tools=_host_tls,
+                        agent_b_tools=_p_tls,
+                    )
+                    transcript, final_turn, total_cost = _pair_runner.run(current_payload)
+                    final_output_text = transcript
+                    _write_dialogue_artifact(final_turn)
+
+                else:
+                    # ── GROUP DIALOGUE (GroupDialogueRunner) ──────────────────
+                    # Each name in _partner_names becomes a participant session.
+                    # The topology node (this agent) is the host.
+                    _participants: list[ParticipantConfig] = []
+                    _, _, _, _host_tls = _load_agent_cfg(_host_label, model_id, _host_temp)
+                    for _pname in _partner_names:
+                        _p_sys, _p_mdl, _p_tmp, _p_tls = _load_agent_cfg(_pname, model_id, _host_temp)
+                        _participants.append(
+                            ParticipantConfig(
+                                label=_pname,
+                                model=_p_mdl,
+                                system_prompt=_p_sys,
+                                temperature=_p_tmp,
+                                tools_str=_p_tls,
+                            )
                         )
-                    except Exception as _dlg_write_err:  # noqa: BLE001
-                        print(
-                            f"[{AGENT_ID}] WARNING: Could not write dialogue artifact "
-                            f"'{_dlg_art_rel}': {_dlg_write_err}"
-                        )
+                    p_label_str = ", ".join(_partner_names)
+                    print(
+                        f"[{AGENT_ID}] GROUP DIALOGUE MODE: host={current_node} "
+                        f"| participants=[{p_label_str}] | rounds={_dialogue_rounds}"
+                    )
+                    _grp_runner = GroupDialogueRunner(
+                        router=self.router,
+                        host_model=model_id,
+                        host_system=system_prompt,
+                        host_temperature=_host_temp,
+                        host_label=_host_label,
+                        participants=_participants,
+                        num_rounds=_dialogue_rounds,
+                        host_tools=_host_tls,
+                    )
+                    transcript, final_turn, total_cost = _grp_runner.run(current_payload)
+                    final_output_text = transcript
+                    _write_dialogue_artifact(final_turn)
 
             elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes"):
 
@@ -585,7 +657,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     # a loop. Detect and terminate immediately.
                     _TERMINAL_TOOLS = ("write_file", "execute_render_pipeline", "render_podcast_audio")
                     _fired_terminal = any(
-                        f"[TOOL CALL REQUESTED: {_t}" in output_text
+                        f"TOOL CALL REQUESTED: {_t}" in output_text
                         or f"[TOOL_CALL]: {_t}" in output_text
                         for _t in _TERMINAL_TOOLS
                     )

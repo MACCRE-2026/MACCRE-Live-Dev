@@ -314,6 +314,7 @@ class UniversalRouter:
                         disable_auto_function_calling=bool(tool_declarations) and not _use_grounding,
                         response_schema=_resolved_schema,
                         safety_settings=_safety_off,
+                        max_output_tokens=8192,
                     )
                     _latency_ms = (_t0.monotonic() - _t0_start) * 1000.0
 

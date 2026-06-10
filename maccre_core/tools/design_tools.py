@@ -648,7 +648,7 @@ def fill_swarm_sheet(
 
         shutil.copy2(str(template_src), xlsx_path)
 
-        from openpyxl import load_workbook as _lw  # noqa: PLC0415
+        from openpyxl import load_workbook as _lw  # type: ignore  # noqa: PLC0415
         wb = _lw(xlsx_path)
 
         def _clear(ws: _Any, from_row: int = 3) -> None:

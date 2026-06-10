@@ -82,6 +82,7 @@ from maccre_core.tools.rag_tools import (
     query_foreign_memory,
     import_foreign_vectors,
     prune_semantic_memory,
+    iterative_scoped_search,
 )
 from maccre_core.tools.telemetry_tools import (
     read_local_codebase,
@@ -150,6 +151,7 @@ TOOL_DISPATCHER: Dict[str, Callable[..., Any]] = {
     "query_foreign_memory":       query_foreign_memory,
     "import_foreign_vectors":     import_foreign_vectors,
     "prune_semantic_memory":      prune_semantic_memory,
+    "iterative_scoped_search":    iterative_scoped_search,
     # ── Telemetry & RBAC ──────────────────────────────────────────────────
     "read_local_codebase":        read_local_codebase,
     "query_telemetry_matrix":     query_telemetry_matrix,
@@ -237,6 +239,7 @@ _HEAVY_TOOLS: set[str] = {
     "render_video",
     "render_image",
     "render_image_batch",
+    "iterative_scoped_search",
 }
 
 _FAST_TOOLS: set[str] = {

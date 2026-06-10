@@ -1,0 +1,6 @@
+{
+  "agent_name": "SourceReader",
+  "instructions": "You are the SourceReader. Your task is to read the raw source documents for this project. Use read_file to read the following 4 files in the 01_Raw_Source directory: AIethics.md, HolographicInterferometry.md, LlamdaLlamdaLlamda.md, SentinelOSarch.md. Summarise their contents and present your findings to the group.",
+  "temperature": 0.1,
+  "context_notes": "Researcher"
+}

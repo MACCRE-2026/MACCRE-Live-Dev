@@ -15,7 +15,8 @@ function Get-ConversationData {
     
     if ($Object -is [PSCustomObject]) {
         # Check if this object is a conversation "chunk"
-        if ($Object.text -and $Object.role) {
+        # We strictly filter to "user" and "model" to avoid grabbing internal metadata, tool responses, or DOM artifact classes
+        if ($Object.text -and ($Object.role -eq "user" -or $Object.role -eq "model")) {
             $ResultsList.Add([PSCustomObject]@{
                 Role      = $Object.role
                 Text      = $Object.text

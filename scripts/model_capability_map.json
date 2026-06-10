@@ -901,5 +901,20 @@
     "maxTemperature": 2,
     "topP": 0.95,
     "topK": 64
+  },
+  {
+    "name": "gemini-3.5-live-translate-preview",
+    "displayName": "Gemini 3.5 Live Translate Preview",
+    "description": "Gemini 3.5 Live Translate Preview",
+    "version": "3.5-live-translate-06-2026",
+    "supportedMethods": [
+      "bidiGenerateContent"
+    ],
+    "inputTokenLimit": 16384,
+    "outputTokenLimit": 32768,
+    "temperature": 1,
+    "maxTemperature": 2,
+    "topP": 0.95,
+    "topK": 64
   }
 ]

@@ -266,6 +266,77 @@ def fts_search_memory(
         return f"[FTS] Search failed: {e!s}"
 
 
+def iterative_scoped_search(
+    query: str,
+    excluded_ids: list[str] | None = None,
+    collection_name: str = "swarm_memory",
+    n_results: int = 5,
+) -> str:
+    """Dynamically Scoped Infosphere Search (Two-Stage).
+    
+    Step 1: Uses FTS on thought_pins.db to establish the semantic scope of the project.
+    Step 2: Uses Vector Similarity on the active project store (which includes canonized
+            agent_ledgers and agent_thoughts) to find exact content.
+    Step 3: Excludes any doc_id in excluded_ids to allow iterating deep into the DB.
+    
+    Args:
+        query: The semantic search string.
+        excluded_ids: List of doc_ids to exclude from the results (from previous searches).
+        collection_name: Target collection. Default: "swarm_memory".
+        n_results: Max chunks to return. Default 5.
+    """
+    env_project = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
+    env_session = os.environ.get("MACCRE_ACTIVE_SESSION", "")
+    
+    try:
+        # Query L2 Project DB for semantic scope
+        tp_store = get_knowledge_store(env_project, db_name="thought_pins.db")
+        pin_results = tp_store.fts_query(collection_name, query, n=3)
+        
+        # Also Query L1 Ephemeral Session DB for semantic scope (if active)
+        if env_session:
+            sess_store = get_knowledge_store(env_project, db_name=f"session_{env_session}_thought_pins.db")
+            pin_results.extend(sess_store.fts_query(collection_name, query, n=3))
+
+        scope_context = ""
+        if pin_results:
+            scope_context = " ".join([p.text for p in pin_results])
+            
+        # Enrich the query with the thought pin context for the deep vector search
+        enriched_query = f"{query}\n[Context Pins]: {scope_context}" if scope_context else query
+        vector = get_gemini_embedding(enriched_query, task_type="RETRIEVAL_QUERY")
+        
+        # Query L2 Project DB for final vector match
+        candidates = tp_store.query(collection_name, vector, n=n_results + (len(excluded_ids) if excluded_ids else 0))
+        
+        # Query L1 Ephemeral Session DB for final vector match
+        if env_session:
+            candidates.extend(sess_store.query(collection_name, vector, n=n_results + (len(excluded_ids) if excluded_ids else 0)))
+            
+        # Sort combined candidates by distance
+        candidates = sorted(candidates, key=lambda x: x.distance)
+        
+        # Step 3: Apply exclusions
+        excludes = set(excluded_ids or [])
+        filtered = [c for c in candidates if c.doc_id not in excludes][:n_results]
+        
+        if not filtered:
+            return f"[SCOPED_SEARCH] No new relevant memories found for '{query}'."
+            
+        output = f"--- DYNAMICALLY SCOPED SEARCH RESULTS (n={len(filtered)}) ---\n"
+        output += f"Exclusions Applied: {len(excludes)}\n\n"
+        for pin in filtered:
+            src = pin.metadata.get("filename", pin.doc_id)
+            tier = pin.metadata.get("type", "unknown_tier")
+            output += (
+                f"[DocID: {pin.doc_id} | Tier: {tier} | Source: {src} | Distance: {pin.distance:.4f}]\n"
+                f"{pin.text}\n\n"
+            )
+        return output
+    except Exception as e:
+        return f"[SCOPED_SEARCH_FAULT] {e!s}"
+
+
 # ── Global Ingest & Query ────────────────────────────────────────────────────────
 
 def ingest_global_archive(file_path: str) -> str:
@@ -509,26 +580,66 @@ def merge_session_to_project(session_name: str, project_name: str) -> str:
     Returns:
         A status string prefixed with MERGE_SUCCESS, MERGE_SKIPPED, or MERGE_FAILED.
     """
-    sess_col = f"session_{session_name}"
-    proj_col = f"project_{project_name}"
-    env_project = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
-    store = get_knowledge_store(env_project)
+    sess_col = "swarm_memory"  # In SovereignMemory, pins are always in swarm_memory or similar
+    proj_col = "swarm_memory"
+    
+    # Store for L2 Project Database
+    tp_store = get_knowledge_store(project_name, db_name="thought_pins.db")
+    
+    # Store for L1 Session Database
+    sess_db_name = f"session_{session_name}_thought_pins.db"
+    sess_store = get_knowledge_store(project_name, db_name=sess_db_name)
 
     try:
-        if sess_col not in store.list_collections():
-            return f"MERGE_SKIPPED: No ephemeral memory found for {sess_col}."
-
-        all_pins = store.get_all(sess_col)
+        all_pins = sess_store.get_all(sess_col)
         if not all_pins:
-            return f"MERGE_SKIPPED: {sess_col} is empty."
+            return f"MERGE_SKIPPED: {sess_db_name} is empty."
 
         for pin in all_pins:
-            store.upsert(proj_col, pin)
+            tp_store.upsert(proj_col, pin)
 
-        store.delete_collection(sess_col)
+        # Clear out the session DB or delete it
+        sess_store.delete_collection(sess_col)
         return (
             f"MERGE_SUCCESS: Promoted {len(all_pins)} vectors "
-            f"from {sess_col} to {proj_col}."
+            f"from {sess_db_name} to thought_pins.db."
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"MERGE_FAILED: {exc}"
+
+
+def canonize_project_to_global(project_name: str) -> str:
+    """Zero-compute vector merge — promotes L2 Project memory to L3 Global memory.
+
+    Args:
+        project_name: The project identifier (collection ``project_<project_name>``).
+
+    Returns:
+        A status string prefixed with MERGE_SUCCESS, MERGE_SKIPPED, or MERGE_FAILED.
+    """
+    proj_col = f"project_{project_name}"
+    glob_col = "global_memory"
+
+    project_store = get_knowledge_store(project_name)
+    global_store = get_knowledge_store("GLOBAL")
+
+    try:
+        if proj_col not in project_store.list_collections():
+            return f"MERGE_SKIPPED: No project memory found for {proj_col}."
+
+        all_pins = project_store.get_all(proj_col)
+        if not all_pins:
+            return f"MERGE_SKIPPED: {proj_col} is empty."
+
+        for pin in all_pins:
+            safe_meta = dict(pin.metadata) if pin.metadata else {}
+            safe_meta["origin_project"] = project_name
+            pin.metadata = safe_meta
+            global_store.upsert(glob_col, pin)
+
+        return (
+            f"MERGE_SUCCESS: Promoted {len(all_pins)} vectors "
+            f"from {proj_col} to {glob_col} in GLOBAL memory."
         )
     except Exception as exc:  # noqa: BLE001
         return f"MERGE_FAILED: {exc}"

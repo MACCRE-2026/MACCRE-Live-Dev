@@ -14,8 +14,8 @@ class LiveSessionManager:
     Publishes MACCRE.INTERRUPT and MACCRE.ROUTE commands to workers via tcp://127.0.0.1:5557.
     """
     def __init__(self) -> None:
-        import zmq
-        import zmq.asyncio
+        import zmq  # type: ignore
+        import zmq.asyncio  # type: ignore
         self.zmq_ctx = zmq.asyncio.Context.instance()
         
         # SUB socket: listen to Swarm telemetry (Workers CONNECT, Manager BINDs)

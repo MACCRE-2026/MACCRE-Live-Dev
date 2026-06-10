@@ -30,8 +30,8 @@ from typing import TYPE_CHECKING, Any
 from maccre_core.memory.knowledge_store import KnowledgeStore, PinRecord
 
 if TYPE_CHECKING:
-    import chromadb
-    import chromadb.api
+    import chromadb  # type: ignore
+    import chromadb.api  # type: ignore
 
 
 class ChromaDBStore(KnowledgeStore):
@@ -43,7 +43,7 @@ class ChromaDBStore(KnowledgeStore):
     """
 
     def __init__(self, project_name: str) -> None:
-        import chromadb as _chroma  # noqa: PLC0415
+        import chromadb as _chroma  # type: ignore  # noqa: PLC0415
         from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: PLC0415
         self._project = project_name
         db_path = str(get_datacenter_path("chroma_db"))

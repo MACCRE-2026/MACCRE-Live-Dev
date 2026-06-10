@@ -566,6 +566,103 @@ def build_t7() -> None:
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
+# T8 — GROUP DIALOGUE RUNNER
+# ══════════════════════════════════════════════════════════════════════════════
+def build_t8() -> None:
+    """
+    Topology:
+        BRIEFER → GROUP_DEBATE (GroupDialogueRunner: HOST ↔ [OPTIMIST | PESSIMIST], 2 rounds)
+                      ↓ transcript artifact
+                 SYNTHESIZER (wait_for=GROUP_DEBATE) → STOP
+
+    Tests: GroupDialogueRunner fires correctly with 2 participants.
+    Pass:
+      - GROUP_DEBATE ledger contains 3 named speakers (HOST, OPTIMIST, PESSIMIST)
+      - Transcript artifact written to 04_Code_Artifacts/T8_GROUP_DIALOGUE/group_debate_log.md
+      - SYNTHESIZER receives the transcript via wait_for fan-in
+      - SYNTHESIZER ledger confirms it saw both participant voices
+      - Zero SESSION_ID tokens in any artifact path
+    """
+    _HOST_PERSONA = (
+        "You are HOST, a structured discussion facilitator. "
+        "Your job is to pose clear questions, summarise each round, and keep the debate on track. "
+        "Be concise — 2-3 sentences per turn. Address both OPTIMIST and PESSIMIST by name."
+    )
+    _OPTIMIST_PERSONA = (
+        "You are OPTIMIST. You believe fully autonomous multi-agent AI systems are net positive "
+        "and should be accelerated. Support your position with specific examples. "
+        "Be concise — 2-3 sentences per turn. Engage directly with what HOST just said."
+    )
+    _PESSIMIST_PERSONA = (
+        "You are PESSIMIST. You believe fully autonomous multi-agent AI systems carry serious "
+        "unresolved risks and should be constrained. Name specific failure modes. "
+        "Be concise — 2-3 sentences per turn. Engage directly with what HOST just said."
+    )
+
+    wb = _copy_template("T8_GROUP_DIALOGUE")
+    _populate(
+        wb_path=wb,
+        project_id="T8_GROUP_DIALOGUE",
+        description="GroupDialogueRunner — HOST facilitates OPTIMIST and PESSIMIST for 2 rounds, SYNTHESIZER reads transcript",
+        start_node="BRIEFER",
+        payload=(
+            "Topology test T8. Topic: "
+            "'Should fully autonomous multi-agent AI systems be deployed without human oversight?' "
+            "BRIEFER frames the question. GROUP_DEBATE runs a structured 2-round group discussion. "
+            "SYNTHESIZER reads the full transcript and produces a conclusion."
+        ),
+        agents=[
+            # BRIEFER + SYNTHESIZER share the generic test agent
+            ["TestAgent", "Minimal test agent", "cloud",
+             "gemini-2.5-flash", "0.7", "", "", "512", "0",
+             "FALSE", "FALSE", "", "text", "minimal", "write_file", _TEST_PERSONA],
+            # GROUP HOST — the node agent (runs as GroupDialogueRunner host)
+            ["HostAgent", "Group discussion facilitator", "cloud",
+             "gemini-2.5-flash", "0.9", "", "", "1024", "0",
+             "FALSE", "FALSE", "", "text", "minimal", "none", _HOST_PERSONA],
+            # OPTIMIST — loaded as participant by GroupDialogueRunner via agent card
+            ["OptimistAgent", "Pro-autonomy debater", "cloud",
+             "gemini-2.5-flash", "0.9", "", "", "1024", "0",
+             "FALSE", "FALSE", "", "text", "minimal", "none", _OPTIMIST_PERSONA],
+            # PESSIMIST — loaded as participant by GroupDialogueRunner via agent card
+            ["PessimistAgent", "Risk-focused debater", "cloud",
+             "gemini-2.5-flash", "0.9", "", "", "1024", "0",
+             "FALSE", "FALSE", "", "text", "minimal", "none", _PESSIMIST_PERSONA],
+        ],
+        topology=[
+            # BRIEFER: frames the question, passes it forward
+            ["BRIEFER", "TestAgent", "GROUP_DEBATE",
+             "You are BRIEFER in topology test T8. Write a concise 2-paragraph framing of the debate topic: "
+             "'Should fully autonomous multi-agent AI systems be deployed without human oversight?' "
+             "Paragraph 1: the case FOR. Paragraph 2: the case AGAINST. "
+             "Call write_file to save to: 04_Code_Artifacts/T8_GROUP_DIALOGUE/briefing.md",
+             "", "0.7", "2", "none", "FAILED",
+             "04_Code_Artifacts/T8_GROUP_DIALOGUE/briefing.md", "", ""],
+            # GROUP_DEBATE: pipe-separated dialogue_partner = GroupDialogueRunner dispatch
+            # HostAgent facilitates; OptimistAgent and PessimistAgent are participants.
+            # 2 rounds. Transcript written to group_debate_log.md by swarm_worker.
+            ["GROUP_DEBATE", "HostAgent", "SYNTHESIZER",
+             "You are HOST opening a structured group debate on AI autonomy. "
+             "The briefing context is in your payload. "
+             "Summarise the two sides in one sentence each, then pose your first question "
+             "to both OPTIMIST and PESSIMIST. Be direct and specific.",
+             "", "0.9", "3", "none", "FAILED",
+             "04_Code_Artifacts/T8_GROUP_DIALOGUE/group_debate_log.md",
+             "OptimistAgent|PessimistAgent", "2"],
+            # SYNTHESIZER: waits for GROUP_DEBATE transcript, writes a conclusion
+            ["SYNTHESIZER", "TestAgent", "STOP",
+             "You are SYNTHESIZER in topology test T8. "
+             "The [GATHERED ARTIFACT: GROUP_DEBATE] block above contains the full group debate transcript. "
+             "Confirm BOTH OPTIMIST and PESSIMIST voices are present by quoting one line from each. "
+             "Write a single concluding paragraph: which side made the stronger argument and why. "
+             "Call write_file to save to: 04_Code_Artifacts/T8_GROUP_DIALOGUE/synthesis.md",
+             "", "0.7", "2", "GROUP_DEBATE", "FAILED",
+             "04_Code_Artifacts/T8_GROUP_DIALOGUE/synthesis.md", "", ""],
+        ],
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 def main() -> None:
     print("\n[BUILD TOPOLOGY TESTS]")
     print(f"  Template source: {TEMPLATE_SRC}")
@@ -574,13 +671,14 @@ def main() -> None:
         sys.exit(1)
 
     builders = [
-        ("T1_SMOKE",    build_t1),
-        ("T2_FAILURE",  build_t2),
-        ("T3_DIAMOND",  build_t3),
-        ("T4_RACE",     build_t4),
-        ("T5_LOOP",     build_t5),
-        ("T6_VALIDATE", build_t6),
-        ("T7_DIALOGUE", build_t7),
+        ("T1_SMOKE",          build_t1),
+        ("T2_FAILURE",        build_t2),
+        ("T3_DIAMOND",        build_t3),
+        ("T4_RACE",           build_t4),
+        ("T5_LOOP",           build_t5),
+        ("T6_VALIDATE",       build_t6),
+        ("T7_DIALOGUE",       build_t7),
+        ("T8_GROUP_DIALOGUE", build_t8),
     ]
 
     for name, fn in builders:
@@ -589,13 +687,14 @@ def main() -> None:
 
     print("\n[DONE] All test workbooks written.")
     print("\nLaunch order (after EXO_TEST run completes):")
-    print("  python maccre.py launch T1_SMOKE    --yes   # should complete clean")
-    print("  python maccre.py launch T2_FAILURE  --yes   # RECOVERY must fire, NODE_C must NOT")
-    print("  python maccre.py launch T3_DIAMOND  --yes   # MERGE must see both GATHERED ARTIFACTs")
-    print("  python maccre.py launch T4_RACE     --yes   # MERGE must wait for SLOW_NODE")
-    print("  python maccre.py launch T5_LOOP     --yes   # REFINER ledger must appear 2+ times")
-    print("  python maccre.py launch T6_VALIDATE --yes   # must FAIL at pre-flight, zero cost")
-    print("  python maccre.py launch T7_DIALOGUE --yes   # DialogueRunner must fire mid-chain")
+    print("  python maccre.py launch T1_SMOKE          --yes   # should complete clean")
+    print("  python maccre.py launch T2_FAILURE        --yes   # RECOVERY must fire, NODE_C must NOT")
+    print("  python maccre.py launch T3_DIAMOND        --yes   # MERGE must see both GATHERED ARTIFACTs")
+    print("  python maccre.py launch T4_RACE           --yes   # MERGE must wait for SLOW_NODE")
+    print("  python maccre.py launch T5_LOOP           --yes   # REFINER ledger must appear 2+ times")
+    print("  python maccre.py launch T6_VALIDATE       --yes   # must FAIL at pre-flight, zero cost")
+    print("  python maccre.py launch T7_DIALOGUE       --yes   # DialogueRunner must fire mid-chain")
+    print("  python maccre.py launch T8_GROUP_DIALOGUE --yes   # GroupDialogueRunner: 3 voices in transcript")
 
 
 if __name__ == "__main__":

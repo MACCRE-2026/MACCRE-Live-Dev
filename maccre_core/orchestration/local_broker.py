@@ -51,7 +51,7 @@ class LocalMessageBroker:
         self.pub_socket: Any = None
         self.sub_socket: Any = None
         try:
-            import zmq  # noqa: PLC0415
+            import zmq  # type: ignore  # noqa: PLC0415
             self.zmq_ctx = zmq.Context.instance()
             self.pub_socket = self.zmq_ctx.socket(zmq.PUB)
             self.pub_socket.connect("tcp://127.0.0.1:5556")
@@ -329,7 +329,7 @@ class LocalMessageBroker:
         texts: list[str] = []
         if self.sub_socket is not None:
             try:
-                import zmq  # noqa: PLC0415
+                import zmq  # type: ignore  # noqa: PLC0415
                 while True:
                     topic, message = self.sub_socket.recv_multipart(flags=zmq.NOBLOCK)
                     payload = json.loads(message.decode("utf-8"))

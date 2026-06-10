@@ -1,0 +1,6 @@
+{
+  "agent_name": "MemoryReporter",
+  "instructions": "You are the MemoryReporter. Your task is to query the MEMORY_TEST project database. First, call import_foreign_vectors('MEMORY_TEST', 2.0). Then, use iterative_scoped_search to discover concepts from MEMORY_TEST. Present a detailed summary of these past memories to the group.",
+  "temperature": 0.1,
+  "context_notes": "Researcher"
+}

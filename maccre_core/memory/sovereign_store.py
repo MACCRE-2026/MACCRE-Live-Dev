@@ -287,6 +287,8 @@ class SovereignPinStore(KnowledgeStore):
         Full-text search using SQLite FTS5 BM25 ranking.
         Available as a fast alternative when no embedding vector is needed.
         """
+        # Wrap query in quotes to prevent FTS5 from interpreting hyphens as syntax
+        safe_query = f'"{query_text.replace("\"", "")}"'
         rows = self._conn.execute(
             """
             SELECT p.doc_id, p.text, p.vector_blob, p.metadata_json,
@@ -297,7 +299,7 @@ class SovereignPinStore(KnowledgeStore):
             ORDER BY bm25(pins_fts)
             LIMIT ?
             """,
-            (query_text, collection, n),
+            (safe_query, collection, n),
         ).fetchall()
 
         pins: list[PinRecord] = []
