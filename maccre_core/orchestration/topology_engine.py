@@ -46,11 +46,17 @@ class TopologyEngine:
 
     def get_topology(self) -> Dict[str, Any]:
         """Returns the Swarm Graph, reloading from disk if the TTL has expired."""
+        import time
         current_time = time.time()
         if not self._cached_graph or (current_time - self._last_pull_time) > self._cache_ttl_seconds:
             self._cached_graph = self._pull_from_csv()
             self._last_pull_time = current_time
         return self._cached_graph
+
+    def flush_cache(self) -> None:
+        """Forces the graph to be reloaded on the next get_topology() call."""
+        self._cached_graph = {}
+        self._last_pull_time = 0.0
 
     def _pull_from_csv(self) -> Dict[str, Any]:
         """Loads and parses the CSV into the engine dictionary."""

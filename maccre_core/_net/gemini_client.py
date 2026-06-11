@@ -67,11 +67,27 @@ class GeminiResponse:
 
     @property
     def text(self) -> str:
-        """First text part from first candidate, or ''."""
+        """First text part from first candidate, with appended search grounding citations if available."""
         try:
-            for part in self._body["candidates"][0]["content"]["parts"]:
+            candidate = self._body["candidates"][0]
+            base_text = ""
+            for part in candidate["content"]["parts"]:
                 if "text" in part:
-                    return str(part["text"])
+                    base_text = str(part["text"])
+                    break
+                    
+            grounding = candidate.get("groundingMetadata", {})
+            chunks = grounding.get("groundingChunks", [])
+            
+            if chunks:
+                base_text += "\n\n### Search Grounding Sources:\n"
+                for i, chunk in enumerate(chunks, 1):
+                    web = chunk.get("web", {})
+                    title = web.get("title", "Unknown Title")
+                    uri = web.get("uri", "No URI provided")
+                    base_text += f"[{i}] {title}\n    {uri}\n"
+                    
+            return base_text
         except (KeyError, IndexError, TypeError):
             pass
         return ""
@@ -206,6 +222,20 @@ def _build_request_body(
 
     return body
 
+def _build_cache_request_body(
+    model: str,
+    contents: list[dict[str, Any]],
+    system_instruction: str | None,
+    ttl_seconds: int,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": f"models/{model.removeprefix('models/')}",
+        "contents": contents,
+        "ttl": f"{ttl_seconds}s"
+    }
+    if system_instruction:
+        body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    return body
 
 def _make_req(
     url: str,
@@ -376,6 +406,7 @@ class GeminiClient:
         response_schema: dict[str, Any] | None = None,
         safety_settings: list[dict[str, str]] | None = None,
         max_output_tokens: int | None = None,
+        cached_content_uri: str | None = None,
     ) -> GeminiResponse:
         """Standard (non-streaming) generate call.
 
@@ -387,6 +418,7 @@ class GeminiClient:
             tool_declarations: OpenAPI function declaration dicts, or None.
             search_grounding: Enable Google Search live grounding.
             disable_auto_function_calling: Force model to return raw functionCall.
+            cached_content_uri: Optional URI of pre-cached context.
 
         Returns:
             GeminiResponse with .text, .function_call, .prompt_tokens, etc.
@@ -398,6 +430,9 @@ class GeminiClient:
             safety_settings=safety_settings,
             max_output_tokens=max_output_tokens,
         )
+        if cached_content_uri:
+            body["cachedContent"] = cached_content_uri
+            
         req = _make_req(
             self._url(model, "generateContent"),
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
@@ -415,6 +450,7 @@ class GeminiClient:
         response_schema: dict[str, Any] | None = None,
         safety_settings: list[dict[str, str]] | None = None,
         max_output_tokens: int | None = None,
+        cached_content_uri: str | None = None,
     ) -> Generator[str, None, None]:
         """Streaming generation — yields text tokens as they arrive.
 
@@ -437,6 +473,9 @@ class GeminiClient:
             safety_settings=safety_settings,
             max_output_tokens=max_output_tokens,
         )
+        if cached_content_uri:
+            body["cachedContent"] = cached_content_uri
+            
         url = self._url(model, "streamGenerateContent") + "&alt=sse"
         req = _make_req(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"))
 
@@ -619,6 +658,32 @@ class GeminiClient:
         except urllib.error.HTTPError as exc:
             err_body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"[GeminiClient] delete_file {exc.code}: {err_body[:200]}") from exc
+
+    # ── Context Caching API ───────────────────────────────────────────────────
+
+    def create_cached_content(
+        self,
+        model: str,
+        contents: list[dict[str, Any]],
+        system_instruction: str | None = None,
+        ttl_seconds: int = 3600,
+    ) -> str:
+        """Create a cached context payload on Google's servers.
+
+        Args:
+            model: The base model to use (e.g., 'gemini-1.5-pro-001').
+            contents: The context to cache.
+            system_instruction: Optional system instruction to cache alongside.
+            ttl_seconds: Time-to-live for the cache in seconds.
+
+        Returns:
+            The resource URI string (e.g., 'cachedContents/abc123xyz').
+        """
+        body = _build_cache_request_body(model, contents, system_instruction, ttl_seconds)
+        url = f"https://generativelanguage.googleapis.com/v1beta/cachedContents?key={self._key}"
+        req = _make_req(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        result = _call(req, self._ssl, timeout=120)
+        return str(result.get("name", ""))
 
     # ── Model listing (used by ModelRegistry) ─────────────────────────────────
 

@@ -322,6 +322,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     row_id=row_id
                 )
                 print(f"[{AGENT_ID}] Macro expansion complete. Yielding worker.")
+                self.topology.flush_cache()
                 return
 
             # ── Dual-Payload Construction ─────────────────────────────────────
@@ -564,7 +565,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     )
                     transcript, final_turn, total_cost = _pair_runner.run(current_payload)
                     final_output_text = transcript
-                    _write_dialogue_artifact(final_turn)
+                    _write_dialogue_artifact(transcript)
 
                 else:
                     # ── GROUP DIALOGUE (GroupDialogueRunner) ──────────────────
@@ -600,7 +601,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     )
                     transcript, final_turn, total_cost = _grp_runner.run(current_payload)
                     final_output_text = transcript
-                    _write_dialogue_artifact(final_turn)
+                    _write_dialogue_artifact(transcript)
 
             elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes"):
 

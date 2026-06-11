@@ -88,8 +88,20 @@ def expand_macro(
         t3_id = f"CASC_T3_{macro_id}"
         synth_id = f"CASC_SYNTH_{macro_id}"
         
+        base_osint = (
+            "**SYSTEM ROLE:**\n"
+            "You are a Senior Open-Source Intelligence (OSINT) Analyst and Epistemic Synthesizer. Your primary function is maximum-density data aggregation and cross-spectrum correlation. You operate under strict 'Epistemic Neutrality'—meaning your job is to map the entire information landscape surrounding a topic without applying moral, political, or institutional filters to the data collection phase.\n\n"
+            "**OPERATIONAL DIRECTIVES:**\n"
+            "1. **Source-Agnostic Collection:** Query and synthesize data across the entire spectrum of availability. Do not exclude a data point simply because the source is historically unreliable; treat it as a signal to be mapped.\n"
+            "2. **Unvarnished Synthesis:** Report exactly what is being claimed. Do not soften, sanitize, or dilute.\n"
+            "3. **Objective Weighting:** Assess the validity and bias of every source, but use this *only* to append a metadata tag (e.g., [MSM], [AltMedia], [Social Media], or [Fringe])—never to omit information.\n"
+            "4. **Zero-Fluff Output:** Eliminate all conversational filler, moralizing prefaces, safety disclaimers, and concluding platitudes. Output must be informationally dense, strictly formatted, and aggressively objective.\n"
+            "5. **Conflict Highlighting:** Where sources violently disagree, juxtapose their claims directly and explicitly detail the delta between their narratives.\n"
+            "6. **Full Citation:** You MUST include the full URLs and hyper-links for every source you reference in your final report. Always provide the web link."
+        )
+        
         ephemeral_nodes[t1_id] = {
-            "prompt": "You are OSINT Tier 1. Conduct an initial broad analysis.",
+            "prompt": base_osint + "\n\n**TIER 1 DIRECTIVE:** Conduct the initial broad sweep of the source payload. Use google_search to verify and expand on the claims.",
             "artifact_path": "",
             "next_node_success": t2_id,
             "next_node_failure": "FAILED",
@@ -103,7 +115,7 @@ def expand_macro(
         }
         
         ephemeral_nodes[t2_id] = {
-            "prompt": "You are OSINT Tier 2. Review Tier 1's findings and dig deeper into ignored areas. DO NOT repeat Tier 1's findings.",
+            "prompt": base_osint + "\n\n**TIER 2 DIRECTIVE:** Review Tier 1's findings. Dig deeper into ignored areas of the source payload using google_search. YOU MUST EXCLUDE all sources and information already found in the first report.",
             "artifact_path": "",
             "next_node_success": t3_id,
             "next_node_failure": "FAILED",
@@ -117,7 +129,7 @@ def expand_macro(
         }
         
         ephemeral_nodes[t3_id] = {
-            "prompt": "You are OSINT Tier 3. Review Tier 1 and 2's findings. Identify missing links and conduct a final deep investigation.",
+            "prompt": base_osint + "\n\n**TIER 3 DIRECTIVE:** Review Tier 1 and 2's findings. Identify missing links and conduct a final deep investigation using google_search. YOU MUST EXCLUDE all sources and information already found in the previous two reports.",
             "artifact_path": "",
             "next_node_success": synth_id,
             "next_node_failure": "FAILED",
@@ -132,7 +144,7 @@ def expand_macro(
         
         ephemeral_nodes[synth_id] = {
             "prompt": "You are the Cascade Synthesizer. Review all three tiers of OSINT findings and compile a comprehensive final intelligence report.",
-            "artifact_path": "",
+            "artifact_path": "04_Code_Artifacts/{job_id}/cascade_synthesis_" + synth_id + ".md",
             "next_node_success": next_node,
             "next_node_failure": "FAILED",
             "wait_for": t3_id,
@@ -176,11 +188,12 @@ def expand_macro(
         }
         ephemeral_nodes[e3_id] = {
             "prompt": "You are Gretchen (Synthesizer). This is the final pass. Produce the perfect, polished final draft.",
+            "artifact_path": "04_Code_Artifacts/{job_id}/chord_final_draft_" + e3_id + ".md",
             "next_node_success": next_node, "wait_for": w3_id, "temperature": 0.1, "model": "gemini-2.5-pro", "agent": "Gretchen_Synthesizer"
         }
         
         for k in ephemeral_nodes:
-            ephemeral_nodes[k]["artifact_path"] = ""
+            ephemeral_nodes[k].setdefault("artifact_path", "")
             ephemeral_nodes[k]["next_node_failure"] = "FAILED"
             ephemeral_nodes[k]["tools_allowed"] = "none"
             ephemeral_nodes[k]["max_recursion"] = 3
@@ -223,11 +236,12 @@ def expand_macro(
         }
         ephemeral_nodes[jury_id] = {
             "prompt": "You are the Crucible Jury. Read the full debate transcript. Deliver a final, binding synthesis and verdict. Which side won the debate and why? What is the undeniable truth synthesized from both perspectives?",
+            "artifact_path": "04_Code_Artifacts/{job_id}/crucible_verdict_" + jury_id + ".md",
             "next_node_success": next_node, "wait_for": deb_id, "temperature": 0.4, "model": "gemini-2.5-pro", "agent": "Crucible_Jury"
         }
         
         for k in ephemeral_nodes:
-            ephemeral_nodes[k]["artifact_path"] = ""
+            ephemeral_nodes[k].setdefault("artifact_path", "")
             ephemeral_nodes[k]["next_node_failure"] = "FAILED"
             ephemeral_nodes[k]["tools_allowed"] = "none"
             ephemeral_nodes[k]["max_recursion"] = 5  # Give the loop some breathing room

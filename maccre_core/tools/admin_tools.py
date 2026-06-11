@@ -124,11 +124,6 @@ def build_topology(nodes: List[List[str]]) -> str:
                     node.append(_DEFAULTS[len(node) - 6])
                 writer.writerow(node)
                 
-        # Inject the hardware token so the TopologyEngine accepts it
-        ads_path = f"{topo_path}:maccre_auth"
-        with open(ads_path, "w", encoding="utf-8") as f:
-            f.write("O_AUTH_VALID")
-                
         return f"[ADMIN_SUCCESS] Topology constructed successfully at {topo_path}."
     except Exception as e:
         return f"[ADMIN_FAULT] Topology Build Failed: {e}"

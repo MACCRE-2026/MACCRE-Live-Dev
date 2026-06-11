@@ -1,0 +1,3 @@
+Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds
+START,MACRO:Cascade-OSINT3x,,THE_CRUCIBLE,0.7,,none,FAILED,1,04_Code_Artifacts/MACRO_TEST/cascade.md,,,0
+THE_CRUCIBLE,MACRO:Crucible,,STOP,0.7,,START,FAILED,1,04_Code_Artifacts/MACRO_TEST/crucible.md,,,0

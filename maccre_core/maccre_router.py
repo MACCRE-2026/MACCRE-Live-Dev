@@ -231,6 +231,15 @@ class UniversalRouter:
             RuntimeError: On 404/epoch-drift errors from the Gemini API.
         """
         model_lower = model_name.lower()
+        
+        # ── Anchor Temporal Awareness ──
+        import datetime
+        _now_str = datetime.datetime.now().strftime("%B %d, %Y")
+        if system_prompt:
+            system_prompt = f"Today is {_now_str}.\n\n{system_prompt}"
+        else:
+            system_prompt = f"Today is {_now_str}."
+        
         # Detect and strip the google_search sentinel — it is a native Gemini capability,
         # not a registered Python callable.  Must be removed before tool schema generation.
         _tool_names = [t.strip() for t in tools_str.replace("|", ",").split(",")]
