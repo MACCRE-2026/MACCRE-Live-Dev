@@ -214,8 +214,13 @@ def _build_request_body(
     if tools:
         body["tools"] = tools
 
+    tool_config: dict[str, Any] = {}
     if disable_auto_function_calling and tool_declarations:
-        body["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
+        tool_config["functionCallingConfig"] = {"mode": "ANY"}
+    if search_grounding and tool_declarations:
+        tool_config["includeServerSideToolInvocations"] = True
+    if tool_config:
+        body["toolConfig"] = tool_config
 
     if safety_settings:
         body["safetySettings"] = safety_settings

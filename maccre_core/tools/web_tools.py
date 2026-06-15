@@ -70,21 +70,20 @@ def _strip_html(raw: str) -> str:
 # ── Public Tools ─────────────────────────────────────────────────────────────
 
 
-def search_web(query: str, num_results: int = 8) -> str:
+def search_web(query: str, num_results: int = 8, freshness: str = "") -> str:
     """Search the live web using the Brave Search API.
 
     Requires 'BRAVE_SEARCH_API_KEY' in the Windows Credential Vault.
     Returns formatted search results with titles, URLs, and snippets.
-    Falls back to a clear error message if the key is absent — the agent
-    can then decide to use read_url_content on a known URL instead.
+    Falls back to a clear error message if the key is absent.
 
     Args:
         query: The search query string.
         num_results: Number of results to return (max 20). Default 8.
+        freshness: Optional time filter ('pd' for past day, 'pw' for past week, 'pm', 'py').
 
     Returns:
-        Formatted string of search results (TITLE / URL / SNIPPET per result),
-        or an error message if the API key is missing or the request fails.
+        Formatted string of search results.
     """
     api_key = _get_brave_key()
     if not api_key:
@@ -94,9 +93,11 @@ def search_web(query: str, num_results: int = 8) -> str:
             "or ask the operator to run: python maccre.py config set-key <BRAVE_KEY>"
         )
 
-    # Coerce to int — models occasionally pass numeric args as strings ("8" vs 8)
+    # Coerce to int
     num_results = int(num_results)
     params = f"q={urllib.parse.quote(query)}&count={min(num_results, 20)}"
+    if freshness in ("pd", "pw", "pm", "py"):
+        params += f"&freshness={freshness}"
     url = f"{_BRAVE_ENDPOINT}?{params}"
     req = urllib.request.Request(
         url,

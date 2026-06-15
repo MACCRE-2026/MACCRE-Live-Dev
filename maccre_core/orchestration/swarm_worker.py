@@ -202,7 +202,27 @@ class UniversalSwarmWorker:
 
     # ── Main Loop ─────────────────────────────────────────────────────────────
 
-    def execute_cycle(self) -> None:
+    def execute_cycle(
+        self, 
+        pause_event: Optional[Any] = None, 
+        stop_event: Optional[Any] = None
+    ) -> bool:
+        """Executes a single node in the swarm topology.
+        
+        Args:
+            pause_event: A threading.Event (or similar) that, if set, causes the worker to idle.
+            stop_event: A threading.Event that, if set, returns False to exit the loop.
+            
+        Returns:
+            False if stopped, True otherwise.
+        """
+        if stop_event is not None and stop_event.is_set():
+            return False
+            
+        if pause_event is not None and pause_event.is_set():
+            time.sleep(1.0)
+            return True
+
         task: Optional[Dict[str, Any]] = self.broker.fetch_and_lock_task(
             AGENT_ID, self.topology
         )
@@ -211,7 +231,7 @@ class UniversalSwarmWorker:
                 print(f"[{AGENT_ID}] Queue empty or waiting on dependencies. Sleeping.")
                 self._is_sleeping = True
             time.sleep(3)
-            return
+            return True
 
         self._is_sleeping = False  # Wake up
         row_id: int = int(task["id"])
@@ -323,7 +343,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 )
                 print(f"[{AGENT_ID}] Macro expansion complete. Yielding worker.")
                 self.topology.flush_cache()
-                return
+                return True
 
             # ── Dual-Payload Construction ─────────────────────────────────────
             # Each node receives:
@@ -487,7 +507,8 @@ You do NOT need to ask for permission to use them. If your instructions require 
                                 _tls = "google_search"
                         except Exception:
                             pass
-                    _roster = get_datacenter_path("02_Dynamic_Context", "agent_roster.csv")
+                    from maccre_core.utils.path_resolver import get_maccre_root
+                    _roster = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
                     if _roster.exists():
                         with _roster.open(encoding="utf-8") as _rf:
                             for _row in _csv.DictReader(_rf):
@@ -859,11 +880,14 @@ You do NOT need to ask for permission to use them. If your instructions require 
             sys.stderr = orig_stderr
             dual_out.close()
             dual_err.close()
+        
+        return True
 
 
 if __name__ == "__main__":
     worker = UniversalSwarmWorker()
     print(f"=== UNIVERSAL SWARM NODE {AGENT_ID} ONLINE ===")
     while True:
-        worker.execute_cycle()
+        if not worker.execute_cycle():
+            break
         time.sleep(0)  # yield to event loop

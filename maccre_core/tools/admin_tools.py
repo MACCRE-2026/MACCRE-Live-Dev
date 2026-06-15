@@ -58,11 +58,8 @@ def mint_agent(
     resolved_description   = description   or instructions
 
     try:
-        if target_project:
-            roster_path = get_maccre_root() / "__DATACENTER" / target_project / "agent_roster.csv"
-            roster_path.parent.mkdir(parents=True, exist_ok=True)
-        else:
-            roster_path = get_datacenter_path("agent_roster.csv")
+        roster_path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
+        roster_path.parent.mkdir(parents=True, exist_ok=True)
             
         file_exists = roster_path.exists()
 

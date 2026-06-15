@@ -1,4 +1,4 @@
-/* nexus_plex.css — Nexus_Plex Topology Builder TUI */
+/* nexus_plex.css — Nexus_Plex v2 Split-Pane Architecture */
 
 /* ── Global ──────────────────────────────────────────────────────────────── */
 Screen {
@@ -15,165 +15,238 @@ Footer {
     background: #161b22;
 }
 
-TabbedContent {
-    height: 1fr;
-}
-
-TabPane {
-    padding: 1 2;
-}
-
-/* ── Project Browser ──────────────────────────────────────────────────────── */
-#proj-label {
-    color: #8b949e;
-    margin-bottom: 1;
-}
-
-#proj-toolbar {
-    height: 3;
-    margin-bottom: 1;
-}
-
-#proj-toolbar Input {
-    width: 1fr;
-    background: #21262d;
-    border: tall #30363d;
-    color: #e6edf3;
-}
-
-#proj-toolbar Input:focus {
-    border: tall #58a6ff;
-}
-
-#btn-create-proj {
-    margin-left: 1;
-    min-width: 12;
-}
-
-#btn-refresh-proj {
-    margin-left: 1;
-    min-width: 10;
-}
-
-/* ── Topology Editor ──────────────────────────────────────────────────────── */
-#topo-toolbar {
-    height: 3;
-    margin-bottom: 1;
-}
-
-#topo-toolbar Button {
-    margin-left: 1;
-    min-width: 12;
-}
-
-.status-label {
-    color: #58a6ff;
-    content-align: left middle;
-    width: 1fr;
-    padding: 0 1;
-}
-
-/* ── DataTable shared ─────────────────────────────────────────────────────── */
-DataTable {
-    height: 1fr;
-    background: #161b22;
-    border: solid #30363d;
-}
-
-DataTable > .datatable--header {
-    background: #21262d;
+.pane-title {
     color: #58a6ff;
     text-style: bold;
-}
-
-DataTable > .datatable--cursor {
-    background: #1f6feb;
-    color: #ffffff;
-}
-
-DataTable > .datatable--even-row {
-    background: #0d1117;
-}
-
-DataTable > .datatable--odd-row {
-    background: #161b22;
-}
-
-/* ── Launch Monitor ───────────────────────────────────────────────────────── */
-#launch-toolbar {
-    height: 3;
-    margin-bottom: 1;
-}
-
-#launch-toolbar Button {
-    margin-left: 1;
-    min-width: 10;
-}
-
-#log-scroll {
-    height: 1fr;
-    background: #0d1117;
-    border: solid #30363d;
-}
-
-#launch-log {
-    background: #0d1117;
-    color: #e6edf3;
     padding: 1;
-}
-
-/* ── Modal ────────────────────────────────────────────────────────────────── */
-NodeEditorModal {
-    background: rgba(0, 0, 0, 0.85);
-}
-
-#modal-container {
     background: #161b22;
-    border: thick #58a6ff;
-    width: 82;
-    height: auto;
-    max-height: 90vh;
-    padding: 1 2;
-    overflow-y: auto;
+    width: 100%;
+    content-align: center middle;
+    border-bottom: solid #30363d;
 }
 
-#modal-title {
+.ribbon-label {
     color: #58a6ff;
     text-style: bold;
-    text-align: center;
-    margin-bottom: 1;
+    padding: 1;
+    background: #161b22;
+    width: auto;
+    content-align: center middle;
 }
 
-.field-label {
-    color: #8b949e;
-    margin-top: 1;
-    text-style: italic;
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+#main-layout {
+    height: 1fr;
 }
 
-NodeEditorModal Input {
+#left-pane {
+    width: 35%;
+    height: 1fr;
+    border-right: thick #30363d;
+    background: #0d1117;
+}
+
+#right-pane {
+    width: 65%;
+    height: 1fr;
+    background: #0d1117;
+}
+
+/* ── Left Pane: Nexus Chat ───────────────────────────────────────────────── */
+NexusChat {
+    height: 1fr;
+}
+
+#nexus-log {
+    height: 1fr;
+    background: #0d1117;
+    padding: 0 1;
+    overflow-y: scroll;
+}
+
+#nexus-input {
+    dock: bottom;
     background: #21262d;
-    border: tall #30363d;
+    border-top: solid #30363d;
     color: #e6edf3;
-    margin-bottom: 0;
+    width: 100%;
 }
 
-NodeEditorModal Input:focus {
-    border: tall #58a6ff;
+#nexus-input:focus {
+    border-top: solid #58a6ff;
 }
 
-#modal-buttons {
-    margin-top: 2;
+/* ── Right Pane: Top Ribbon ──────────────────────────────────────────────── */
+#top-ribbon {
     height: 3;
-    align-horizontal: right;
+    border-bottom: thick #30363d;
+    background: #161b22;
 }
 
-#btn-cancel {
+ProjectControls {
+    width: auto;
+    height: 100%;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+ProjectControls Button {
     margin-right: 1;
     min-width: 10;
 }
 
-#btn-save {
-    min-width: 10;
+TopologyTracker {
+    width: 1fr;
+    height: 100%;
+    align-vertical: middle;
+    padding: 0 1;
+}
+
+#topo-status {
+    color: #8b949e;
+    content-align: left middle;
+}
+
+#active-project-label {
+    padding: 0 2;
+    color: #58a6ff;
+    text-style: bold;
+}
+
+/* ── Right Pane: Agent Manager Container ─────────────────────────────────── */
+#agent-manager {
+    height: 1fr;
+    layout: horizontal;
+}
+
+AgentBuilderPanel {
+    width: 40%;
+    height: 1fr;
+    border-right: solid #30363d;
+    padding: 1;
+    overflow-y: auto;
+}
+
+AgentChatPanel {
+    width: 60%;
+    height: 1fr;
+    padding: 1;
+    overflow-y: auto;
+}
+
+AgentBuilderPanel Input, AgentBuilderPanel Select {
+    margin-bottom: 1;
+}
+
+AgentBuilderPanel Label {
+    color: #c9d1d9;
+}
+
+.form-row {
+    layout: horizontal;
+    height: auto;
+    margin-bottom: 1;
+    align-vertical: middle;
+}
+
+.form-row Label {
+    width: 1fr;
+    content-align: left middle;
+}
+
+.form-row Switch {
+    width: auto;
+}
+
+.form-row Input {
+    width: 10;
+    margin-bottom: 0;
+}
+
+.form-group-title {
+    color: #8b949e;
+    text-style: bold;
+    margin-top: 1;
+    border-bottom: solid #30363d;
+    width: 100%;
+}
+
+.agent-chat-controls {
+    height: auto;
+    margin-bottom: 1;
+    layout: horizontal;
+    align-vertical: middle;
+}
+
+.agent-chat-controls Button, .agent-chat-controls Select {
+    margin-right: 1;
+}
+
+#active-agent-roster {
+    height: auto;
+    min-height: 3;
+    border: solid #30363d;
+    background: #0d1117;
+    margin-bottom: 1;
+    layout: horizontal;
+    padding: 1;
+    overflow-x: auto;
+}
+
+.agent-pill {
+    width: auto;
+    background: #1f6feb;
+    color: white;
+    padding: 0 1;
+    margin-right: 1;
+    content-align: center middle;
+    text-style: bold;
+}
+
+/* ── Modals ──────────────────────────────────────────────────────────────── */
+NewProjectModal, SelectProjectModal, SystemInstructionsModal {
+    align: center middle;
+}
+
+SystemInstructionsModal .dialog {
+    width: 80%;
+    height: 80%;
+}
+
+SystemInstructionsModal TextArea {
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+.dialog {
+    padding: 1 2;
+    background: #161b22;
+    border: thick #30363d;
+    width: 60;
+    height: auto;
+    align: center middle;
+}
+
+.dialog Label {
+    margin-bottom: 1;
+    color: #e6edf3;
+    text-style: bold;
+}
+
+.dialog Input, .dialog Select {
+    margin-bottom: 1;
+    width: 100%;
+}
+
+.dialog-buttons {
+    margin-top: 1;
+    layout: horizontal;
+    align: right middle;
+}
+
+.dialog-buttons Button {
+    margin-left: 1;
 }
 
 /* ── Buttons global ───────────────────────────────────────────────────────── */
@@ -204,6 +277,15 @@ Button.-primary:hover {
     background: #388bfd;
 }
 
+Button.-warning {
+    background: #d29922;
+    color: #ffffff;
+}
+
+Button.-warning:hover {
+    background: #e3b341;
+}
+
 Button.-default {
     background: #21262d;
     color: #c9d1d9;
@@ -212,15 +294,4 @@ Button.-default {
 
 Button.-default:hover {
     background: #30363d;
-}
-
-/* ── Agents tab ───────────────────────────────────────────────────────────── */
-#agents-label {
-    color: #8b949e;
-    margin-bottom: 1;
-}
-
-/* ── New project input ────────────────────────────────────────────────────── */
-#new-proj-input {
-    width: 30;
 }

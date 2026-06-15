@@ -24,7 +24,6 @@ while still picking up live edits within 5 seconds.
 """
 import os
 import csv
-import time
 from typing import Dict, Any
 
 
@@ -75,14 +74,11 @@ class TopologyEngine:
 
         try:
             # 1. Load the Base Agent Configuration Matrix from the Agent Roster
-            roster_path = get_datacenter_path("agent_roster.csv")
-            if not roster_path.exists():
-                from maccre_core.utils.path_resolver import get_maccre_root
-                roster_path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
-            
             agent_roster: Dict[str, Dict[str, str]] = {}
+            roster_path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
+            
             if roster_path.exists():
-                with open(roster_path, mode='r', encoding='utf-8') as f:
+                with open(roster_path, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
                     for r in reader:
                         agent_roster[r.get('Agent_Name', '').strip()] = dict(r)
@@ -328,8 +324,8 @@ class TopologyEngine:
 
         # 7. dialogue_partner must exist in agent_roster.csv when dialogue_rounds > 0
         import csv as _csv  # noqa: PLC0415
-        from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: PLC0415
-        _roster_path = get_datacenter_path("02_Dynamic_Context", "agent_roster.csv")
+        from maccre_core.utils.path_resolver import get_maccre_root  # noqa: PLC0415
+        _roster_path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
         _roster_names: set[str] = set()
         if _roster_path.exists():
             with _roster_path.open(encoding="utf-8") as _rf:

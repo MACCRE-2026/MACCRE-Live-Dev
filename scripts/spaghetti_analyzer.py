@@ -52,7 +52,7 @@ def analyze_directory(dir_path):
                                 })
                         elif isinstance(node, ast.ClassDef):
                             results['classes'] += 1
-                except Exception as e:
+                except Exception:
                     pass
                     
     return results
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     core_path = Path("b:/EXO_GANS/maccre_core")
     res = analyze_directory(core_path)
     
-    print(f"--- MACCREv2 Spaghetti Analysis ---")
+    print("--- MACCREv2 Spaghetti Analysis ---")
     print(f"Total Python Files: {res['files']}")
     print(f"Total Lines of Code: {res['total_loc']}")
     print(f"Total Classes: {res['classes']}")

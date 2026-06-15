@@ -18,3 +18,4 @@ asyncio
 ffmpeg-python
 pandas
 jinja2
+textual

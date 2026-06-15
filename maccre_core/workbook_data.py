@@ -42,11 +42,23 @@ def load_model_ids() -> list[str]:
 # ── Projects ──────────────────────────────────────────────────────────────────
 
 def load_project_names() -> list[str]:
-    """Return all registered project names + GLOBAL."""
+    """Return all registered project names + GLOBAL + any folder in __DATACENTER."""
     rows = list_projects()
     names = [r["project_name"] for r in rows if r.get("project_name")]
+    
+    dc_path = get_maccre_root() / "__DATACENTER"
+    if dc_path.exists():
+        for d in dc_path.iterdir():
+            if d.is_dir() and not d.name.startswith("."):
+                if d.name not in names:
+                    names.append(d.name)
+                    
     if _GLOBAL not in names:
         names.insert(0, _GLOBAL)
+    else:
+        names.remove(_GLOBAL)
+        names.insert(0, _GLOBAL)
+        
     return names
 
 
@@ -79,8 +91,7 @@ def load_node_ids(project_id: str = "") -> list[str]:
 
 def load_agent_roster_csv(project_id: str = "") -> list[dict[str, str]]:
     """Read agent_roster.csv from a project silo. Returns list of row dicts."""
-    pid = project_id.strip() or _GLOBAL
-    path = get_maccre_root() / "__DATACENTER" / pid / "agent_roster.csv"
+    path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
     if not path.exists():
         return []
     rows: list[dict[str, str]] = []
@@ -91,12 +102,19 @@ def load_agent_roster_csv(project_id: str = "") -> list[dict[str, str]]:
 
 
 def load_agent_names_from_library(project_id: str = "") -> list[str]:
-    """Return agent names from the project's agent_library.db (falls back to GLOBAL)."""
+    """Return agent names from the project's agent_library.db + legacy agent_roster.csv."""
     from maccre_core.agent_library import get_agent_store
     names = get_agent_store(project_id).get_names()
     if not names and project_id and project_id.upper() != _GLOBAL:
         names = get_agent_store(_GLOBAL).get_names()
-    return names
+        
+    # Also load legacy migrated agents
+    for row in load_agent_roster_csv(project_id):
+        n = str(row.get("Agent_Name") or row.get("AGENT_NAME") or "").strip()
+        if n and n not in names:
+            names.append(n)
+            
+    return sorted(names)
 
 
 def load_topology_names_from_library(project_id: str = "") -> list[str]:
@@ -166,62 +184,38 @@ def load_tool_names() -> list[str]:
     ]
 
 
+
+
+
 def load_all_agents_across_projects() -> list[str]:
-    """Return every known agent name prefixed by its home project.
-
-    Scans all ``__DATACENTER/<silo>/agent_roster.csv`` files and returns
-    entries in ``[ProjectName] AgentName`` format for the grouped AGENT_NAME
-    dropdown in the workbook.  New agent names not in the list are always
-    accepted via warning-mode data validation.
-
-    Returns:
-        Alphabetically sorted list of ``[Project] AgentName`` strings.
-    """
-    root = get_maccre_root() / "__DATACENTER"
+    """Return every known agent name from the GLOBAL roster."""
+    root = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
     if not root.exists():
         return []
     entries: list[str] = []
-    for silo in sorted(root.iterdir()):
-        if not silo.is_dir():
-            continue
-        roster = silo / "agent_roster.csv"
-        if not roster.exists():
-            continue
-        project = silo.name
-        try:
-            with roster.open(newline="", encoding="utf-8") as fh:
-                for row in csv.DictReader(fh):
-                    name = str(row.get("Agent_Name", row.get("agent_name", ""))).strip()
-                    if name:
-                        entries.append(f"[{project}] {name}")
-        except Exception:  # noqa: BLE001
-            pass  # Silently skip unreadable silos
-    return entries
+    try:
+        with root.open(newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                name = str(row.get("Agent_Name", row.get("agent_name", ""))).strip()
+                if name:
+                    entries.append(name)
+    except Exception:
+        pass
+    return sorted(list(set(entries)))
 
 def load_full_agent_rosters() -> dict[str, list[dict]]:
     """Return the full agent roster dictionaries grouped by project.
-    
-    Returns:
-        dict: Keys are project names (silo names). Values are lists of 
-              dictionaries containing all columns from agent_roster.csv
-              (Agent_Name, Model, Tools_Allowed, System_Prompt, Description).
+    Now that agents are global, this just returns them under the 'GLOBAL' key.
     """
-    root = get_maccre_root() / "__DATACENTER"
+    root = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
     if not root.exists():
         return {}
     rosters: dict[str, list[dict]] = {}
-    for silo in sorted(root.iterdir()):
-        if not silo.is_dir():
-            continue
-        roster = silo / "agent_roster.csv"
-        if not roster.exists():
-            continue
-        project = silo.name
-        try:
-            with roster.open(newline="", encoding="utf-8") as fh:
-                agents = list(csv.DictReader(fh))
-                if agents:
-                    rosters[project] = agents
-        except Exception:  # noqa: BLE001
-            pass
+    try:
+        with root.open(newline="", encoding="utf-8") as fh:
+            agents = list(csv.DictReader(fh))
+            if agents:
+                rosters["GLOBAL"] = agents
+    except Exception:
+        pass
     return rosters
