@@ -18,7 +18,7 @@ PANEL_PROJECT: list[tuple[str, str]] = [
     ("rule",    "  03_Agent_Ledgers   JSON thought audits, session logs"),
     ("rule",    "  04_Code_Artifacts  Agent-generated output"),
     ("rule",    "  05_Rendered_Media  TTS + A/V pipeline output"),
-    ("rule",    "  06_Memory_Pins     Semantic anchors, cross-project"),
+    ("rule",    "  02_Dynamic_Context/memory_pins  Semantic anchors, cross-project"),
     ("blank",   ""),
     ("section", "PROJECT_NAME"),
     ("body",    "New name \u2192 silo auto-provisioned at fire time."),

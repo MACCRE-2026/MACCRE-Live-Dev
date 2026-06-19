@@ -95,7 +95,7 @@ class UniversalSwarmWorker:
 
     def _load_memory_pins(self) -> str:
         """Reads the project-scoped corkboard and mounts recent thoughts into the Agent's RAM."""
-        mem_dir = get_datacenter_path("06_Memory_Pins")
+        mem_dir = get_datacenter_path("02_Dynamic_Context", "memory_pins")
         if not mem_dir.exists():
             return ""
         files = sorted(mem_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)

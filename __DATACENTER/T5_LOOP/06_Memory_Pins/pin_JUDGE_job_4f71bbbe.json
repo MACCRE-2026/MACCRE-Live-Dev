@@ -1,0 +1,26 @@
+[
+  {
+    "subject": "Haiku evaluation process",
+    "predicate": "includes",
+    "object": "initial judgment phase",
+    "significance": "Defines a distinct stage within a content assessment workflow."
+  },
+  {
+    "subject": "Initial judgment phase",
+    "predicate": "can result in",
+    "object": "rejection outcome",
+    "significance": "Specifies a possible decision point and its negative consequence within a review process."
+  },
+  {
+    "subject": "Rejection outcome",
+    "predicate": "triggers",
+    "object": "REFINER agent workflow transition",
+    "significance": "Establishes a conditional routing rule, directing items requiring remediation to a specialized processing unit."
+  },
+  {
+    "subject": "Judge agent",
+    "predicate": "is responsible for",
+    "object": "initial content evaluation and routing decisions",
+    "significance": "Delineates the functional scope and decision-making authority of a specific agent within a multi-agent system."
+  }
+]

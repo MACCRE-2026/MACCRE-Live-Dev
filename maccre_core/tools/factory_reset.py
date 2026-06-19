@@ -40,7 +40,7 @@ _NUKE_DIRS = [
     os.path.join(_DC, "03_Agent_Ledgers"),
     os.path.join(_DC, "04_Code_Artifacts"),
     os.path.join(_DC, "05_Rendered_Media"),
-    os.path.join(_DC, "06_Memory_Pins"),
+    os.path.join(_DC, "02_Dynamic_Context", "memory_pins"),
     os.path.join(_DC, "IPC_Temp"),
     os.path.join(_DC, "telemetry"),
     os.path.join(_DC, "chroma_db"),
@@ -83,7 +83,7 @@ def run_preflight_archive() -> str:
         (os.path.join(_DC, "01_Raw_Source"),         os.path.join(dest, "01_Raw_Source")),
         (os.path.join(_DC, "02_Dynamic_Context"),    os.path.join(dest, "02_Dynamic_Context")),
         (os.path.join(_DC, "03_Agent_Ledgers"),      os.path.join(dest, "03_Agent_Ledgers")),
-        (os.path.join(_DC, "06_Memory_Pins"),        os.path.join(dest, "06_Memory_Pins")),
+        (os.path.join(_DC, "02_Dynamic_Context", "memory_pins"), os.path.join(dest, "memory_pins")),
         (os.path.join(_DC, "telemetry"),             os.path.join(dest, "telemetry")),
         (os.path.join(_DC, "swarm_queue.db"),        os.path.join(dest, "swarm_queue.db")),
     ]

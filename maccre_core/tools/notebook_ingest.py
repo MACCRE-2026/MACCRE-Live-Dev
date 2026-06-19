@@ -164,7 +164,7 @@ def execute_archive_ingestion(ingestion_project_name: str, categories: list[str]
     os.environ["MACCRE_ACTIVE_PROJECT"] = f"GLOBAL/{ingestion_project_name}"
     
     source_dir = get_datacenter_path("01_Raw_Source")
-    pins_dir = get_datacenter_path("06_Memory_Pins")
+    pins_dir = get_datacenter_path("02_Dynamic_Context", "memory_pins")
     pins_dir.mkdir(parents=True, exist_ok=True)
     
     files = list(source_dir.glob("*.md")) + list(source_dir.glob("*.txt"))

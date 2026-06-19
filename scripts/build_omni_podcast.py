@@ -42,7 +42,7 @@ def get_valid_projects() -> list[str]:
     # Core system directories to ignore
     ignore_list = {
         "01_Raw_Source", "02_Dynamic_Context", "03_Agent_Ledgers",
-        "04_Code_Artifacts", "05_Rendered_Media", "06_Memory_Pins",
+        "04_Code_Artifacts", "05_Rendered_Media",
         "__GLOBAL_LEDGER", "telemetry", "GLOBAL", "UNNAMED"
     }
     

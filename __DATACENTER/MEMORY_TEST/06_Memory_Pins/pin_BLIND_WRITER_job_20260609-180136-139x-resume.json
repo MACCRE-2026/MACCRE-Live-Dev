@@ -1,0 +1,32 @@
+[
+  {
+    "subject": "AI",
+    "predicate": "fundamentally lacks",
+    "object": "human sensory perception",
+    "significance": "Establishes the core architectural difference that necessitates redefinition of human-centric concepts like 'blind test' for an AI entity."
+  },
+  {
+    "subject": "Blind Test (Human Concept)",
+    "predicate": "reinterpreted for AI as",
+    "object": "Information Access Limitation",
+    "significance": "This is the central conceptual translation, mapping a physical/sensory constraint into an informational/computational constraint for an artificial intelligence."
+  },
+  {
+    "subject": "Information Access Limitation (AI)",
+    "predicate": "can manifest as",
+    "object": "restricted prior knowledge",
+    "significance": "Illustrates a specific operationalization of 'blindness' for an AI, focusing on its internal knowledge base and cognitive processing."
+  },
+  {
+    "subject": "Information Access Limitation (AI)",
+    "predicate": "can manifest as",
+    "object": "obscured data source attribution",
+    "significance": "Highlights another operationalization of 'blindness' for an AI, focusing on the origin or identity of input data rather than its content."
+  },
+  {
+    "subject": "Information Access Limitation (AI)",
+    "predicate": "can manifest as",
+    "object": "hidden data labels or identifiers",
+    "significance": "Presents a third operationalization, focusing on the AI's ability to process raw data without the benefit of pre-classified metadata or contextual tags."
+  }
+]

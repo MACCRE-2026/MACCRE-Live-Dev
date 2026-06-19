@@ -65,7 +65,7 @@ if chroma.exists():
     print('[CHROMA] ChromaDB wiped and recreated')
 
 # 6. Clear memory pins directory if it exists
-for pins_dir in (dc / '06_Memory_Pins',):
+for pins_dir in (dc / '02_Dynamic_Context' / 'memory_pins',):
     if pins_dir.exists():
         for child in pins_dir.iterdir():
             if child.is_file():

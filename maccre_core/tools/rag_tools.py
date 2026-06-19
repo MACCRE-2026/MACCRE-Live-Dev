@@ -351,7 +351,7 @@ def ingest_global_archive(file_path: str) -> str:
     """Ingests a file into the GLOBAL archive by extracting conceptual thought pins.
     
     Reads a file from GLOBAL/01_Raw_Source, prompts Gemini to extract Knowledge Triplets,
-    saves the triplets to GLOBAL/06_Memory_Pins, and embeds the concept into the
+    saves the triplets to GLOBAL/02_Dynamic_Context/memory_pins, and embeds the concept into the
     GLOBAL SovereignPinStore with the source file path linked in metadata.
     """
     import json
@@ -402,8 +402,8 @@ def ingest_global_archive(file_path: str) -> str:
         if not triplets:
             return "[GLOBAL_INGEST_FAULT] No concepts extracted."
             
-        # Save to 06_Memory_Pins
-        memory_dir = get_datacenter_path("06_Memory_Pins")
+        # Save to 02_Dynamic_Context/memory_pins
+        memory_dir = get_datacenter_path("02_Dynamic_Context", "memory_pins")
         memory_dir.mkdir(parents=True, exist_ok=True)
         doc_id = full.stem.replace(".", "_")
         out_path = memory_dir / f"global_pin_{doc_id}.json"
@@ -725,7 +725,7 @@ def canonize_session(session_id: str, project_name: str) -> str:
     Two-phase promotion:
       1. Merges the session-scoped agent_thoughts and agent_ledgers vectors
          into their project-level canon databases, then deletes the ephemerals.
-      2. Reads the raw knowledge-triplet JSON files from 06_Memory_Pins/ for
+      2. Reads the raw knowledge-triplet JSON files from 02_Dynamic_Context/memory_pins/ for
          this session, vectorizes them, and upserts into the project canon
          thought_pins.db.  This is the ONLY place thought-pins are vectorized,
          keeping per-session cost to zero.
@@ -782,7 +782,7 @@ def canonize_session(session_id: str, project_name: str) -> str:
             results.append(f"[{db_type}] Error: {e!s}")
 
     # ── Phase 2: Vectorize knowledge triplets into canon thought_pins.db ─────
-    # Raw triplet JSON files live in 06_Memory_Pins/pin_{node}_{session_id}.json
+    # Raw triplet JSON files live in 02_Dynamic_Context/memory_pins/pin_{node}_{session_id}.json
     # This is the ONLY code path that pays the embedding cost for thought-pins.
     try:
         import json as _json
@@ -790,7 +790,7 @@ def canonize_session(session_id: str, project_name: str) -> str:
         import datetime as _dt
         from maccre_core.memory.knowledge_store import PinRecord
 
-        pins_dir = get_datacenter_path("06_Memory_Pins")
+        pins_dir = get_datacenter_path("02_Dynamic_Context", "memory_pins")
         tp_store = get_knowledge_store(project_name, db_name="thought_pins.db")
         pin_files = sorted(pins_dir.glob(f"pin_*_{session_id}.json")) if pins_dir.exists() else []
         pin_count = 0

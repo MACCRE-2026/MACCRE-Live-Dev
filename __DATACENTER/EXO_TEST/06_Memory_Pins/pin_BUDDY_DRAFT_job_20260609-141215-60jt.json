@@ -1,0 +1,50 @@
+[
+  {
+    "subject": "Official COVID-19 narratives",
+    "predicate": "diverged significantly from",
+    "object": "empirical truths",
+    "significance": "Highlights a fundamental discrepancy between public information and reality during the pandemic."
+  },
+  {
+    "subject": "Dissenting voices (during COVID-19 pandemic)",
+    "predicate": "initially labeled as",
+    "object": "\"misinformation\"",
+    "significance": "Describes the initial suppression and subsequent vindication of alternative viewpoints."
+  },
+  {
+    "subject": "Department of Justice actions",
+    "predicate": "exposed",
+    "object": "systemic secrecy within public health institutions",
+    "significance": "Identifies the role of legal bodies in uncovering hidden practices and lack of transparency."
+  },
+  {
+    "subject": "Dr. David Morens (former NIAID adviser)",
+    "predicate": "indicted for",
+    "object": "conspiracy, records destruction, and information concealment",
+    "significance": "Details specific federal charges against a high-ranking official related to alleged misconduct during the pandemic."
+  },
+  {
+    "subject": "Dr. David Morens",
+    "predicate": "accused of actively working to",
+    "object": "\"counter the narrative that COVID-19 leaked from a lab\"",
+    "significance": "Reveals an alleged effort to suppress a specific scientific origin theory, conflicting with scientific transparency."
+  },
+  {
+    "subject": "Dr. Anthony Fauci",
+    "predicate": "received",
+    "object": "backdated preemptive federal pardon from President Joe Biden",
+    "significance": "Highlights an extraordinary political measure raising questions about accountability for actions prior to and during the pandemic."
+  },
+  {
+    "subject": "Fauci's backdated pardon",
+    "predicate": "understood to shield him from liabilities concerning",
+    "object": "U.S. government funding of \"gain-of-function\" research at Wuhan Institute of Virology",
+    "significance": "Connects the pardon to a specific controversial research area and potential legal exposure regarding pandemic origins."
+  },
+  {
+    "subject": "\"Gain-of-function\" research at Wuhan Institute of Virology",
+    "predicate": "has been a source of",
+    "object": "intense controversy and speculation regarding the pandemic\u2019s origins",
+    "significance": "Identifies a key area of scientific and political contention directly linked to the pandemic's genesis."
+  }
+]

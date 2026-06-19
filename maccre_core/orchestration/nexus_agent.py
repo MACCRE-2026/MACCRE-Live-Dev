@@ -321,8 +321,10 @@ class NexusAgent:
                 pname = args["project_name"].strip().replace(" ", "_")
                 silo = get_maccre_root() / "__DATACENTER" / pname
                 for sub in ["01_Raw_Source", "02_Dynamic_Context", "03_Agent_Ledgers",
-                            "04_Code_Artifacts", "05_Rendered_Media", "06_Memory_Pins"]:
+                            "04_Code_Artifacts", "05_Rendered_Media"]:
                     (silo / sub).mkdir(parents=True, exist_ok=True)
+                # memory_pins lives inside 02_Dynamic_Context per 5-tier doctrine
+                (silo / "02_Dynamic_Context" / "memory_pins").mkdir(parents=True, exist_ok=True)
                 return f"Successfully created project silo '{pname}'."
 
             elif name == "mint_agent":

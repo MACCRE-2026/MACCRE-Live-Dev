@@ -1,0 +1,44 @@
+[
+  {
+    "subject": "Adaptive conditional routing",
+    "predicate": "offers",
+    "object": "a superior safety paradigm for fully autonomous multi-agent AI systems operating in dynamic, unpredictable environments.",
+    "significance": "This is the central thesis, establishing adaptive routing as the preferred architectural choice for safety in complex, unpredictable AI contexts."
+  },
+  {
+    "subject": "Rigidity (in AI system design)",
+    "predicate": "constitutes",
+    "object": "a primary threat when confronted with unforeseen failures and 'unknown-unknowns'.",
+    "significance": "This reframes rigidity from a perceived safety feature to a significant liability in dynamic environments, highlighting its inability to handle novel threats."
+  },
+  {
+    "subject": "Safety for autonomous AI in dynamic environments",
+    "predicate": "requires a shift from",
+    "object": "brittle predictability to 'robust, managed resilience'.",
+    "significance": "This defines a fundamental paradigm shift in AI safety architecture, moving away from static, pre-defined responses towards dynamic, adaptive capabilities."
+  },
+  {
+    "subject": "Robust, managed resilience",
+    "predicate": "is underpinned by",
+    "object": "dynamic pathway adjustment, real-time component bypass, and conditional determinism.",
+    "significance": "This details the core architectural mechanisms that enable the new safety paradigm, providing concrete examples of adaptive capabilities."
+  },
+  {
+    "subject": "Conditional determinism",
+    "predicate": "enables",
+    "object": "provable guarantees for safety-critical functions within an otherwise adaptive system.",
+    "significance": "This addresses a critical challenge of adaptive systems by showing how determinism can be selectively applied to ensure safety without sacrificing overall adaptability."
+  },
+  {
+    "subject": "'Predictable failure' in safety-critical, autonomous AI",
+    "predicate": "equates to",
+    "object": "catastrophic mission failure or loss of life.",
+    "significance": "This re-evaluates the concept of 'predictable failure,' arguing that in high-stakes AI, it is an unacceptable outcome rather than a desirable safety characteristic."
+  },
+  {
+    "subject": "The 'Oracle Problem' of exhaustive verification",
+    "predicate": "applies to",
+    "object": "any complex system in a truly dynamic environment, not just adaptive ones.",
+    "significance": "This generalizes a key verification challenge, weakening the argument that adaptive systems are uniquely un-verifiable and placing the burden on all complex systems."
+  }
+]

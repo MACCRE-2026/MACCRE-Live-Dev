@@ -49,7 +49,7 @@ from maccre_core.utils.path_resolver import get_maccre_root, get_datacenter_path
 _WORKSPACE_ROOT = str(get_maccre_root())
 
 def _get_thoughts_export_dir() -> str:
-    return str(get_datacenter_path("06_Memory_Pins", "Thoughts_Exports"))
+    return str(get_datacenter_path("02_Dynamic_Context", "memory_pins", "Thoughts_Exports"))
 
 def _get_allowed_dbs() -> dict[str, str]:
     return {

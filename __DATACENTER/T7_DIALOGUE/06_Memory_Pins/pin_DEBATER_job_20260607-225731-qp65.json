@@ -1,0 +1,92 @@
+[
+  {
+    "subject": "Adaptive/conditional routing",
+    "predicate": "offers",
+    "object": "robust, managed resilience",
+    "significance": "This defines the core safety paradigm proposed for adaptive systems, emphasizing active response to dynamism over static predictability."
+  },
+  {
+    "subject": "Rigidity (in autonomous systems)",
+    "predicate": "constitutes",
+    "object": "a primary threat to safety (in dynamic, unpredictable environments)",
+    "significance": "This is a fundamental redefinition of safety risk, arguing that inflexibility is dangerous in complex, real-world scenarios."
+  },
+  {
+    "subject": "Rigidity (in static topologies)",
+    "predicate": "is",
+    "object": "a guarantee of known behavior (paramount for safety)",
+    "significance": "This represents the traditional view of rigidity as a safety enabler, providing predictable outcomes."
+  },
+  {
+    "subject": "Static topologies",
+    "predicate": "provide safety through",
+    "object": "brittle predictability",
+    "significance": "This critical characterization highlights the perceived fragility of static systems when confronted with unforeseen events."
+  },
+  {
+    "subject": "Verification of adaptive systems",
+    "predicate": "focuses on",
+    "object": "algorithmic logic and properties of adaptive mechanisms",
+    "significance": "This proposes a shift in verification strategy, moving from exhaustive path enumeration to validating the rules governing adaptation."
+  },
+  {
+    "subject": "Verification of adaptive systems",
+    "predicate": "faces challenges due to",
+    "object": "emergent behavior of the entire system (resulting from adaptive mechanisms interacting with dynamic environment)",
+    "significance": "This identifies the core difficulty in verifying adaptive systems, where system-level outcomes are hard to predict from individual rules."
+  },
+  {
+    "subject": "Conditional Determinism",
+    "predicate": "enables",
+    "object": "provable guarantees for safety-critical functions (within an adaptive framework)",
+    "significance": "This architectural principle aims to integrate absolute reliability for critical paths within an otherwise flexible, adaptive system."
+  },
+  {
+    "subject": "Conditional Determinism",
+    "predicate": "is",
+    "object": "a contradiction in terms for safety-critical systems (requiring unconditional determinism)",
+    "significance": "This challenges the validity of conditional determinism for safety, arguing that any conditionality introduces unacceptable uncertainty."
+  },
+  {
+    "subject": "Distributed consensus-based routing",
+    "predicate": "makes",
+    "object": "widespread compromise of routing decision points exponentially harder",
+    "significance": "This highlights a security advantage of adaptive systems, distributing control to mitigate single points of failure."
+  },
+  {
+    "subject": "Complexity (of distributed consensus algorithms)",
+    "predicate": "is",
+    "object": "the enemy of security (increasing attack surface and vulnerabilities)",
+    "significance": "This counter-argument posits that the inherent complexity of distributed adaptive systems introduces more security risks than it solves."
+  },
+  {
+    "subject": "Predictable failure (in static systems)",
+    "predicate": "equates to",
+    "object": "catastrophic mission failure or loss of life (in safety-critical autonomous AI)",
+    "significance": "This re-frames 'predictable failure' as an unacceptable outcome, especially in high-stakes autonomous operations."
+  },
+  {
+    "subject": "Predictable failure (as a safe-fail state)",
+    "predicate": "is",
+    "object": "the cornerstone of safety engineering (for known, pre-verified safe configurations)",
+    "significance": "This upholds the traditional view of 'predictable failure' as a crucial safety feature, allowing for controlled degradation or shutdown."
+  },
+  {
+    "subject": "Computational overhead of adaptive routing",
+    "predicate": "is",
+    "object": "a necessary investment in system survivability",
+    "significance": "This justifies the resource cost of adaptive systems as a trade-off for enhanced resilience and operational continuity."
+  },
+  {
+    "subject": "Computational overhead of adaptive routing",
+    "predicate": "is",
+    "object": "an unacceptable liability of complexity (undermining safety through unmanageable verification and unpredictable failure modes)",
+    "significance": "This views the resource cost as a detriment to safety, linking it to increased complexity and verification challenges."
+  },
+  {
+    "subject": "Simplicity, bounded complexity, and absolute determinism (on critical paths)",
+    "predicate": "are",
+    "object": "the hallmarks of true safety (in autonomous AI)",
+    "significance": "This encapsulates the core principles advocated for achieving provable safety in critical autonomous systems."
+  }
+]

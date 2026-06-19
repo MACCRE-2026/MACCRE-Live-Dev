@@ -200,7 +200,7 @@ def get_projects() -> dict[str, Any]:
     reserved_folders = {
         "chroma_db", ".vault", "01_Raw_Source", "02_Dynamic_Context", 
         "03_Agent_Ledgers", "04_Code_Artifacts", "05_Rendered_Media", 
-        "06_Memory_Pins", "__GLOBAL_LEDGER", "telemetry"
+        "__GLOBAL_LEDGER", "telemetry"
     }
     
     if datacenter.exists():

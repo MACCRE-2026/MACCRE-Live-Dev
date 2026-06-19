@@ -1,0 +1,74 @@
+[
+  {
+    "subject": "UAP Sightings",
+    "predicate": "correlate with",
+    "object": "Macroeconomic Conditions",
+    "significance": "Challenges conventional economic behavior metrics by suggesting UAP sightings increase during economic downturns in wealthier areas, implying a link between public attention shifts and economic outcomes, though causality is debated."
+  },
+  {
+    "subject": "UAP Disclosure (concerning NHI)",
+    "predicate": "prompts reflection in",
+    "object": "Religious Communities",
+    "significance": "Forces theological adaptation within Abrahamic faiths (e.g., NHI as 'children of God') while simultaneously challenging human-centric narratives and revealing historical 'demon hypothesis' concerns, reshaping modern belief systems."
+  },
+  {
+    "subject": "Academic Stigma",
+    "predicate": "inhibits",
+    "object": "UAP Research",
+    "significance": "Reveals a significant barrier to scientific inquiry despite high personal interest among university faculty, driven by fear of ridicule and career repercussions, thereby hindering objective investigation into anomalous phenomena."
+  },
+  {
+    "subject": "UAP Policy",
+    "predicate": "exhibits",
+    "object": "Global Divergence",
+    "significance": "Highlights a fundamental difference in national approaches to UAP information, contrasting transparent, institutionalized frameworks (e.g., France, Canada) with silent, military-oriented strategies (e.g., Russia, China), reflecting varied strategic priorities and openness."
+  },
+  {
+    "subject": "Project SAUCER (1946/1947)",
+    "predicate": "represents",
+    "object": "Early US Government UAP Investigation",
+    "significance": "Establishes formal US government concern with UAPs dating back earlier than commonly acknowledged (pre-Project Sign), indicating a foundational national security interest in anomalous aerial phenomena from the immediate post-WWII era."
+  },
+  {
+    "subject": "Project GRUDGE",
+    "predicate": "had explicit mandate to",
+    "object": "Debunk UFO Reports",
+    "significance": "Formally articulates the US government's early, deliberate policy of dismissal and explanation-away regarding UAP phenomena, highlighting a systemic intent to deny rather than objectively investigate."
+  },
+  {
+    "subject": "PURSUE (2026)",
+    "predicate": "represents",
+    "object": "Presidential UAP Declassification Initiative",
+    "significance": "Marks a significant, explicit governmental acknowledgment and release of historical UAP data (1944 onwards), signaling a shift towards transparency and publicly confirming decades of data collection and withholding, though context remains crucial."
+  },
+  {
+    "subject": "Sky Canada Project (2022)",
+    "predicate": "aims to",
+    "object": "Standardize UAP Reporting and Reduce Stigma",
+    "significance": "Illustrates a proactive, science-driven governmental approach in an allied nation to improve UAP data collection, identify systemic gaps, and foster scientific inquiry by addressing the negative impact of stigma on aviation safety and research."
+  },
+  {
+    "subject": "Rendlesham Forest Incident (1980)",
+    "predicate": "gains epistemic weight from",
+    "object": "Recent UAP Disclosures and Re-examinations",
+    "significance": "A multi-witness military UAP encounter with alleged physical traces and radiation readings, now re-evaluated in light of official acknowledgments of advanced UAP capabilities, challenging previous skeptical explanations and highlighting persistent unexplained phenomena."
+  },
+  {
+    "subject": "Cash-Landrum Incident (1980)",
+    "predicate": "gains epistemic weight from",
+    "object": "Modern UAP Discussions (regarding physical interaction and military involvement)",
+    "significance": "A UAP encounter with severe, documented physical harm (radiation-like symptoms) to witnesses and alleged military accompaniment, where the government defense did not dispute the incident but claimed 'unknown origin,' suggesting an advanced anomalous craft and potential non-human interaction."
+  },
+  {
+    "subject": "Belgian UFO Wave (1989-1991)",
+    "predicate": "gains epistemic weight from",
+    "object": "Official Admissions of Advanced UAP Capabilities",
+    "significance": "A globally significant, multi-witness, multi-sensor event involving radar tracking and F-16 interception attempts of large, silent, triangular objects performing impossible maneuvers, publicly acknowledged as a 'genuine phenomenon' by the Belgian Air Force, serving as a benchmark for advanced UAP characteristics."
+  },
+  {
+    "subject": "O'Hare International Airport UFO Incident (2006)",
+    "predicate": "gains epistemic weight from",
+    "object": "Contradicted Institutional Denials and Credible Witness Accounts",
+    "significance": "A multi-witness UAP sighting by aviation professionals at a major airport, initially denied by the FAA but later contradicted by internal communications, highlighting a pattern of institutional denial against credible testimony and the challenges of official transparency."
+  }
+]

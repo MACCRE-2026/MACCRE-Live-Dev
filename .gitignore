@@ -18,7 +18,7 @@ __DATACENTER/*/04_Code_Artifacts/job_*/
 __DATACENTER/*/05_Rendered_Media/job_*/
 
 # Memory pins are transient per-job thought snapshots
-__DATACENTER/*/06_Memory_Pins/
+__DATACENTER/*/02_Dynamic_Context/memory_pins/
 
 # Session snapshot XLSXes (frozen copies of workbooks, not source)
 __DATACENTER/*/CompletedSessions/

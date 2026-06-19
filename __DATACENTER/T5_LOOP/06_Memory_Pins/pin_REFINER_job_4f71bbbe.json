@@ -1,0 +1,14 @@
+[
+  {
+    "subject": "Distributed Architecture",
+    "predicate": "intrinsically entails",
+    "object": "Probabilistic Failure Modes",
+    "significance": "The spatial and logical separation of 'nodes spread far and wide' and the reliance on 'messages flow' fundamentally transform system reliability from deterministic to probabilistic, where 'failures rise' is an expected outcome rather than an exception."
+  },
+  {
+    "subject": "System Resilience",
+    "predicate": "is achieved through",
+    "object": "Overcoming Inherent Unreliability",
+    "significance": "The core challenge of distributed systems is their unreliability ('failures rise'). The triumph of 'Still, the work gets done' signifies that resilience is the architectural and conceptual solution to this fundamental problem, ensuring operational continuity despite adversity."
+  }
+]

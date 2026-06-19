@@ -1,0 +1,20 @@
+[
+  {
+    "subject": "Information Access Limitation",
+    "predicate": "defines",
+    "object": "a protocol for independent data processing",
+    "significance": "This concept establishes a rigorous operational mode for AI, ensuring unbiased evaluation by eliminating external dependencies and prior state."
+  },
+  {
+    "subject": "Prior conversational context",
+    "predicate": "is excluded to ensure",
+    "object": "interaction independence",
+    "significance": "This exclusion principle is fundamental for creating stateless processing environments, where each input is evaluated without historical bias."
+  },
+  {
+    "subject": "Hidden data labels",
+    "predicate": "are disregarded to enforce",
+    "object": "explicit content processing",
+    "significance": "This constraint mandates a system to interpret information solely on its presented form, preventing reliance on internal classifications or external metadata."
+  }
+]

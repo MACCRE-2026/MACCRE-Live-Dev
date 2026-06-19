@@ -5,9 +5,9 @@
 # │  II.  LINTING     Zero unused imports. No wildcards. 120-char line max.    │
 # │  III. PATHS       Never hardcode absolute paths. Use get_maccre_root().     │
 # │                   Default params: def f(p:str='') -> None: p=p or root/x   │
-# │  IV.  DATACENTER  6-Tier: 01_Raw_Source · 02_Dynamic_Context               │
+# │  IV.  DATACENTER  5-Tier: 01_Raw_Source · 02_Dynamic_Context               │
 # │                           03_Agent_Ledgers · 04_Code_Artifacts             │
-# │                           05_Rendered_Media · 06_Memory_Pins               │
+# │                           05_Rendered_Media                                 │
 # │  V.   DIAMOND     Gen: temp=1.0  ·  Critic: temp=0.1 + dataclass schema   │
 # │  VI.  ABSTRACTION All I/O behind abc.ABC before any concrete driver.       │
 # │  VII. TEARDOWN    try/finally on all handles (omni clean compliance).      │
@@ -20,7 +20,7 @@ Phase 4: The Universal Observer.
 
 Extracts Knowledge Triplets from every swarm node's output and pins them
 to the project-scoped corkboard at
-__DATACENTER/<project>/06_Memory_Pins (the official 6th data tier).
+__DATACENTER/<project>/02_Dynamic_Context/memory_pins.
 
 Project-scoping ensures thought pins from Project A never leak into
 Project B's semantic context, and allows cross-pollination to be
@@ -57,7 +57,7 @@ class CognitiveMemoryEngine:
         active_project = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
         self.memory_dir = (
             memory_dir
-            or str(get_maccre_root() / "__DATACENTER" / active_project / "06_Memory_Pins")
+            or str(get_maccre_root() / "__DATACENTER" / active_project / "02_Dynamic_Context" / "memory_pins")
         )
         os.makedirs(self.memory_dir, exist_ok=True)
 
@@ -108,7 +108,7 @@ class CognitiveMemoryEngine:
             if not triplets:
                 return
 
-            # Keep the raw json dump as a forensic backup in 06_Memory_Pins
+            # Keep the raw json dump as a forensic backup in 02_Dynamic_Context/memory_pins
             out_path = os.path.join(self.memory_dir, f"pin_{source_node}_{file_name}.json")
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(triplets, f, indent=2)
@@ -118,7 +118,7 @@ class CognitiveMemoryEngine:
             # NOTE: Session-level thought_pins.db creation has been removed.
             # Knowledge triplets (thought-pins) are now only vectorized during
             # canonize_session() to save on embedding cost and compute overhead.
-            # The raw JSON file in 06_Memory_Pins/ serves as the forensic backup
+            # The raw JSON file in 02_Dynamic_Context/memory_pins/ serves as the forensic backup
             # until the session is promoted to the project-level canon.
 
         except Exception as e:

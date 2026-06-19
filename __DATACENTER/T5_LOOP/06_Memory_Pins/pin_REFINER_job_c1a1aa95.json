@@ -1,0 +1,8 @@
+[
+  {
+    "subject": "Distributed Systems",
+    "predicate": "achieve resilience",
+    "object": "by continuing work despite rising component failures",
+    "significance": "This captures the fundamental architectural principle of fault tolerance and liveness in distributed computing, where individual component failures are an expected reality but overall system function must persist."
+  }
+]

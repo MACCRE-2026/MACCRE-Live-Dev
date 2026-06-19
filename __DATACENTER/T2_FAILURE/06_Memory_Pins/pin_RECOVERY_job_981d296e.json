@@ -1,0 +1,20 @@
+[
+  {
+    "subject": "Distributed System Architecture",
+    "predicate": "incorporates",
+    "object": "Dedicated Recovery Nodes",
+    "significance": "Highlights a fundamental architectural pattern for achieving fault tolerance by segregating recovery responsibilities to specialized components."
+  },
+  {
+    "subject": "Inter-Node Communication",
+    "predicate": "utilizes",
+    "object": "Failure Payloads",
+    "significance": "Identifies a specific protocol or data structure design for propagating fault information across a distributed system, enabling coordinated and informed recovery actions."
+  },
+  {
+    "subject": "System Resilience Validation",
+    "predicate": "relies on",
+    "object": "Predefined Test Topologies with Expected Failures",
+    "significance": "Encapsulates the critical engineering practice of systematically testing fault tolerance through controlled environments and anticipated fault injection, rather than merely reacting to unforeseen events."
+  }
+]

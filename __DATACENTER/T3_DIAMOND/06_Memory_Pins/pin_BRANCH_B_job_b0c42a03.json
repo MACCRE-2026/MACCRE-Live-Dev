@@ -1,0 +1,20 @@
+[
+  {
+    "subject": "Pre-training bias mitigation",
+    "predicate": "is insufficient for",
+    "object": "comprehensive bias eradication",
+    "significance": "This highlights the critical limitation of front-loaded bias mitigation strategies, arguing that the dynamic and emergent nature of societal biases necessitates continuous intervention across the entire AI lifecycle."
+  },
+  {
+    "subject": "Societal biases",
+    "predicate": "possess",
+    "object": "dynamic and emergent properties",
+    "significance": "This establishes the fundamental characteristic of biases as non-static, evolving phenomena that can manifest unpredictably, challenging the efficacy of one-time or early-stage detection and correction."
+  },
+  {
+    "subject": "Bias manifestation",
+    "predicate": "extends across",
+    "object": "AI lifecycle stages (fine-tuning, deployment)",
+    "significance": "This emphasizes the temporal distribution of bias emergence, underscoring the need for adaptive and continuous mitigation frameworks that account for new biases arising post-initial training."
+  }
+]

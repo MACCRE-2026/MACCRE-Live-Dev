@@ -1,0 +1,80 @@
+[
+  {
+    "subject": "Distributed Systems",
+    "predicate": "introduce",
+    "object": "Complex Synchronization Challenges",
+    "significance": "Highlights the fundamental difficulty inherent in managing concurrent operations across multiple independent nodes."
+  },
+  {
+    "subject": "Race Condition",
+    "predicate": "is a type of",
+    "object": "Synchronization Anomaly",
+    "significance": "Defines a critical problem where the outcome of an operation depends on unpredictable timing, leading to data corruption."
+  },
+  {
+    "subject": "Deadlock",
+    "predicate": "is characterized by",
+    "object": "Perpetual Waiting for Resources",
+    "significance": "Describes a state where competing actions block each other indefinitely, leading to system standstill and unavailability."
+  },
+  {
+    "subject": "Deadlock Conditions",
+    "predicate": "include",
+    "object": "Mutual Exclusion, Hold and Wait, No Preemption, Circular Wait",
+    "significance": "Lists the four necessary conditions for a deadlock to occur, which are particularly difficult to detect and resolve in distributed settings."
+  },
+  {
+    "subject": "Starvation",
+    "predicate": "involves",
+    "object": "Repeated Denial of Resource Access",
+    "significance": "Distinguishes starvation from deadlock by emphasizing perpetual delay rather than permanent blocking, causing performance degradation and unfairness."
+  },
+  {
+    "subject": "Consistency Models",
+    "predicate": "define",
+    "object": "Guarantees for Data Visibility and Ordering",
+    "significance": "Explains the role of consistency models in managing data integrity across distributed nodes by specifying how updates are perceived."
+  },
+  {
+    "subject": "Strong Consistency (e.g., Linearizability)",
+    "predicate": "ensures",
+    "object": "Globally Consistent Order of Writes",
+    "significance": "Describes a high-guarantee consistency model where all clients see the most recent write, often at the cost of performance and availability."
+  },
+  {
+    "subject": "Strong Consistency",
+    "predicate": "trades off",
+    "object": "Higher Latency and Reduced Availability",
+    "significance": "Connects strong consistency to the CAP theorem, highlighting the inherent compromises required to achieve strict data accuracy."
+  },
+  {
+    "subject": "Eventual Consistency",
+    "predicate": "prioritizes",
+    "object": "Availability and Partition Tolerance",
+    "significance": "Contrasts with strong consistency by focusing on system uptime and resilience to network issues, allowing temporary inconsistencies that resolve over time."
+  },
+  {
+    "subject": "Distributed Locking Mechanisms",
+    "predicate": "mitigate",
+    "object": "Race Conditions and Shared Resource Access Issues",
+    "significance": "Identifies a key practical solution for ensuring atomic operations by allowing only one node to access a critical section at a time."
+  },
+  {
+    "subject": "Consensus Protocols (e.g., Paxos, Raft)",
+    "predicate": "are used for",
+    "object": "Implementing Distributed Locking",
+    "significance": "Provides examples of foundational algorithms that enable reliable distributed coordination and state management."
+  },
+  {
+    "subject": "Idempotency",
+    "predicate": "enables",
+    "object": "Safe Retries of Operations",
+    "significance": "Highlights a property crucial for fault tolerance in distributed systems, preventing unintended side effects from repeated execution."
+  },
+  {
+    "subject": "Message Queues and Event Streams",
+    "predicate": "facilitate",
+    "object": "Asynchronous Communication and Service Decoupling",
+    "significance": "Describes architectural patterns that reduce direct dependencies and potential race conditions by enabling non-blocking interactions."
+  }
+]

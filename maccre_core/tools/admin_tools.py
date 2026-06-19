@@ -260,7 +260,7 @@ def initialize_workspace(project_name: str) -> str:
         (base / "03_Agent_Ledgers").mkdir(parents=True, exist_ok=True)
         (base / "04_Code_Artifacts").mkdir(parents=True, exist_ok=True)
         (base / "05_Rendered_Media").mkdir(parents=True, exist_ok=True)
-        (base / "06_Memory_Pins").mkdir(parents=True, exist_ok=True)
+        (base / "02_Dynamic_Context" / "memory_pins").mkdir(parents=True, exist_ok=True)
         (base / "chroma_db").mkdir(parents=True, exist_ok=True)
 
         # Deploy project baseline
