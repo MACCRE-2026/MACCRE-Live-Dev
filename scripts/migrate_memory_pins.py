@@ -31,7 +31,7 @@ def migrate() -> None:
         if not old.exists():
             continue
 
-        print(f"[MIGRATE] {project_dir.name}: 06_Memory_Pins → 02_Dynamic_Context/memory_pins")
+        print(f"[MIGRATE] {project_dir.name}: 06_Memory_Pins -> 02_Dynamic_Context/memory_pins")
         new.mkdir(parents=True, exist_ok=True)
 
         # Move all files from old → new

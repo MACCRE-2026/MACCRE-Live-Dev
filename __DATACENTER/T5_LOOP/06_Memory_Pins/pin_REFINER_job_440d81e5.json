@@ -1,8 +1,0 @@
-[
-  {
-    "subject": "Distributed Systems",
-    "predicate": "achieve emergent reliability by",
-    "object": "tolerating localized failures across dispersed, communicating nodes",
-    "significance": "This triplet encapsulates the fundamental principle that a robust and reliable system can be constructed from numerous, potentially unreliable, and geographically distributed components, highlighting the critical role of fault tolerance and resilience in decentralized architectures."
-  }
-]
