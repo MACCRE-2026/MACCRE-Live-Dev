@@ -28,13 +28,14 @@ from typing import Dict, Any
 
 
 from maccre_core.utils.path_resolver import get_datacenter_path
+from maccre_core.orchestration.topology_interface import TopologyProvider
 
 
 class NodeConfig(dict):  # type: ignore[type-arg]
     """Typed dict shape for a single swarm node configuration."""
 
 
-class TopologyEngine:
+class TopologyEngine(TopologyProvider):
     """Sovereign Local Control Plane: Maps local CSV to Swarm Routing."""
 
     def __init__(self, csv_path: str | None = None) -> None:

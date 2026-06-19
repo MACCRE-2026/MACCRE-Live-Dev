@@ -48,6 +48,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Generator
 
+from maccre_core._net.client_interface import InferenceClient, InferenceResponse, EmbeddingResult
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _BASE_URL    = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -59,7 +61,7 @@ _STREAM_TIMEOUT = 600  # streaming can legitimately run longer
 
 # ── Response containers ───────────────────────────────────────────────────────
 
-class GeminiResponse:
+class GeminiResponse(InferenceResponse):
     """Lightweight parsed response from generateContent."""
 
     def __init__(self, body: dict[str, Any]) -> None:
@@ -130,7 +132,7 @@ class GeminiResponse:
         return self._body
 
 
-class EmbeddingResponse:
+class EmbeddingResponse(EmbeddingResult):
     """Response from embedContent."""
 
     def __init__(self, body: dict[str, Any]) -> None:
@@ -366,7 +368,7 @@ def is_fatal_error(exc: Exception) -> bool:
 
 # ── Core client ───────────────────────────────────────────────────────────────
 
-class GeminiClient:
+class GeminiClient(InferenceClient):
     """Sovereign Gemini HTTP client — zero SDK dependency.
 
     Covers the full generation/embedding/file surface of the Google

@@ -36,8 +36,9 @@ from typing import Any, Optional
 
 
 from maccre_core.utils.path_resolver import get_datacenter_path
+from maccre_core.orchestration.broker_interface import MessageBroker
 
-class LocalMessageBroker:
+class LocalMessageBroker(MessageBroker):
     """Zero-dependency SQLite Scatter-Gather State Machine."""
 
     def __init__(self, db_path: str | None = None) -> None:

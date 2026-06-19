@@ -32,9 +32,11 @@ from typing import Any, Dict, Optional
 from maccre_core.logger import ops_log
 from maccre_core.maccre_router import UniversalRouter
 from maccre_core.memory import close_all
+from maccre_core.orchestration.broker_interface import MessageBroker
 from maccre_core.orchestration.local_broker import LocalMessageBroker
 from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
 from maccre_core.orchestration.tool_executor import ToolExecutor
+from maccre_core.orchestration.topology_interface import TopologyProvider
 from maccre_core.orchestration.topology_engine import TopologyEngine
 from maccre_core.utils.path_resolver import get_datacenter_path
 
@@ -50,8 +52,8 @@ class UniversalSwarmWorker:
         print(f"[{AGENT_ID}] Initializing Universal Swarm Node...")
         self.project_name = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
         self.router = UniversalRouter()
-        self.topology: Optional[TopologyEngine] = TopologyEngine()
-        self.broker = LocalMessageBroker()
+        self.topology: TopologyProvider | None = TopologyEngine()
+        self.broker: MessageBroker = LocalMessageBroker()
         self.memory_engine = CognitiveMemoryEngine()
         self.tool_executor = ToolExecutor()
         self._is_sleeping = False  # Tracks rest state to prevent log spam

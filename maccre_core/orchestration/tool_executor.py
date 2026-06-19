@@ -42,6 +42,7 @@ from typing import Any
 
 from maccre_core.logger import ops_log
 from maccre_core.tools.tool_registry import TOOL_DISPATCHER
+from maccre_core.orchestration.tool_executor_interface import ToolDispatcher as ToolDispatcherABC
 
 logger = logging.getLogger("maccre_core")
 
@@ -52,7 +53,7 @@ def _contains_tool_call(text: str) -> bool:
     return any(marker in text for marker in _TOOL_CALL_MARKERS)
 
 
-class ToolExecutor:
+class ToolExecutor(ToolDispatcherABC):
     """Stateless tool call parser and dispatcher.
 
     Usage (TUI loop):
