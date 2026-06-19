@@ -494,6 +494,92 @@ class OperationsLogger:
         except Exception as tdb_err:
             self._emit(logging.WARNING, f"[OPS_LOG] terminal_logs.db write failed: {tdb_err}", {})
 
+    # ── Flow Ledgers (Bifurcated) ─────────────────────────────────────────────
+
+    def flow_chat(
+        self,
+        job_id: str,
+        role: str,
+        agent_name: str,
+        content: str,
+        session_id: str = "",
+        project_id: str = "",
+    ) -> None:
+        """Write conversational output to the FlowChat ledger JSONL."""
+        from maccre_core.schemas.ledger_models import FlowChatEntry
+        from maccre_core.utils.path_resolver import get_datacenter_path
+        
+        entry = FlowChatEntry(
+            job_id=job_id,
+            role=role,
+            agent_name=agent_name,
+            content=content
+        )
+        
+        # We append as JSON Lines (JSONL)
+        dc_root = get_datacenter_path() / project_id if project_id else get_datacenter_path("GLOBAL")
+        ledger_dir = dc_root / "03_Agent_Ledgers" / "FlowChat"
+        os.makedirs(ledger_dir, exist_ok=True)
+        
+        file_path = ledger_dir / f"{session_id}.jsonl"
+        try:
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(entry.to_json() + "\n")
+        except Exception as err:
+            self._emit(logging.WARNING, f"[OPS_LOG] FlowChat write failed: {err}", {})
+
+        # Emit minimal console signal
+        self._emit(logging.INFO, f"[FLOW_CHAT] {role.upper()}: {agent_name} -> {content[:50]}...", {"job_id": job_id})
+
+
+    def flow_system(
+        self,
+        job_id: str,
+        agent_name: str,
+        model_id: str,
+        system_prompt: str,
+        scratchpad_thought: str,
+        tool_calls: list[dict[str, Any]],
+        tool_results: list[dict[str, Any]],
+        input_tokens: int,
+        output_tokens: int,
+        duration_ms: int,
+        cost: float,
+        session_id: str = "",
+        project_id: str = "",
+    ) -> None:
+        """Write compute exhaust to the FlowSystem ledger JSONL."""
+        from maccre_core.schemas.ledger_models import FlowSystemEntry
+        from maccre_core.utils.path_resolver import get_datacenter_path
+        
+        entry = FlowSystemEntry(
+            job_id=job_id,
+            agent_name=agent_name,
+            model_id=model_id,
+            system_prompt=system_prompt,
+            scratchpad_thought=scratchpad_thought,
+            tool_calls=tool_calls,
+            tool_results=tool_results,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            duration_ms=duration_ms,
+            cost=cost
+        )
+        
+        dc_root = get_datacenter_path() / project_id if project_id else get_datacenter_path("GLOBAL")
+        ledger_dir = dc_root / "03_Agent_Ledgers" / "FlowSystem"
+        os.makedirs(ledger_dir, exist_ok=True)
+        
+        file_path = ledger_dir / f"{session_id}.jsonl"
+        try:
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(entry.to_json() + "\n")
+        except Exception as err:
+            self._emit(logging.WARNING, f"[OPS_LOG] FlowSystem write failed: {err}", {})
+
+        self._emit(logging.DEBUG, f"[FLOW_SYSTEM] Exhaust saved for {agent_name}", {"job_id": job_id})
+
+
 
 # ── Module-level OperationsLogger singleton ───────────────────────────────────
 #: Import this in any module that needs structured telemetry:

@@ -191,3 +191,55 @@ def read_url_content(url: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"[URL_ERROR] {exc!s} — {url}"
 
+
+def cascade_search(query: str, num_results: int = 10) -> str:
+    """Dual-index Brave search with automatic source exclusion.
+
+    Pass 1 searches the query normally, then pass 2 re-searches with
+    ``-site:<domain>`` exclusions for every domain surfaced in pass 1.
+    This surfaces diverse sources that would otherwise be buried under
+    dominant domains.
+
+    Args:
+        query: The search query string.
+        num_results: Number of results per pass (max 20). Default 10.
+
+    Returns:
+        Combined results from both passes, clearly labeled.
+    """
+    num_results = int(num_results)
+
+    # ── Pass 1: primary index ────────────────────────────────────────────
+    pass1 = search_web(query, num_results)
+
+    # ── Extract unique domains from pass-1 URLs ─────────────────────────
+    domains: list[str] = []
+    seen: set[str] = set()
+    for line in pass1.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("URL: "):
+            raw_url = stripped[5:].strip()
+            try:
+                host = urllib.parse.urlparse(raw_url).netloc
+                if host and host not in seen:
+                    seen.add(host)
+                    domains.append(host)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ── Pass 2: exclusionary index ───────────────────────────────────────
+    if domains:
+        exclusion_suffix = " ".join(f"-site:{d}" for d in domains)
+        exclusion_query = f"{query} {exclusion_suffix}"
+    else:
+        exclusion_query = query
+
+    pass2 = search_web(exclusion_query, num_results)
+
+    logger.info("[web_tools] cascade_search: %d domains excluded for pass 2", len(domains))
+    return (
+        f"=== CASCADE SEARCH: [{query}] ===\n\n"
+        f"=== PASS 1: PRIMARY INDEX ===\n{pass1}\n\n"
+        f"=== PASS 2: EXCLUSIONARY INDEX ===\n{pass2}\n"
+    )
+

@@ -293,10 +293,16 @@ def iterative_scoped_search(
         tp_store = get_knowledge_store(env_project, db_name="thought_pins.db")
         pin_results = tp_store.fts_query(collection_name, query, n=3)
         
-        # Also Query L1 Ephemeral Session DB for semantic scope (if active)
+        # Also query L1 Ephemeral Session DBs for semantic scope (if active)
+        # NOTE: Session-level thought_pins.db no longer exists — thought-pins are
+        # only vectorized during canonize_session(). We query session agent_thoughts
+        # instead for ephemeral scope enrichment.
         if env_session:
-            sess_store = get_knowledge_store(env_project, db_name=f"session_{env_session}_thought_pins.db")
-            pin_results.extend(sess_store.fts_query(collection_name, query, n=3))
+            try:
+                sess_thoughts = get_knowledge_store(env_project, db_name=f"session_{env_session}_agent_thoughts.db")
+                pin_results.extend(sess_thoughts.fts_query(collection_name, query, n=3))
+            except Exception:  # noqa: BLE001
+                pass  # Ephemeral DB may not exist yet
 
         scope_context = ""
         if pin_results:
@@ -311,8 +317,10 @@ def iterative_scoped_search(
         
         # Query L1 Ephemeral Session DB for final vector match
         if env_session:
-            candidates.extend(sess_store.query(collection_name, vector, n=n_results + (len(excluded_ids) if excluded_ids else 0)))
-            
+            try:
+                candidates.extend(sess_thoughts.query(collection_name, vector, n=n_results + (len(excluded_ids) if excluded_ids else 0)))
+            except Exception:  # noqa: BLE001
+                pass  # Ephemeral DB may not exist yet
         # Sort combined candidates by distance
         candidates = sorted(candidates, key=lambda x: x.distance)
         
@@ -571,7 +579,10 @@ def import_foreign_vectors(
 
 
 def merge_session_to_project(session_name: str, project_name: str) -> str:
-    """Zero-compute vector merge — promotes L1 Session memory to L2 Project memory.
+    """Zero-compute vector merge — promotes L1 Session agent_thoughts to L2 Project memory.
+
+    NOTE: For full session canonization (agent_thoughts + agent_ledgers + thought_pins),
+    use ``canonize_session()`` instead.  This function is a lightweight single-DB merge.
 
     Args:
         session_name: The session identifier (collection ``session_<session_name>``).
@@ -580,14 +591,14 @@ def merge_session_to_project(session_name: str, project_name: str) -> str:
     Returns:
         A status string prefixed with MERGE_SUCCESS, MERGE_SKIPPED, or MERGE_FAILED.
     """
-    sess_col = "swarm_memory"  # In SovereignMemory, pins are always in swarm_memory or similar
+    sess_col = "swarm_memory"
     proj_col = "swarm_memory"
-    
+
     # Store for L2 Project Database
-    tp_store = get_knowledge_store(project_name, db_name="thought_pins.db")
-    
+    canon_store = get_knowledge_store(project_name, db_name="agent_thoughts.db")
+
     # Store for L1 Session Database
-    sess_db_name = f"session_{session_name}_thought_pins.db"
+    sess_db_name = f"session_{session_name}_agent_thoughts.db"
     sess_store = get_knowledge_store(project_name, db_name=sess_db_name)
 
     try:
@@ -596,13 +607,13 @@ def merge_session_to_project(session_name: str, project_name: str) -> str:
             return f"MERGE_SKIPPED: {sess_db_name} is empty."
 
         for pin in all_pins:
-            tp_store.upsert(proj_col, pin)
+            canon_store.upsert(proj_col, pin)
 
         # Clear out the session DB or delete it
         sess_store.delete_collection(sess_col)
         return (
             f"MERGE_SUCCESS: Promoted {len(all_pins)} vectors "
-            f"from {sess_db_name} to thought_pins.db."
+            f"from {sess_db_name} to agent_thoughts.db."
         )
     except Exception as exc:  # noqa: BLE001
         return f"MERGE_FAILED: {exc}"
@@ -710,42 +721,48 @@ def vectorize_ledger(text: str, project_name: str, session_id: str, agent_id: st
 def canonize_session(session_id: str, project_name: str) -> str:
     """
     Manually canonizes a successful swarm session.
-    Merges the vectors from the three ephemeral session databases into the three Canon databases,
-    and then deletes the ephemeral SQLite files.
+
+    Two-phase promotion:
+      1. Merges the session-scoped agent_thoughts and agent_ledgers vectors
+         into their project-level canon databases, then deletes the ephemerals.
+      2. Reads the raw knowledge-triplet JSON files from 06_Memory_Pins/ for
+         this session, vectorizes them, and upserts into the project canon
+         thought_pins.db.  This is the ONLY place thought-pins are vectorized,
+         keeping per-session cost to zero.
     """
     import os
     from maccre_core.utils.path_resolver import get_datacenter_path
-    
+
+    # ── Phase 1: Merge session ephemeral vectors into canon ──────────────────
     databases = [
-        ("thought_pins", f"session_{session_id}_thought_pins.db", "thought_pins.db"),
         ("agent_thoughts", f"session_{session_id}_agent_thoughts.db", "agent_thoughts.db"),
         ("agent_ledgers", f"session_{session_id}_agent_ledgers.db", "agent_ledgers.db"),
     ]
-    
-    results = []
+
+    results: list[str] = []
     dynamic_dir = get_datacenter_path("02_Dynamic_Context")
     os.environ["MACCRE_ACTIVE_PROJECT"] = project_name
-    
+
     for db_type, ephemeral_name, canon_name in databases:
         try:
             ephemeral_path = dynamic_dir / ephemeral_name
             if not ephemeral_path.exists():
                 results.append(f"[{db_type}] No ephemeral DB found.")
                 continue
-                
+
             e_store = get_knowledge_store(project_name, db_name=ephemeral_name)
             c_store = get_knowledge_store(project_name, db_name=canon_name)
-            
+
             # Transfer all pins
             all_pins = e_store.get_all("swarm_memory")
             count = 0
             for pin in all_pins:
                 c_store.upsert("swarm_memory", pin)
                 count += 1
-                
+
             # Close the ephemeral connection so we can delete the file
             e_store.close()
-            
+
             # Physically delete the DB files (main, shm, wal)
             try:
                 if ephemeral_path.exists():
@@ -759,19 +776,68 @@ def canonize_session(session_id: str, project_name: str) -> str:
             except Exception as f_err:
                 results.append(f"[{db_type}] Merged {count} vectors, but failed to delete file: {f_err}")
                 continue
-                
+
             results.append(f"[{db_type}] Successfully canonized {count} vectors.")
         except Exception as e:
             results.append(f"[{db_type}] Error: {e!s}")
-            
+
+    # ── Phase 2: Vectorize knowledge triplets into canon thought_pins.db ─────
+    # Raw triplet JSON files live in 06_Memory_Pins/pin_{node}_{session_id}.json
+    # This is the ONLY code path that pays the embedding cost for thought-pins.
+    try:
+        import json as _json
+        import uuid as _uuid
+        import datetime as _dt
+        from maccre_core.memory.knowledge_store import PinRecord
+
+        pins_dir = get_datacenter_path("06_Memory_Pins")
+        tp_store = get_knowledge_store(project_name, db_name="thought_pins.db")
+        pin_files = sorted(pins_dir.glob(f"pin_*_{session_id}.json")) if pins_dir.exists() else []
+        pin_count = 0
+
+        for pin_file in pin_files:
+            try:
+                triplets = _json.loads(pin_file.read_text(encoding="utf-8"))
+                if not triplets:
+                    continue
+                concept_text = _json.dumps(triplets)
+                vector = get_gemini_embedding(concept_text, task_type="RETRIEVAL_DOCUMENT")
+                doc_id = f"pin_{pin_file.stem}_{_uuid.uuid4().hex[:8]}"
+                safe_meta = {
+                    "project": project_name,
+                    "session_id": session_id,
+                    "agent_id": pin_file.stem.split("_")[1] if "_" in pin_file.stem else "unknown",
+                    "type": "thought_pin",
+                    "ingested_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                }
+                tp_store.upsert("swarm_memory", PinRecord(
+                    doc_id=doc_id,
+                    text=concept_text,
+                    vector=vector,
+                    metadata=safe_meta,
+                ))
+                pin_count += 1
+            except Exception as pin_err:
+                results.append(f"[thought_pins] Failed to vectorize {pin_file.name}: {pin_err}")
+
+        if pin_count:
+            results.append(f"[thought_pins] Vectorized {pin_count} triplet file(s) into canon thought_pins.db.")
+        elif pin_files:
+            results.append("[thought_pins] Triplet files found but none contained data.")
+        else:
+            results.append("[thought_pins] No raw triplet files found for this session.")
+    except Exception as tp_err:
+        results.append(f"[thought_pins] Canonization error: {tp_err}")
+
     return "\n".join(results)
+
 
 def query_session_memory(session_id: str, db_type: str, query: str, n_results: int = 5) -> str:
     """
     Forensic tool: Queries an ephemeral session database (usually for a failed swarm) to salvage or analyze vectors.
-    db_type must be one of: 'thought_pins', 'agent_thoughts', 'agent_ledgers'.
+    db_type must be one of: 'agent_thoughts', 'agent_ledgers'.
     """
-    valid_types = ['thought_pins', 'agent_thoughts', 'agent_ledgers']
+    valid_types = ['agent_thoughts', 'agent_ledgers']
     if db_type not in valid_types:
         return f"Invalid db_type. Must be one of: {valid_types}"
         

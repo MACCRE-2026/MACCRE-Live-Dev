@@ -128,15 +128,31 @@ class SovereignPinStore(KnowledgeStore):
     Full-text search uses SQLite's built-in FTS5 engine.
     """
 
-    def __init__(self, project_name: str, db_name: str = "thought_pins.db") -> None:
+    def __init__(
+        self, 
+        project_name: str, 
+        db_name: str = "thought_pins.db",
+        scope: str = "project",
+        session_id: str = ""
+    ) -> None:
         from maccre_core.utils.path_resolver import get_maccre_root  # noqa: PLC0415
+        
         self._project = project_name
+        self._scope = scope
+        
+        proj_dir = "GLOBAL" if scope == "global" else project_name
+        
         db_dir = (
             get_maccre_root()
             / "__DATACENTER"
-            / project_name
+            / proj_dir
             / "02_Dynamic_Context"
         )
+        
+        if scope == "session":
+            if not session_id:
+                raise ValueError("session_id must be provided when scope is 'session'")
+            db_dir = db_dir / "sessions" / session_id
         db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path: Path = db_dir / db_name
         self._conn: sqlite3.Connection = sqlite3.connect(

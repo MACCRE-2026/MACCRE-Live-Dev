@@ -65,16 +65,50 @@ NexusChat {
     overflow-y: scroll;
 }
 
-#nexus-input {
-    dock: bottom;
+#nexus-input-container {
+    height: auto;
+    width: 1fr;
+    layout: horizontal;
     background: #21262d;
     border-top: solid #30363d;
-    color: #e6edf3;
-    width: 100%;
 }
 
-#nexus-input:focus {
-    border-top: solid #58a6ff;
+#btn-expand-nexus-input, #btn-expand-agent-chat-input {
+    min-width: 3;
+    width: 3;
+    height: 3;
+    margin: 0;
+    padding: 0;
+    content-align: center middle;
+    border: none;
+    background: transparent;
+    color: #d29922;
+    text-style: bold;
+}
+
+#btn-expand-nexus-input:hover, #btn-expand-agent-chat-input:hover {
+    color: #e3b341;
+}
+
+#nexus-input, #agent-chat-input {
+    width: 1fr;
+    height: 3;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #e6edf3;
+}
+
+#nexus-input:focus, #agent-chat-input:focus {
+    border: none;
+}
+
+#btn-nexus-send, #btn-agent-chat-send {
+    min-width: 14;
+    height: 3;
+    margin: 0;
+    border: none;
 }
 
 /* ── Right Pane: Top Ribbon ──────────────────────────────────────────────── */
@@ -141,6 +175,11 @@ AgentBuilderPanel Input, AgentBuilderPanel Select {
 
 AgentBuilderPanel Label {
     color: #c9d1d9;
+}
+
+.top-edit-btn {
+    width: 100%;
+    margin-bottom: 1;
 }
 
 .form-row {
@@ -219,13 +258,17 @@ SystemInstructionsModal TextArea {
     margin-bottom: 1;
 }
 
+ModalScreen {
+    align: center middle;
+}
+
 .dialog {
     padding: 1 2;
     background: #161b22;
     border: thick #30363d;
-    width: 60;
+    width: auto;
+    max-width: 80;
     height: auto;
-    align: center middle;
 }
 
 .dialog Label {
@@ -247,6 +290,45 @@ SystemInstructionsModal TextArea {
 
 .dialog-buttons Button {
     margin-left: 1;
+}
+
+.agent-chat-dialog {
+    width: 90%;
+    height: 90%;
+    max-width: 140;
+}
+.chat-config-row {
+    height: 10;
+    margin-bottom: 1;
+}
+.agent-selector-pane {
+    width: 50%;
+    height: 100%;
+}
+.mode-selector-pane {
+    width: 50%;
+    height: 100%;
+    padding-left: 2;
+}
+#agent-chat-log {
+    height: 1fr;
+    background: #0d1117;
+    border: solid #30363d;
+    margin-bottom: 1;
+}
+#agent-chat-input-container {
+    height: 5;
+    width: 1fr;
+    layout: horizontal;
+    background: #21262d;
+    border-top: solid #30363d;
+}
+#agent-selection-list {
+    height: 1fr;
+    border: solid #30363d;
+}
+.chat-buttons {
+    margin-top: 1;
 }
 
 /* ── Buttons global ───────────────────────────────────────────────────────── */

@@ -17,7 +17,7 @@ class GeminiLiveClient:
     Currently locked to TEXT modalities to ensure full compatibility with 
     Termux/Android environments (bypassing pyaudio/sounddevice constraints).
     """
-    def __init__(self, api_key: str, model: str = "gemini-3.1-flash-live-preview") -> None:
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash") -> None:
         self.api_key = api_key
         self.model = model
         self.client = genai.Client(api_key=self.api_key)

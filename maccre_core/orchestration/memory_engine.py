@@ -115,41 +115,11 @@ class CognitiveMemoryEngine:
 
             print(f"[Memory Engine] Extracted {len(triplets)} thought pins to the Corkboard.")
 
-            # Embed and upsert into the ephemeral session database
-            session_id = file_name
-            project_name = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
-            
-            try:
-                from maccre_core.tools.rag_tools import get_gemini_embedding
-                from maccre_core.memory.knowledge_store import get_knowledge_store, PinRecord
-                import uuid
-                import datetime
-                
-                db_name = f"session_{session_id}_thought_pins.db"
-                store = get_knowledge_store(project_name, db_name=db_name)
-                
-                # We embed the entire array of triplets as one semantic concept for this node
-                concept_text = json.dumps(triplets)
-                vector = get_gemini_embedding(concept_text, task_type="RETRIEVAL_DOCUMENT")
-                doc_id = f"pin_{source_node}_{uuid.uuid4().hex[:8]}"
-                
-                safe_meta = {
-                    "project": project_name,
-                    "session_id": session_id,
-                    "agent_id": source_node,
-                    "type": "thought_pin",
-                    "ingested_at": datetime.datetime.utcnow().isoformat(),
-                }
-                
-                store.upsert("swarm_memory", PinRecord(
-                    doc_id=doc_id,
-                    text=concept_text,
-                    vector=vector,
-                    metadata=safe_meta,
-                ))
-                print(f"[Memory Engine] Ephemeral Vector Success: Upserted {len(triplets)} pins to {db_name}")
-            except Exception as vec_err:
-                print(f"[Memory Engine] Ephemeral Vector Failed: {vec_err}")
+            # NOTE: Session-level thought_pins.db creation has been removed.
+            # Knowledge triplets (thought-pins) are now only vectorized during
+            # canonize_session() to save on embedding cost and compute overhead.
+            # The raw JSON file in 06_Memory_Pins/ serves as the forensic backup
+            # until the session is promoted to the project-level canon.
 
         except Exception as e:
-            print(f"[Memory Engine] Extraction skipped/failed: {e}")
+            print(f"[Memory Engine] Extraction skipped/failed: {e}")

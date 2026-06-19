@@ -24,3 +24,4 @@ pyright>=1.1.350
 ruff>=0.3.0
 pytest>=8.0.0
 textual>=0.70.0
+pyperclip>=1.8.2

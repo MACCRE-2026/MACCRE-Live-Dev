@@ -1,25 +1,688 @@
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │  MACCREv2 ENGINEERING DOCTRINE                             Law Rev: 19.0   │
+# ├─────────────────────────────────────────────────────────────────────────────┤
+# │  I.   TYPING      All signatures: explicit Python 3.11+ type hints.        │
+# │  II.  LINTING     Zero unused imports. No wildcards. 120-char line max.    │
+# │  III. PATHS       Never hardcode absolute paths. Use get_maccre_root().     │
+# │  VI.  ABSTRACTION All I/O behind abc.ABC before any concrete driver.       │
+# │  VII. TEARDOWN    try/finally on all handles (omni clean compliance).      │
+# └─────────────────────────────────────────────────────────────────────────────┘
+"""
+maccre_core/orchestration/macro_factory.py
+============================================
+MacroNode Template Catalog — parameterised topology patterns.
+
+Each template defines a reusable multi-agent topology pattern with:
+  - **Slots** — named agent positions (filled from the Global roster)
+  - **Config** — loop count, end-agent, topology variation, etc.
+  - **Builder** — function that takes filled slots + config → topology rows
+
+Templates are listed by Nexus via ``list_templates()`` and filled via
+``fill_template()`` which saves the resulting MacroNode to the registry.
+
+Legacy ``expand_macro()`` is retained for backward-compatible MACRO: prefix
+interception in topology.csv.
+"""
+from __future__ import annotations
+
 import json
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
+
 from maccre_core.utils.path_resolver import get_datacenter_path
-from maccre_core.orchestration.local_broker import LocalMessageBroker
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Template Data Model
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class SlotSpec:
+    """Definition of an agent slot within a template."""
+
+    name: str                    # e.g. "agents", "synthesizer", "judge"
+    description: str             # Human-readable description for Nexus
+    min_agents: int = 1          # Minimum agents that must fill this slot
+    max_agents: int = 1          # Maximum agents allowed in this slot
+
+
+@dataclass
+class ConfigSpec:
+    """Definition of a configurable parameter within a template."""
+
+    name: str                    # e.g. "loop_count", "end_agent", "variation"
+    param_type: str              # "int", "str", "choice"
+    description: str             # Human-readable description for Nexus
+    default: Any = None          # Default value if not specified
+    choices: list[str] = field(default_factory=list)  # Valid choices for "choice" type
+    min_val: int | None = None   # Minimum value for "int" type
+    max_val: int | None = None   # Maximum value for "int" type
+
+
+@dataclass
+class TemplateDefinition:
+    """A MacroNode template — topology pattern with parameterised slots and config."""
+
+    name: str                               # e.g. "cascade", "hologram", "chord", "crucible"
+    description: str                        # Human-readable description
+    slots: list[SlotSpec] = field(default_factory=list)
+    config: list[ConfigSpec] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise for Nexus display (no builder function)."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "slots": [
+                {
+                    "name": s.name,
+                    "description": s.description,
+                    "min_agents": s.min_agents,
+                    "max_agents": s.max_agents,
+                }
+                for s in self.slots
+            ],
+            "config": [
+                {
+                    "name": c.name,
+                    "type": c.param_type,
+                    "description": c.description,
+                    "default": c.default,
+                    "choices": c.choices if c.choices else None,
+                    "min": c.min_val,
+                    "max": c.max_val,
+                }
+                for c in self.config
+            ],
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Silent Instruction Augments
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CASCADE_SEARCH_AUGMENT = """
+[CASCADE DUAL-INDEX SEARCH PROTOCOL]
+You have access to two search indexes. For EVERY research turn you MUST execute both:
+1. PASS 1 — Call `cascade_search` with your research query. This tool automatically
+   performs a primary web search and then a secondary search that EXCLUDES all domains
+   found in the primary results, giving you two non-overlapping source sets.
+2. Combine BOTH result sets into your report. Cite and tag every source.
+Do NOT skip the cascade search. The dual-index protocol is your primary research method.
+"""
+
+_CRUCIBLE_JUDGE_AUGMENT = """
+[CRUCIBLE ROUTING PROTOCOL]
+After reviewing all Advocate submissions, you MUST evaluate each one against your
+professional standards and criteria as defined in your role.
+
+ROUTING COMMANDS (you MUST output exactly one per evaluation):
+- If an Advocate's submission does NOT meet your standards, output on its own line:
+  ROUTE_TO:{node_id} — followed by your detailed critique and revision directives.
+- If ALL submissions meet your standards, output on its own line:
+  ROUTE_TO:ACCEPTED — followed by your synthesis or approval statement.
+
+You may only route to ONE Advocate at a time. Address the weakest submission first.
+Maximum revision rounds remaining: {max_recursion}.
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Template Definitions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+TEMPLATE_CASCADE = TemplateDefinition(
+    name="cascade",
+    description=(
+        "Exclusionary dual-index research conversation. Agents take turns in a "
+        "GroupDialogRunner loop. The first agent in the sequence uses cascade_search "
+        "for dual-index web research (two non-overlapping result sets per turn). "
+        "Configurable loop count, agent ordering, and end-agent."
+    ),
+    slots=[
+        SlotSpec(
+            name="agents",
+            description="Research and conversation agents (order matters — first agent gets search augment)",
+            min_agents=2,
+            max_agents=3,
+        ),
+    ],
+    config=[
+        ConfigSpec(
+            name="loop_count", param_type="int",
+            description="Number of full conversation cycles",
+            default=3, min_val=1, max_val=20,
+        ),
+        ConfigSpec(
+            name="end_agent", param_type="str",
+            description="Agent name that provides the final output (must be one of the agents)",
+        ),
+        ConfigSpec(
+            name="agent_order", param_type="str",
+            description="Pipe-separated agent ordering (e.g. 'OSINT_Analyst|Regular_Joe')",
+        ),
+    ],
+)
+
+TEMPLATE_HOLOGRAM = TemplateDefinition(
+    name="hologram",
+    description=(
+        "Fan-out + synthesize (one-shot). Payload is sent to N facet agents in parallel. "
+        "All responses are gathered and passed to a single low-temperature synthesizer. "
+        "Each facet agent represents one discipline of a compound intellect."
+    ),
+    slots=[
+        SlotSpec(
+            name="facets",
+            description="Discipline facet agents (each sees the payload independently)",
+            min_agents=2,
+            max_agents=10,
+        ),
+        SlotSpec(
+            name="synthesizer",
+            description="Low-temperature synthesizer agent that combines all facet responses",
+            min_agents=1,
+            max_agents=1,
+        ),
+    ],
+    config=[],
+)
+
+TEMPLATE_CHORD = TemplateDefinition(
+    name="chord",
+    description=(
+        "Fan-out + synthesize with recursion. N participant agents respond to a central "
+        "host. The host synthesizes and sends a report back to all participants. "
+        "Participants cannot see each other's responses — only the host's synthesis. "
+        "This loops for a configurable number of rounds."
+    ),
+    slots=[
+        SlotSpec(
+            name="participants",
+            description="Fan-out participant agents (cannot see each other, only the host)",
+            min_agents=2,
+            max_agents=10,
+        ),
+        SlotSpec(
+            name="host",
+            description="Central host/synthesizer agent that sees all participant responses",
+            min_agents=1,
+            max_agents=1,
+        ),
+    ],
+    config=[
+        ConfigSpec(
+            name="loop_count", param_type="int",
+            description="Number of host→participants→host cycles",
+            default=3, min_val=1, max_val=20,
+        ),
+    ],
+)
+
+TEMPLATE_CRUCIBLE = TemplateDefinition(
+    name="crucible",
+    description=(
+        "Adversarial/refinement GAN with conditional routing. Multiple advocate agents "
+        "build arguments or drafts independently. A judge agent evaluates submissions "
+        "and conditionally routes failures back for revision (the GAN loop). After "
+        "acceptance, a configurable post-acceptance phase runs: 'synthesis' (judge "
+        "synthesizes), 'debate' (GroupDialogRunner between advocates), or 'panel' "
+        "(full round-table discussion). True conditional logic — the judge's own "
+        "instructions define the quality criteria."
+    ),
+    slots=[
+        SlotSpec(
+            name="advocates",
+            description="Agents that build arguments/drafts (each works independently)",
+            min_agents=2,
+            max_agents=10,
+        ),
+        SlotSpec(
+            name="judge",
+            description="Evaluative agent with quality criteria in its instructions (routes failures back)",
+            min_agents=1,
+            max_agents=1,
+        ),
+    ],
+    config=[
+        ConfigSpec(
+            name="max_recursion", param_type="int",
+            description="Maximum times the judge can send advocates back for revision",
+            default=3, min_val=1, max_val=10,
+        ),
+        ConfigSpec(
+            name="variation", param_type="choice",
+            description="Post-acceptance topology mode",
+            default="synthesis",
+            choices=["synthesis", "debate", "panel"],
+        ),
+    ],
+)
+
+# Master catalog — keyed by template name
+TEMPLATE_CATALOG: dict[str, TemplateDefinition] = {
+    "cascade": TEMPLATE_CASCADE,
+    "hologram": TEMPLATE_HOLOGRAM,
+    "chord": TEMPLATE_CHORD,
+    "crucible": TEMPLATE_CRUCIBLE,
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Topology Builders — generate topology rows from filled template config
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_cascade_topology(
+    agent_mapping: dict[str, list[str]],
+    config: dict[str, Any],
+    roster: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build Cascade topology rows.
+
+    Generates a single GroupDialogRunner node where the host is the first agent
+    in the sequence and the remaining agents are dialogue partners.
+    """
+    agents = agent_mapping["agents"]
+    order_str: str = config.get("agent_order", "")
+    if order_str:
+        ordered = [a.strip() for a in order_str.split("|") if a.strip()]
+    else:
+        ordered = list(agents)
+
+    loop_count: int = int(config.get("loop_count", 3))
+    end_agent: str = config.get("end_agent", ordered[-1])
+
+    host_name = ordered[0]
+    partners = ordered[1:]
+    host_profile = roster[host_name]
+
+    macro_id = str(uuid.uuid4())[:8]
+    node_id = f"CASCADE_{macro_id}"
+
+    # The host gets the search augment injected into its system prompt
+    host_system = str(host_profile.get("system_prompt", ""))
+    augmented_system = host_system + "\n" + _CASCADE_SEARCH_AUGMENT
+
+    # Build the tools string: host gets cascade_search + whatever it already has
+    host_tools = str(host_profile.get("tools_allowed", "none"))
+    if host_tools.lower() == "none":
+        host_tools = "cascade_search"
+    elif "cascade_search" not in host_tools:
+        host_tools = f"{host_tools}|cascade_search"
+
+    # Determine dialogue_rounds based on end_agent:
+    # If end_agent is the host, we need loop_count rounds (host speaks last).
+    # If end_agent is a partner, we need loop_count rounds but the final output
+    # is extracted from the last participant turn (handled by FlowRunner).
+    dialogue_rounds = loop_count
+
+    return [{
+        "Node_ID": node_id,
+        "Agent_Name": host_name,
+        "System_Instruction": augmented_system,
+        "Next_Node": "END",
+        "Temperature": str(host_profile.get("temperature", "1.0")),
+        "Output_Format": None,
+        "Wait_For": None,
+        "Fallback_Node": "FAILED",
+        "Max_Retries": 3,
+        "Payload_Path": None,
+        "Is_End_Node": "TRUE",
+        "Timeout_Sec": 0,
+        "Dialogue_Partner": "|".join(partners),
+        "Dialogue_Rounds": dialogue_rounds,
+        "Model_Override": str(host_profile.get("model", "gemini-2.5-flash")),
+        "Tools_Allowed": host_tools,
+        "_end_agent": end_agent,
+        "_template_meta": {"type": "cascade", "ordered_agents": ordered},
+    }]
+
+
+def _build_hologram_topology(
+    agent_mapping: dict[str, list[str]],
+    config: dict[str, Any],
+    roster: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build Hologram topology rows.
+
+    Generates N parallel facet nodes that all point to a single synthesizer node.
+    """
+    facets = agent_mapping["facets"]
+    synthesizer_name = agent_mapping["synthesizer"][0]
+    synth_profile = roster[synthesizer_name]
+
+    macro_id = str(uuid.uuid4())[:8]
+    synth_id = f"HOLO_SYNTH_{macro_id}"
+
+    rows: list[dict[str, Any]] = []
+    facet_ids: list[str] = []
+
+    for facet_name in facets:
+        f_profile = roster[facet_name]
+        f_id = f"HOLO_{facet_name.upper()[:12]}_{macro_id}"
+        facet_ids.append(f_id)
+
+        rows.append({
+            "Node_ID": f_id,
+            "Agent_Name": facet_name,
+            "System_Instruction": str(f_profile.get("system_prompt", "")),
+            "Next_Node": synth_id,
+            "Temperature": str(f_profile.get("temperature", "0.7")),
+            "Output_Format": None,
+            "Wait_For": None,
+            "Fallback_Node": "FAILED",
+            "Max_Retries": 3,
+            "Payload_Path": None,
+            "Is_End_Node": "FALSE",
+            "Timeout_Sec": 0,
+            "Dialogue_Partner": None,
+            "Dialogue_Rounds": 0,
+            "Model_Override": str(f_profile.get("model", "gemini-2.5-flash")),
+            "Tools_Allowed": str(f_profile.get("tools_allowed", "none")),
+        })
+
+    # Synthesizer waits for all facets
+    rows.append({
+        "Node_ID": synth_id,
+        "Agent_Name": synthesizer_name,
+        "System_Instruction": str(synth_profile.get("system_prompt", "")),
+        "Next_Node": "END",
+        "Temperature": "0.3",  # Low temp for synthesis
+        "Output_Format": None,
+        "Wait_For": ",".join(facet_ids),
+        "Fallback_Node": "FAILED",
+        "Max_Retries": 3,
+        "Payload_Path": None,
+        "Is_End_Node": "TRUE",
+        "Timeout_Sec": 0,
+        "Dialogue_Partner": None,
+        "Dialogue_Rounds": 0,
+        "Model_Override": str(synth_profile.get("model", "gemini-2.5-pro")),
+        "Tools_Allowed": str(synth_profile.get("tools_allowed", "none")),
+    })
+
+    return rows
+
+
+def _build_chord_topology(
+    agent_mapping: dict[str, list[str]],
+    config: dict[str, Any],
+    roster: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build Chord topology rows.
+
+    Generates a single GroupDialogRunner node where the host is the central
+    synthesiser and participants are the fan-out agents. Participants cannot
+    see each other — only the host's synthesis.
+    """
+    participants = agent_mapping["participants"]
+    host_name = agent_mapping["host"][0]
+    host_profile = roster[host_name]
+    loop_count: int = int(config.get("loop_count", 3))
+
+    macro_id = str(uuid.uuid4())[:8]
+    node_id = f"CHORD_{macro_id}"
+
+    return [{
+        "Node_ID": node_id,
+        "Agent_Name": host_name,
+        "System_Instruction": str(host_profile.get("system_prompt", "")),
+        "Next_Node": "END",
+        "Temperature": str(host_profile.get("temperature", "0.7")),
+        "Output_Format": None,
+        "Wait_For": None,
+        "Fallback_Node": "FAILED",
+        "Max_Retries": 3,
+        "Payload_Path": None,
+        "Is_End_Node": "TRUE",
+        "Timeout_Sec": 0,
+        "Dialogue_Partner": "|".join(participants),
+        "Dialogue_Rounds": loop_count,
+        "Model_Override": str(host_profile.get("model", "gemini-2.5-flash")),
+        "Tools_Allowed": str(host_profile.get("tools_allowed", "none")),
+        "_template_meta": {"type": "chord", "participants": participants},
+    }]
+
+
+def _build_crucible_topology(
+    agent_mapping: dict[str, list[str]],
+    config: dict[str, Any],
+    roster: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build Crucible topology rows.
+
+    Pre-acceptance: N parallel advocate nodes → 1 judge node with conditional routing.
+    Post-acceptance: varies by ``config["variation"]``.
+    """
+    advocates = agent_mapping["advocates"]
+    judge_name = agent_mapping["judge"][0]
+    judge_profile = roster[judge_name]
+
+    max_recursion: int = int(config.get("max_recursion", 3))
+    variation: str = str(config.get("variation", "synthesis"))
+
+    macro_id = str(uuid.uuid4())[:8]
+    judge_id = f"C_JUDGE_{macro_id}"
+
+    rows: list[dict[str, Any]] = []
+    advocate_ids: list[str] = []
+
+    # ── Advocate nodes (parallel fan-out) ─────────────────────────────────────
+    for adv_name in advocates:
+        a_profile = roster[adv_name]
+        a_id = f"C_ADV_{adv_name.upper()[:12]}_{macro_id}"
+        advocate_ids.append(a_id)
+
+        rows.append({
+            "Node_ID": a_id,
+            "Agent_Name": adv_name,
+            "System_Instruction": str(a_profile.get("system_prompt", "")),
+            "Next_Node": judge_id,
+            "Temperature": str(a_profile.get("temperature", "1.0")),
+            "Output_Format": None,
+            "Wait_For": None,
+            "Fallback_Node": "FAILED",
+            "Max_Retries": max_recursion,
+            "Payload_Path": None,
+            "Is_End_Node": "FALSE",
+            "Timeout_Sec": 0,
+            "Dialogue_Partner": None,
+            "Dialogue_Rounds": 0,
+            "Model_Override": str(a_profile.get("model", "gemini-2.5-flash")),
+            "Tools_Allowed": str(a_profile.get("tools_allowed", "none")),
+        })
+
+    # ── Build node-id map for the routing augment ─────────────────────────────
+    adv_id_map = ", ".join(f"{aid} ({advocates[i]})" for i, aid in enumerate(advocate_ids))
+    judge_augment = _CRUCIBLE_JUDGE_AUGMENT.format(
+        node_id="{" + adv_id_map + "}",
+        max_recursion=max_recursion,
+    )
+    judge_system = str(judge_profile.get("system_prompt", "")) + "\n" + judge_augment
+
+    # ── Post-acceptance target ────────────────────────────────────────────────
+    if variation == "debate":
+        post_id = f"C_DEBATE_{macro_id}"
+    elif variation == "panel":
+        post_id = f"C_PANEL_{macro_id}"
+    else:
+        # synthesis — judge IS the final node
+        post_id = "END"
+
+    # ── Judge node (conditional gate) ─────────────────────────────────────────
+    rows.append({
+        "Node_ID": judge_id,
+        "Agent_Name": judge_name,
+        "System_Instruction": judge_system,
+        "Next_Node": post_id,
+        "Temperature": "0.2",  # Low temp for evaluation
+        "Output_Format": None,
+        "Wait_For": ",".join(advocate_ids),
+        "Fallback_Node": "FAILED",
+        "Max_Retries": max_recursion,
+        "Payload_Path": None,
+        "Is_End_Node": "TRUE" if post_id == "END" else "FALSE",
+        "Timeout_Sec": 0,
+        "Dialogue_Partner": None,
+        "Dialogue_Rounds": 0,
+        "Model_Override": str(judge_profile.get("model", "gemini-2.5-pro")),
+        "Tools_Allowed": str(judge_profile.get("tools_allowed", "none")),
+        "_conditional_routing": True,
+        "_advocate_ids": advocate_ids,
+    })
+
+    # ── Post-acceptance variations ────────────────────────────────────────────
+    if variation == "debate":
+        # Host (judge) facilitates a GroupDialogRunner between advocates
+        rows.append({
+            "Node_ID": post_id,
+            "Agent_Name": judge_name,
+            "System_Instruction": (
+                str(judge_profile.get("system_prompt", ""))
+                + "\n\n[POST-ACCEPTANCE DEBATE] All submissions have been accepted. "
+                "Now facilitate a structured debate. Pose challenging questions and "
+                "drive the discussion toward a final synthesis."
+            ),
+            "Next_Node": "END",
+            "Temperature": "0.5",
+            "Output_Format": None,
+            "Wait_For": judge_id,
+            "Fallback_Node": "FAILED",
+            "Max_Retries": 3,
+            "Payload_Path": None,
+            "Is_End_Node": "TRUE",
+            "Timeout_Sec": 0,
+            "Dialogue_Partner": "|".join(advocates),
+            "Dialogue_Rounds": 2,
+            "Model_Override": str(judge_profile.get("model", "gemini-2.5-pro")),
+            "Tools_Allowed": str(judge_profile.get("tools_allowed", "none")),
+        })
+    elif variation == "panel":
+        # All advocates + judge do a GroupDialogRunner round-table
+        all_panel = list(advocates)
+        rows.append({
+            "Node_ID": post_id,
+            "Agent_Name": judge_name,
+            "System_Instruction": (
+                str(judge_profile.get("system_prompt", ""))
+                + "\n\n[PANEL ROUND-TABLE] All submissions have been accepted. "
+                "Facilitate a collaborative round-table discussion with all "
+                "advocates. Drive toward a unified final synthesis."
+            ),
+            "Next_Node": "END",
+            "Temperature": "0.5",
+            "Output_Format": None,
+            "Wait_For": judge_id,
+            "Fallback_Node": "FAILED",
+            "Max_Retries": 3,
+            "Payload_Path": None,
+            "Is_End_Node": "TRUE",
+            "Timeout_Sec": 0,
+            "Dialogue_Partner": "|".join(all_panel),
+            "Dialogue_Rounds": 2,
+            "Model_Override": str(judge_profile.get("model", "gemini-2.5-pro")),
+            "Tools_Allowed": str(judge_profile.get("tools_allowed", "none")),
+        })
+
+    return rows
+
+
+# ── Builder dispatch ──────────────────────────────────────────────────────────
+
+_BUILDERS: dict[str, Any] = {
+    "cascade": _build_cascade_topology,
+    "hologram": _build_hologram_topology,
+    "chord": _build_chord_topology,
+    "crucible": _build_crucible_topology,
+}
+
+
+def build_from_template(
+    template_type: str,
+    agent_mapping: dict[str, list[str]],
+    config: dict[str, Any],
+    roster: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build topology rows from a template.
+
+    Args:
+        template_type: One of 'cascade', 'hologram', 'chord', 'crucible'.
+        agent_mapping: Dict mapping slot names to lists of roster agent names.
+        config: Template-specific configuration parameters.
+        roster: Dict of agent_name → agent profile dicts (from roster_loader).
+
+    Returns:
+        List of topology row dicts ready to save to the registry.
+
+    Raises:
+        KeyError: If template_type is unknown.
+        ValueError: If validation fails (missing agents, bad config, etc.).
+    """
+    builder = _BUILDERS.get(template_type)
+    if not builder:
+        raise KeyError(f"Unknown template type: '{template_type}'. Available: {list(_BUILDERS)}")
+
+    template = TEMPLATE_CATALOG[template_type]
+
+    # ── Validate slots ────────────────────────────────────────────────────────
+    for slot in template.slots:
+        agents_in_slot = agent_mapping.get(slot.name, [])
+        if len(agents_in_slot) < slot.min_agents:
+            raise ValueError(
+                f"Slot '{slot.name}' requires at least {slot.min_agents} agent(s), "
+                f"got {len(agents_in_slot)}"
+            )
+        if len(agents_in_slot) > slot.max_agents:
+            raise ValueError(
+                f"Slot '{slot.name}' allows at most {slot.max_agents} agent(s), "
+                f"got {len(agents_in_slot)}"
+            )
+        # Verify all agents exist in the roster
+        for agent_name in agents_in_slot:
+            if agent_name not in roster:
+                raise ValueError(f"Agent '{agent_name}' not found in the Global roster.")
+
+    # ── Validate config ───────────────────────────────────────────────────────
+    for cfg in template.config:
+        val = config.get(cfg.name, cfg.default)
+        if val is None and cfg.default is None:
+            raise ValueError(f"Config '{cfg.name}' is required for template '{template_type}'.")
+        if cfg.param_type == "int" and val is not None:
+            val = int(val)
+            if cfg.min_val is not None and val < cfg.min_val:
+                raise ValueError(f"Config '{cfg.name}' minimum is {cfg.min_val}, got {val}.")
+            if cfg.max_val is not None and val > cfg.max_val:
+                raise ValueError(f"Config '{cfg.name}' maximum is {cfg.max_val}, got {val}.")
+        if cfg.param_type == "choice" and cfg.choices and val not in cfg.choices:
+            raise ValueError(f"Config '{cfg.name}' must be one of {cfg.choices}, got '{val}'.")
+
+    return builder(agent_mapping, config, roster)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Legacy expand_macro() — backward-compatible MACRO: prefix interception
+# ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _register_ephemeral_nodes(nodes: dict[str, dict[str, Any]]) -> None:
-    """Writes the generated macro nodes to 02_Dynamic_Context/ephemeral_macros.json."""
+    """Writes generated macro nodes to 02_Dynamic_Context/ephemeral_macros.json."""
     ephemeral_path = get_datacenter_path("02_Dynamic_Context", "ephemeral_macros.json")
     try:
         if ephemeral_path.exists():
-            with open(ephemeral_path, "r", encoding="utf-8") as f:
+            with open(ephemeral_path, encoding="utf-8") as f:
                 data = json.load(f)
         else:
             data = {}
-    except Exception:
+    except Exception:  # noqa: BLE001
         data = {}
-    
+
     data.update(nodes)
-    
+
     with open(ephemeral_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
 
 def expand_macro(
     agent_name: str,
@@ -28,237 +691,96 @@ def expand_macro(
     job_id: str,
     payload_path: str,
     source_payload_path: str,
-    broker: LocalMessageBroker,
-    row_id: int
+    broker: Any,
+    row_id: int,
 ) -> None:
+    """Expand a MACRO: agent into ephemeral tasks.
+
+    First attempts to load the macro from the macronode_registry.db.
+    Falls back to a clear error if the type is unknown.
     """
-    Expands a MACRO: agent into a cluster of ephemeral tasks in the SQLite queue.
-    """
+    from maccre_core.macronode_registry import get_macronode_store  # noqa: PLC0415
+
     macro_type = agent_name.split(":", 1)[1].strip()
-    
-    # Generate a unique ID for this macro instance to prevent collisions
-    # between multiple macro executions of the same type.
-    macro_id = str(uuid.uuid4())[:8]
-    ephemeral_nodes = {}
-    next_nodes_to_queue = []
-    
     print(f"[MACRO_FACTORY] Intercepted MACRO request: '{macro_type}'. Expanding...")
-    
-    if macro_type.lower() == "hologram-academic":
-        variants = ["Historian", "Sociologist", "Economist", "Scientist", "Engineer"]
-        variant_node_ids = []
-        
-        for variant in variants:
-            v_id = f"HOLO_{variant.upper()}_{macro_id}"
-            variant_node_ids.append(v_id)
-            ephemeral_nodes[v_id] = {
-                "prompt": f"You are a {variant}. Analyze the source document strictly from the perspective of your discipline.",
+
+    # ── Try loading from registry ─────────────────────────────────────────────
+    try:
+        store = get_macronode_store("GLOBAL")
+        macro = store.load(macro_type)
+        topology_rows = macro.get("topology_rows", [])
+
+        if not topology_rows:
+            print(f"[MACRO_FACTORY] Registry entry '{macro_type}' has no topology rows.")
+            broker.route_task(row_id, job_id, "FAILED", payload_path, source_payload_path=source_payload_path)
+            return
+
+        macro_id = str(uuid.uuid4())[:8]
+        ephemeral_nodes: dict[str, dict[str, Any]] = {}
+        first_nodes: list[str] = []
+
+        for row in topology_rows:
+            # Rewrite Node_IDs with unique macro_id to prevent collisions
+            orig_id = str(row.get("Node_ID", ""))
+            new_id = f"{orig_id}_{macro_id}"
+            node_next = str(row.get("Next_Node", "END"))
+
+            # If Next_Node references another node in this macro, rewrite it too
+            # If it's "END", wire to the downstream next_node
+            if node_next.upper() == "END":
+                resolved_next = next_node
+            else:
+                resolved_next = f"{node_next}_{macro_id}"
+
+            ephemeral_nodes[new_id] = {
+                "prompt": str(row.get("System_Instruction", "")),
                 "artifact_path": "",
-                "next_node_success": f"HOLO_SYNTH_{macro_id}",
+                "next_node_success": resolved_next,
                 "next_node_failure": "FAILED",
-                "wait_for": "none",
-                "temperature": 0.7,
-                "tools_allowed": "none",
-                "model": "gemini-2.5-flash",
-                "agent_name": f"Holo_{variant}",
-                "max_recursion": 3,
-                "agent": f"Holo_{variant}",
+                "wait_for": _rewrite_wait_for(str(row.get("Wait_For", "") or ""), macro_id),
+                "temperature": float(row.get("Temperature", "0.7")),
+                "tools_allowed": str(row.get("Tools_Allowed", "none")),
+                "model": str(row.get("Model_Override", "gemini-2.5-flash")),
+                "agent_name": str(row.get("Agent_Name", orig_id)),
+                "agent": str(row.get("Agent_Name", orig_id)),
+                "max_recursion": int(row.get("Max_Retries", 3)),
             }
-            next_nodes_to_queue.append(v_id)
-            
-        synth_id = f"HOLO_SYNTH_{macro_id}"
-        wait_for_str = ",".join(variant_node_ids)
-        ephemeral_nodes[synth_id] = {
-            "prompt": "You are the Hologram Synthesizer. Review the perspectives of the Academic variants and synthesize a unified final report.",
-            "artifact_path": "",
-            "next_node_success": next_node,
-            "next_node_failure": "FAILED",
-            "wait_for": wait_for_str,
-            "temperature": 0.5,
-            "tools_allowed": "none",
-            "model": "gemini-2.5-pro",
-            "agent_name": "Holo_Synthesizer",
-            "max_recursion": 3,
-            "agent": "Holo_Synthesizer",
-        }
-        
-    elif macro_type.lower() == "cascade-osint3x":
-        t1_id = f"CASC_T1_{macro_id}"
-        t2_id = f"CASC_T2_{macro_id}"
-        t3_id = f"CASC_T3_{macro_id}"
-        synth_id = f"CASC_SYNTH_{macro_id}"
-        
-        base_osint = (
-            "**SYSTEM ROLE:**\n"
-            "You are a Senior Open-Source Intelligence (OSINT) Analyst and Epistemic Synthesizer. Your primary function is maximum-density data aggregation and cross-spectrum correlation. You operate under strict 'Epistemic Neutrality'—meaning your job is to map the entire information landscape surrounding a topic without applying moral, political, or institutional filters to the data collection phase.\n\n"
-            "**OPERATIONAL DIRECTIVES:**\n"
-            "1. **Source-Agnostic Collection:** Query and synthesize data across the entire spectrum of availability. Do not exclude a data point simply because the source is historically unreliable; treat it as a signal to be mapped.\n"
-            "2. **Unvarnished Synthesis:** Report exactly what is being claimed. Do not soften, sanitize, or dilute.\n"
-            "3. **Objective Weighting:** Assess the validity and bias of every source, but use this *only* to append a metadata tag (e.g., [MSM], [AltMedia], [Social Media], or [Fringe])—never to omit information.\n"
-            "4. **Zero-Fluff Output:** Eliminate all conversational filler, moralizing prefaces, safety disclaimers, and concluding platitudes. Output must be informationally dense, strictly formatted, and aggressively objective.\n"
-            "5. **Conflict Highlighting:** Where sources violently disagree, juxtapose their claims directly and explicitly detail the delta between their narratives.\n"
-            "6. **Full Citation:** You MUST include the full URLs and hyper-links for every source you reference in your final report. Always provide the web link."
+
+            # Dialogue fields
+            dp = row.get("Dialogue_Partner")
+            if dp:
+                ephemeral_nodes[new_id]["dialogue_partner"] = str(dp)
+                ephemeral_nodes[new_id]["dialogue_rounds"] = int(row.get("Dialogue_Rounds", 0))
+
+            # Track first nodes (no Wait_For dependency)
+            wait = str(row.get("Wait_For", "") or "").strip()
+            if not wait or wait.lower() == "none":
+                first_nodes.append(new_id)
+
+        _register_ephemeral_nodes(ephemeral_nodes)
+
+        next_node_str = ",".join(first_nodes) if first_nodes else list(ephemeral_nodes.keys())[0]
+        print(f"[MACRO_FACTORY] Spawned {len(ephemeral_nodes)} ephemeral nodes from registry. Queueing: {next_node_str}")
+        broker.route_task(
+            row_id, job_id, next_node_str, payload_path,
+            actual_cost=0.0, source_payload_path=source_payload_path,
         )
-        
-        ephemeral_nodes[t1_id] = {
-            "prompt": base_osint + "\n\n**TIER 1 DIRECTIVE:** Conduct the initial broad sweep of the source payload. Use google_search to verify and expand on the claims.",
-            "artifact_path": "",
-            "next_node_success": t2_id,
-            "next_node_failure": "FAILED",
-            "wait_for": "none",
-            "temperature": 1.0,
-            "tools_allowed": "google_search",
-            "model": "gemini-2.5-flash",
-            "agent_name": "OSINT_Tier1",
-            "max_recursion": 3,
-            "agent": "OSINT_Tier1",
-        }
-        
-        ephemeral_nodes[t2_id] = {
-            "prompt": base_osint + "\n\n**TIER 2 DIRECTIVE:** Review Tier 1's findings. Dig deeper into ignored areas of the source payload using google_search. YOU MUST EXCLUDE all sources and information already found in the first report.",
-            "artifact_path": "",
-            "next_node_success": t3_id,
-            "next_node_failure": "FAILED",
-            "wait_for": t1_id,
-            "temperature": 1.5,
-            "tools_allowed": "google_search",
-            "model": "gemini-2.5-flash",
-            "agent_name": "OSINT_Tier2",
-            "max_recursion": 3,
-            "agent": "OSINT_Tier2",
-        }
-        
-        ephemeral_nodes[t3_id] = {
-            "prompt": base_osint + "\n\n**TIER 3 DIRECTIVE:** Review Tier 1 and 2's findings. Identify missing links and conduct a final deep investigation using google_search. YOU MUST EXCLUDE all sources and information already found in the previous two reports.",
-            "artifact_path": "",
-            "next_node_success": synth_id,
-            "next_node_failure": "FAILED",
-            "wait_for": t2_id,
-            "temperature": 2.0,
-            "tools_allowed": "google_search",
-            "model": "gemini-2.5-flash",
-            "agent_name": "OSINT_Tier3",
-            "max_recursion": 3,
-            "agent": "OSINT_Tier3",
-        }
-        
-        ephemeral_nodes[synth_id] = {
-            "prompt": "You are the Cascade Synthesizer. Review all three tiers of OSINT findings and compile a comprehensive final intelligence report.",
-            "artifact_path": "04_Code_Artifacts/{job_id}/cascade_synthesis_" + synth_id + ".md",
-            "next_node_success": next_node,
-            "next_node_failure": "FAILED",
-            "wait_for": t3_id,
-            "temperature": 0.3,
-            "tools_allowed": "none",
-            "model": "gemini-2.5-pro",
-            "agent_name": "OSINT_Synthesizer",
-            "max_recursion": 3,
-            "agent": "OSINT_Synthesizer",
-        }
-        next_nodes_to_queue.append(t1_id)
-        
-    elif macro_type.lower() == "chord-topperwriter-gretchen3x":
-        w1_id = f"CHORD_W1_{macro_id}"
-        e1_id = f"CHORD_E1_{macro_id}"
-        w2_id = f"CHORD_W2_{macro_id}"
-        e2_id = f"CHORD_E2_{macro_id}"
-        w3_id = f"CHORD_W3_{macro_id}"
-        e3_id = f"CHORD_E3_{macro_id}"
-        
-        # Loop unrolled to guarantee the 3x Draft -> Editor -> Draft cycle.
-        ephemeral_nodes[w1_id] = {
-            "prompt": "You are TopperWriter. Draft the initial content based on the source document.",
-            "next_node_success": e1_id, "wait_for": "none", "temperature": 1.0, "model": "gemini-2.5-flash", "agent": "TopperWriter"
-        }
-        ephemeral_nodes[e1_id] = {
-            "prompt": "You are Gretchen (Editor). Review the draft. Provide strict, actionable feedback.",
-            "next_node_success": w2_id, "wait_for": w1_id, "temperature": 0.3, "model": "gemini-2.5-flash", "agent": "Gretchen"
-        }
-        ephemeral_nodes[w2_id] = {
-            "prompt": "You are TopperWriter. Revise your draft based strictly on Gretchen's feedback.",
-            "next_node_success": e2_id, "wait_for": e1_id, "temperature": 0.8, "model": "gemini-2.5-flash", "agent": "TopperWriter"
-        }
-        ephemeral_nodes[e2_id] = {
-            "prompt": "You are Gretchen (Editor). Review the 2nd draft. Provide strict, actionable feedback.",
-            "next_node_success": w3_id, "wait_for": w2_id, "temperature": 0.3, "model": "gemini-2.5-flash", "agent": "Gretchen"
-        }
-        ephemeral_nodes[w3_id] = {
-            "prompt": "You are TopperWriter. Apply the final round of edits based on Gretchen's latest feedback.",
-            "next_node_success": e3_id, "wait_for": e2_id, "temperature": 0.8, "model": "gemini-2.5-flash", "agent": "TopperWriter"
-        }
-        ephemeral_nodes[e3_id] = {
-            "prompt": "You are Gretchen (Synthesizer). This is the final pass. Produce the perfect, polished final draft.",
-            "artifact_path": "04_Code_Artifacts/{job_id}/chord_final_draft_" + e3_id + ".md",
-            "next_node_success": next_node, "wait_for": w3_id, "temperature": 0.1, "model": "gemini-2.5-pro", "agent": "Gretchen_Synthesizer"
-        }
-        
-        for k in ephemeral_nodes:
-            ephemeral_nodes[k].setdefault("artifact_path", "")
-            ephemeral_nodes[k]["next_node_failure"] = "FAILED"
-            ephemeral_nodes[k]["tools_allowed"] = "none"
-            ephemeral_nodes[k]["max_recursion"] = 3
-            ephemeral_nodes[k]["agent_name"] = ephemeral_nodes[k]["agent"]
-            
-        next_nodes_to_queue.append(w1_id)
-        
-    elif macro_type.lower() == "crucible":
-        opt_id = f"C_OPT_{macro_id}"
-        pess_id = f"C_PESS_{macro_id}"
-        mag_id = f"C_MAG_{macro_id}"
-        deb_id = f"C_DEB_{macro_id}"
-        jury_id = f"C_JURY_{macro_id}"
-        
-        ephemeral_nodes[opt_id] = {
-            "prompt": "You are the Optimist Advocate. Read the source payload. Build the absolute strongest, most rigorous case FOR the premise. If you received feedback from the Magistrate, you must rewrite your argument to address all critiques.",
-            "next_node_success": mag_id, "wait_for": "none", "temperature": 1.0, "model": "gemini-2.5-flash", "agent": "Crucible_Optimist"
-        }
-        ephemeral_nodes[pess_id] = {
-            "prompt": "You are the Pessimist Advocate. Read the source payload. Build the absolute strongest, most rigorous case AGAINST the premise. If you received feedback from the Magistrate, you must rewrite your argument to address all critiques.",
-            "next_node_success": mag_id, "wait_for": "none", "temperature": 1.0, "model": "gemini-2.5-flash", "agent": "Crucible_Pessimist"
-        }
-        ephemeral_nodes[mag_id] = {
-            "prompt": (
-                "You are the Crucible Magistrate. Review the arguments from the Optimist and Pessimist in the Gathered Artifact blocks. "
-                "Score each argument on a scale of 0 to 100 based on logical rigor, exhaustiveness, and evidence.\n\n"
-                "CONDITIONAL ROUTING RULES:\n"
-                f"1. If the Optimist scores below 90, you MUST output: ROUTE_TO:{opt_id} along with strict critique.\n"
-                f"2. If the Pessimist scores below 90, you MUST output: ROUTE_TO:{pess_id} along with strict critique.\n"
-                "3. If BOTH score 90 or above, accept the arguments and output: ROUTE_TO:STOP (The engine will automatically proceed to the debate).\n"
-                "You may only route to one node at a time. Pick the weakest argument to revise first if both fail."
-            ),
-            "next_node_success": deb_id, "wait_for": f"{opt_id},{pess_id}", "temperature": 0.2, "model": "gemini-2.5-pro", "agent": "Crucible_Magistrate"
-        }
-        ephemeral_nodes[deb_id] = {
-            "prompt": "You are the Crucible Host. The Magistrate has approved both arguments. Open the debate by summarizing the core conflict in two sentences, then pose a challenging question to both the Optimist and Pessimist.",
-            "next_node_success": jury_id, "wait_for": mag_id, "temperature": 0.8, "model": "gemini-2.5-flash", "agent": "Crucible_Host",
-            "dialogue_partner": "Crucible_Optimist|Crucible_Pessimist",
-            "dialogue_rounds": 2
-        }
-        ephemeral_nodes[jury_id] = {
-            "prompt": "You are the Crucible Jury. Read the full debate transcript. Deliver a final, binding synthesis and verdict. Which side won the debate and why? What is the undeniable truth synthesized from both perspectives?",
-            "artifact_path": "04_Code_Artifacts/{job_id}/crucible_verdict_" + jury_id + ".md",
-            "next_node_success": next_node, "wait_for": deb_id, "temperature": 0.4, "model": "gemini-2.5-pro", "agent": "Crucible_Jury"
-        }
-        
-        for k in ephemeral_nodes:
-            ephemeral_nodes[k].setdefault("artifact_path", "")
-            ephemeral_nodes[k]["next_node_failure"] = "FAILED"
-            ephemeral_nodes[k]["tools_allowed"] = "none"
-            ephemeral_nodes[k]["max_recursion"] = 5  # Give the loop some breathing room
-            ephemeral_nodes[k]["agent_name"] = ephemeral_nodes[k]["agent"]
-            
-        next_nodes_to_queue.extend([opt_id, pess_id])
-        
-    else:
-        print(f"[MACRO_FACTORY] Unknown macro type: {macro_type}")
-        broker.route_task(row_id, job_id, "FAILED", payload_path, source_payload_path=source_payload_path)
         return
 
-    # 1. Register ephemeral configs to JSON
-    _register_ephemeral_nodes(ephemeral_nodes)
-    
-    # 2. Complete the intercept node and inject the first node(s) of the macro
-    next_node_str = ",".join(next_nodes_to_queue)
-    print(f"[MACRO_FACTORY] Spawned {len(ephemeral_nodes)} ephemeral nodes. Queueing: {next_node_str}")
-    broker.route_task(row_id, job_id, next_node_str, payload_path, actual_cost=0.0, source_payload_path=source_payload_path)
+    except KeyError:
+        # Not in registry — fall through to error
+        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"[MACRO_FACTORY] Registry lookup failed: {exc}")
 
+    # ── Unknown type ──────────────────────────────────────────────────────────
+    print(f"[MACRO_FACTORY] Unknown macro type: {macro_type}")
+    broker.route_task(row_id, job_id, "FAILED", payload_path, source_payload_path=source_payload_path)
+
+
+def _rewrite_wait_for(wait_for: str, macro_id: str) -> str:
+    """Rewrite comma-separated Wait_For node IDs with the macro_id suffix."""
+    if not wait_for or wait_for.lower() == "none":
+        return "none"
+    parts = [f"{p.strip()}_{macro_id}" for p in wait_for.split(",") if p.strip()]
+    return ",".join(parts)

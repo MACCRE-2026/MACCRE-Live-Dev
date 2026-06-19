@@ -119,7 +119,7 @@ from maccre_core.tools.sync_tools import (
     import_project_nuggets,
     list_project_nuggets,
 )
-from maccre_core.tools.web_tools import search_web, read_url_content
+from maccre_core.tools.web_tools import search_web, read_url_content, cascade_search
 from maccre_core.tools.hybrid_search import execute_hybrid_synthesis
 from maccre_core.tools.notebook_ingest import scout_archive_themes, execute_archive_ingestion
 
@@ -194,6 +194,7 @@ TOOL_DISPATCHER: Dict[str, Callable[..., Any]] = {
     # ── Web Access (OSINT / NewsNexus) ────────────────────────────────────
     "search_web":                 search_web,
     "read_url_content":           read_url_content,
+    "cascade_search":             cascade_search,
     "execute_hybrid_synthesis":   execute_hybrid_synthesis,
     # ── NotebookLM Ingestion ──────────────────────────────────────────────
     "scout_archive_themes":       scout_archive_themes,

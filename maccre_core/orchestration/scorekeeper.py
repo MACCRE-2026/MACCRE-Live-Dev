@@ -12,6 +12,7 @@ class ConversationState:
     speaker_turns: dict[str, int] = field(default_factory=dict)
     topic_momentum: dict[str, float] = field(default_factory=dict)
     tension_level: float = 0.0
+    agent_tension: dict[str, float] = field(default_factory=dict)
     silence_duration_ms: int = 0
     last_speaker: str = "System"
     pending_interrupts: list[str] = field(default_factory=list)
@@ -36,6 +37,11 @@ class ScoreKeeper:
         # Natural decay of tension during silence
         if self.state.tension_level > 0:
             self.state.tension_level = max(0.0, self.state.tension_level - 0.01)
+            
+        # Decay individual agent tensions
+        for agent in list(self.state.agent_tension.keys()):
+            if self.state.agent_tension[agent] > 0:
+                self.state.agent_tension[agent] = max(0.0, self.state.agent_tension[agent] - 0.02)
 
     def evaluate_interruption(self, agent_name: str, dominance: float, interrupt_threshold: float, topic_affinity_match: float) -> bool:
         """
@@ -59,3 +65,4 @@ class ScoreKeeper:
         
         # Bump or lower tension based on the content of the speech
         self.state.tension_level = min(1.0, max(0.0, self.state.tension_level + tension_modifier))
+        self.state.agent_tension[speaker] = min(1.0, self.state.agent_tension.get(speaker, 0.0) + 0.3 + tension_modifier)

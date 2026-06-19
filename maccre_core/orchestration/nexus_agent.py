@@ -13,7 +13,10 @@ from typing import Any, Callable
 from maccre_core._net.gemini_client import GeminiClient, GeminiResponse
 from maccre_core.orchestration.windows_vault import get_native_credential
 from maccre_core.tools.admin_tools import mint_agent, build_topology
-from maccre_core.tools.macro_nodes import save_macro_node, list_macro_nodes, fetch_macro_node
+from maccre_core.tools.macro_nodes import (
+    save_macro_node, list_macro_nodes, fetch_macro_node,
+    list_templates, fill_template,
+)
 from maccre_core.utils.path_resolver import get_maccre_root
 from maccre_core.memory.sovereign_store import SovereignPinStore
 import datetime
@@ -153,6 +156,44 @@ _NEXUS_TOOLS: list[dict[str, Any]] = [
                 "name": {"type": "STRING", "description": "The name of the macro node to fetch."}
             },
             "required": ["name"]
+        }
+    },
+    {
+        "name": "list_templates",
+        "description": "Returns all available MacroNode templates with their slot descriptions and configurable parameters. Use this when the user wants to create a MacroNode from a proven topology pattern.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {}
+        }
+    },
+    {
+        "name": "fill_template",
+        "description": "Fills a MacroNode template with agents from the Global roster and saves the result to the registry. Use this after listing templates and selecting agents.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "template_type": {
+                    "type": "STRING",
+                    "description": "Template name: 'cascade', 'hologram', 'chord', or 'crucible'."
+                },
+                "name": {
+                    "type": "STRING",
+                    "description": "Name for the saved MacroNode (e.g., 'Cascade-OSINTx3')."
+                },
+                "description": {
+                    "type": "STRING",
+                    "description": "Human description of what this MacroNode does."
+                },
+                "agent_mapping": {
+                    "type": "STRING",
+                    "description": "JSON string mapping slot names to agent lists. Example: {\"agents\": [\"OSINT_Analyst\", \"Regular_Joe\"]}"
+                },
+                "config": {
+                    "type": "STRING",
+                    "description": "JSON string of template config. Example: {\"loop_count\": 3, \"end_agent\": \"Regular_Joe\"}"
+                }
+            },
+            "required": ["template_type", "name", "description", "agent_mapping"]
         }
     },
     {
@@ -317,9 +358,24 @@ class NexusAgent:
                 
             elif name == "list_macro_nodes":
                 return list_macro_nodes()
-                
+
             elif name == "fetch_macro_node":
                 return fetch_macro_node(args["name"])
+
+            elif name == "list_templates":
+                return list_templates()
+
+            elif name == "fill_template":
+                import json as _json
+                mapping = _json.loads(args["agent_mapping"]) if isinstance(args["agent_mapping"], str) else args["agent_mapping"]
+                cfg = _json.loads(args.get("config", "{}")) if isinstance(args.get("config", "{}"), str) else args.get("config", {})
+                return fill_template(
+                    template_type=args["template_type"],
+                    name=args["name"],
+                    description=args["description"],
+                    agent_mapping=mapping,
+                    config=cfg,
+                )
 
             elif name == "list_datacenter_projects":
                 from maccre_core.workbook_data import load_project_names

@@ -148,7 +148,7 @@ class LocalMessageBroker:
                 try:
                     config: dict[str, Any] = topology_engine.get_node_config(node_id)
                     wait_for_str: str = config.get("wait_for", "none")
-                except ValueError:
+                except Exception:
                     wait_for_str = "none"
 
                 # Gather Gate: skip if any upstream prerequisite is not yet completed

@@ -1,0 +1,102 @@
+[
+  {
+    "role": "user",
+    "parts": [
+      {
+        "text": "Build a Cascade MacroNode called \"OSINT_Research_x3\". Use OSINT_Analyst as the first agent and Regular_Joe as the second. 3 loop cycles. OSINT_Analyst should provide the final output."
+      }
+    ]
+  },
+  {
+    "role": "model",
+    "parts": [
+      {
+        "functionCall": {
+          "name": "list_templates",
+          "args": {},
+          "id": "qamn5aqg"
+        },
+        "thoughtSignature": "EskICsYIAQw51sdKVdETNz06GQ+PizQYYCviA1TzCWBoUeq9HE53MU61yDUxeZeV0NxRipb6JitokLwVeEy515UN33zNF+u+3ljFdbW6wH/SjOvuRzGrPqd3QjpSqkTKrv5wc4tHKLcn5ieKWHaz6eWT1ACSKj0iDB/2SOPvAIhIWfFp+aw0U0vjGe8KFqBgSMVT4raXSHzehRgGhVKMzU7c9i161Hth+b8ZbCMHygZM1NmpTs3Q4d20By0R4QWZmBndvK1VWYj5WMIOpKTnlcLsSF5hwnFKoP/C4zAGA7D3yx3/f8CQks5WygIYHj//emb3gU6/Ccc/hH3skKkw9PhlJlwoH+oeTz716jwd0yOcOSS5+7fe9lueEWn1GkJU5hpSxJeRAhiMSwxD57OD6oe5RTSRz34J3ZbvewVWLXCEV1izzu5I4q7Gf0/5dBrTPKIGvEmApLqOimvChEVtKB0JBNvWdDHQ5ttZ0Yncd6UNWD6NFMIfeGr6kCb9UFJYyQp9TQwLf7Rw9DM+MVe5T9ns2wqzC+UkD0CoK6mUWSDGjez/wyieCPhDW5tC5zm5Kdrlv+Twc1q0CIl4BN5yvjf1QFSCbK5YNG9n4OqDhPplzoAPShj12KiWd+6wWtxYwtI7khCQZRlcpVSwdQwuB42ZXZJLig2vRteeRTlRhMRwhUnqZwqtUc+GXL0eOhKdx4suMVQ1x3iAD1eDkXHpgAda3COUUkfO1XBc743Wt+aNB7rNkU0S59mfZhP9sIl+3OM/MkXpEGlFaZXU0Rkkeq6YZByIFuLE48E7FSO4RolMFIe1+kfAiS1G1I0vTyimu5qcJHcxsFZ1apOzTZ0/BWcWIkEXco14rkV+xeDpQ8+yCuFB3Ga9ssqIYDDpmlY8WSqoSUO3OoHEooVtxEZ+r+pNdHsfVV3ICSAoSnO3QExpuyUJmoqihBNqUzrQTOIRswKS0segDFPGvFMV5SgM5IKb1gRZ11n7fpJXg+M9NoU5vAkb6hdkW5y7SVrJLXUSu+iGgGSi9+qVTrUNFgqn7c3CAMDBCq7b01+auN8etOUixnNOSoZK8/E8Cpw/g2HrWzlG0dPO4I7Ms24LN1QF2lVFdFjLLLkZS92wPXoDniHNfkY46qzKUQPPHcslhb5YerBGNevIeIo6X57RZiR79/o1DW7TjFtjTGIzThrhFoNbq6sPEQDzsVbkpshiB//U8hBVBaY8k1xTGkBez3qAR4uyMowgzITKr3HMkYSVZhoBt+WnTDi9mrge9xUGMULQHyShMpKzffZcKdnvmtRAE7UjVz/VrbOrf53qRD0t31sdc1uLRzZ3oKIs7T/zzhhB3qTZ+eyJ5uMB5fDW3u7kW4M8a0a2vy+EBgi28ukrbTBgLOkjIaTQ4MRJtRoeb16eISTSXJ84bGmvP2M/T4YfdQMv8mKixBBkXE89KltkNaxlzhZ8rXAptJxAkp0="
+      }
+    ]
+  },
+  {
+    "role": "function",
+    "parts": [
+      {
+        "functionResponse": {
+          "name": "list_templates",
+          "response": {
+            "result": "=== MACRONODE TEMPLATE CATALOG ===\n\n## CASCADE\n   Exclusionary dual-index research conversation. Agents take turns in a GroupDialogRunner loop. The first agent in the sequence uses cascade_search for dual-index web research (two non-overlapping result sets per turn). Configurable loop count, agent ordering, and end-agent.\n\n   SLOTS:\n     \u2022 agents (2\u20133 agents): Research and conversation agents (order matters \u2014 first agent gets search augment)\n   CONFIG:\n     \u2022 loop_count (int): Number of full conversation cycles [default: 3]\n     \u2022 end_agent (str): Agent name that provides the final output (must be one of the agents)\n     \u2022 agent_order (str): Pipe-separated agent ordering (e.g. 'OSINT_Analyst|Regular_Joe')\n\n## HOLOGRAM\n   Fan-out + synthesize (one-shot). Payload is sent to N facet agents in parallel. All responses are gathered and passed to a single low-temperature synthesizer. Each facet agent represents one discipline of a compound intellect.\n\n   SLOTS:\n     \u2022 facets (2\u201310 agents): Discipline facet agents (each sees the payload independently)\n     \u2022 synthesizer (1 agents): Low-temperature synthesizer agent that combines all facet responses\n\n## CHORD\n   Fan-out + synthesize with recursion. N participant agents respond to a central host. The host synthesizes and sends a report back to all participants. Participants cannot see each other's responses \u2014 only the host's synthesis. This loops for a configurable number of rounds.\n\n   SLOTS:\n     \u2022 participants (2\u201310 agents): Fan-out participant agents (cannot see each other, only the host)\n     \u2022 host (1 agents): Central host/synthesizer agent that sees all participant responses\n   CONFIG:\n     \u2022 loop_count (int): Number of host\u2192participants\u2192host cycles [default: 3]\n\n## CRUCIBLE\n   Adversarial/refinement GAN with conditional routing. Multiple advocate agents build arguments or drafts independently. A judge agent evaluates submissions and conditionally routes failures back for revision (the GAN loop). After acceptance, a configurable post-acceptance phase runs: 'synthesis' (judge synthesizes), 'debate' (GroupDialogRunner between advocates), or 'panel' (full round-table discussion). True conditional logic \u2014 the judge's own instructions define the quality criteria.\n\n   SLOTS:\n     \u2022 advocates (2\u201310 agents): Agents that build arguments/drafts (each works independently)\n     \u2022 judge (1 agents): Evaluative agent with quality criteria in its instructions (routes failures back)\n   CONFIG:\n     \u2022 max_recursion (int): Maximum times the judge can send advocates back for revision [default: 3]\n     \u2022 variation (choice): Post-acceptance topology mode [default: synthesis] choices: ['synthesis', 'debate', 'panel']\n"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "role": "model",
+    "parts": [
+      {
+        "functionCall": {
+          "name": "fill_template",
+          "args": {
+            "template_type": "cascade",
+            "config": "{\"loop_count\": 3, \"end_agent\": \"OSINT_Analyst\", \"agent_order\": \"OSINT_Analyst|Regular_Joe\"}",
+            "description": "3-cycle exclusionary dual-index research loop between OSINT_Analyst and Regular_Joe, ending with OSINT_Analyst.",
+            "name": "OSINT_Research_x3",
+            "agent_mapping": "{\"agents\": [\"OSINT_Analyst\", \"Regular_Joe\"]}"
+          },
+          "id": "ch37zoej"
+        },
+        "thoughtSignature": "Eo0ECooEAQw51sfVFyL8j3XLjxjMTRWNdewUaW48CGxkTTlpxmg27hQRM8Xrxt/b4i+kRJr2CVN9LxwYIe6tpBk8CmoQSRGTpjHMOqiOSuj62psESsqqzgIkdtmS8cZWiV9UKR4FYqN2w0irHpCuvq5Z/RlBWdQovBzeLprnpOmRJZ+b3SFW9rzJYv5ThqVaW1FH4gmCFDe1ErSdBe8XDijIDqVWAxZ5CD8TIqy0pj2DuJDfwXWLgMH3Mdgo1IHHQs9XxFDEX0DuPReu67pLZIIKlSBpIizcPjiKUS7MXV4NkT5yDHYOPSlO3TUB4TaTXRMoh5vnevuOXhckbduDsHk0FYBrjzjOxzr5tW/UOwf2RrZlqzPE4ex4MXEiiXaNJU0bi8kdUSHSAL982Z0SIVj3wnPo+R8pKkx+EQkqwGyJc4VWYgqD41rqA1zVGWcMd+i/fUU6ldOzVBdbc3K+YGJ3z3j2TByo2C+3UiBKiqg33HC1sXrEESmTk0gekK31rQrRUI+osQtVcblfJcqJcXMLvj4bYJ8nHd9rhiuRA8OzRF/zrKPoIAbM9uYr7OOBT+ZZXwED+77uH4BPXqyAv1CC/hcZpeR1fw/4pApZhq+rw9RaA17PXvbzBaL6AFKkY5ln3VTTCq7B1VcgPSo9vnWBvVBcnUyN2Y21oHMLW3MfEDpr3TgzqLnidJqyl417"
+      }
+    ]
+  },
+  {
+    "role": "function",
+    "parts": [
+      {
+        "functionResponse": {
+          "name": "fill_template",
+          "response": {
+            "result": "[TEMPLATE_SUCCESS] Saved MacroNode 'OSINT_Research_x3' from template 'cascade' with 1 nodes (2 agents) to GLOBAL registry."
+          }
+        }
+      }
+    ]
+  },
+  {
+    "role": "model",
+    "parts": [
+      {
+        "functionCall": {
+          "name": "list_macro_nodes",
+          "args": {},
+          "id": "bk19mcqv"
+        },
+        "thoughtSignature": "Es4CCssCAQw51sfH0e1sXk/2njooOnmrb2BpqrM4h7eLiHdTuImCviO7Q5wCP5idXsFA2fubTEbQ03BxeosKdqXIyDIidS+EGryxTbkwY1P+YXv45XWh5jJ8L0IVHhbOVyZypmSPemuku2hSVrH6TEoH6aSnU3fLHntwBZwOur6sKeaaw3quth8ai77Vns2ZLaCb+97Td/kcb1j20UL55ZsFUzhE4nqET76h7JcVUJYhseCnwktNCVVVtFrop3TWIHRqsIJt0tOfZzDZvxJ3Qfli4qMeGSXwNipSVasILbMyl3w851bPB+MZNNE+KSNb+JmLtC1VUTclelPFYbc60nLEapUcEbXXhFGq2R/cmLgvBOryekXmIq9iaTf6z31sK01dDqRCWq0atcfnCVV2Xi5drWM+TM/HiZu3PhEi5avgwY6Bf76SxetX5ng761NQDA=="
+      }
+    ]
+  },
+  {
+    "role": "function",
+    "parts": [
+      {
+        "functionResponse": {
+          "name": "list_macro_nodes",
+          "response": {
+            "result": "Available Macro Nodes in GLOBAL:\n- OSINT_Research_x3: 3-cycle exclusionary dual-index research loop between OSINT_Analyst and Regular_Joe, ending with OSINT_Analyst. [from: cascade]\n- OSINT-Joe: A 6-turn dialogue loop between OSINT_Analyst and Regular_Joe, culminating in a final review by Synthesizer.\n- HITL_Pause: Pauses execution until human input is provided after TurnCount turns.\n"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "role": "model",
+    "parts": [
+      {
+        "text": "The `OSINT_Research_x3` Cascade MacroNode is fully constructed and registered in the Global registry! \n\nHere is the structural blueprint of what we just built:\n\n```mermaid\nflowchart TD\n    In[Payload Input] --> Loop{Loop: 3 Cycles}\n    Loop --> OA[OSINT_Analyst<br><i>with dual-index search</i>]\n    OA --> RJ[Regular_Joe]\n    RJ -.-> Loop\n    Loop --> End[Final Output:<br>OSINT_Analyst]\n```\n\n**Macro-Node Summary:**\n- **Architecture:** Cascade (Exclusionary Dual-Index Research)\n- **First Agent:** `OSINT_Analyst` (inherits the heavy-duty cascade web research augment)\n- **Second Agent:** `Regular_Joe` (acts as the foil/sounding board)\n- **Behavior:** They will bounce ideas off each other for exactly 3 cycles, pulling fresh, non-overlapping search indices each time it hits the OSINT Analyst. `OSINT_Analyst` will deliver the final verdict.\n\nWould you like to drop this directly into the Swarm Graph for the active project (`AAA_Test`), or are there other components we need to mint first?"
+      }
+    ]
+  }
+]

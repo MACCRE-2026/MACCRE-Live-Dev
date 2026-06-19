@@ -367,7 +367,7 @@ AVAILABLE MACCRE TOOLS (agents can only use these):
 - ingest_document: Read a source file and embed it into local semantic memory. Use for INGEST nodes.
 - query_local_memory: Semantic search inside local semantic memory. Use in generation nodes that need context.
 - query_global_archive: Semantic search across the GLOBAL knowledge archive. Returns thought pins and paths to original sources. Use when an agent needs broad background context.
-- query_session_memory: Forensic query tool to extract vectors from a specific ephemeral session (thought_pins, agent_thoughts, agent_ledgers). Use to salvage data from failed runs.
+- query_session_memory: Forensic query tool to extract vectors from a specific ephemeral session (agent_thoughts, agent_ledgers). Use to salvage data from failed runs.
 - scout_archive_themes: Rapidly scans a GLOBAL Ingestion Project (like AI_STUDIO) and returns a raw map of themes. Use as the Map phase in a MapReduce ingestion.
 - execute_archive_ingestion: Routes an entire directory of files into Concept Silos based on a list of categories provided by the agent. Use as the Reduce/Ingest phase.
 - write_file: Write output to a file in the datacenter. Use for all content-generating nodes.

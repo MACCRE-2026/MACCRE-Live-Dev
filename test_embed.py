@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.abspath('.'))
 
-from maccre_core.orchestration.windows_vault import get_native_credential, _try_wincred
+from maccre_core.orchestration.windows_vault import _try_wincred
 
 def test():
     print("Testing Brave Key...")

@@ -117,86 +117,173 @@ class UniversalSwarmWorker:
             return "NO PAYLOAD DATA."
 
     async def _run_live_session(self, model_id: str, system_prompt: str, current_payload: str, job_id: str, current_node: str) -> str:
-        """Stream 4: Establish Live WebSocket session and listen for ScoreKeeper interrupts."""
-        import asyncio
-        import zmq  # type: ignore
-        import zmq.asyncio  # type: ignore
-        from maccre_core._net.live_client import GeminiLiveClient
-
+        """Stream 4a Alternative: High-speed REST streaming with manual barge-in."""
+        from google import genai
+        from google.genai import types
         from maccre_core.orchestration.windows_vault import get_native_credential
+        from maccre_core.orchestration.queues import JsonFileQueue
+        import asyncio
+
         api_key = str(get_native_credential("MACCRE_Sovereign") or "").strip()
-        client = GeminiLiveClient(api_key=api_key, model=model_id)
+        client = genai.Client(api_key=api_key)
         
-        ctx = zmq.asyncio.Context.instance()
-        sub_socket = ctx.socket(zmq.SUB)
-        sub_socket.connect("tcp://127.0.0.1:5557")
-        # Listen for global interrupts and specifically routed messages for THIS agent
-        sub_socket.setsockopt_string(zmq.SUBSCRIBE, "MACCRE.INTERRUPT")
-        sub_socket.setsockopt_string(zmq.SUBSCRIBE, f"MACCRE.ROUTE.{AGENT_ID}")
-        
-        pub_socket = ctx.socket(zmq.PUB)
-        pub_socket.connect("tcp://127.0.0.1:5556")
-        
+        message_bus = JsonFileQueue("live_session_bus")
         gathered_text: list[str] = []
         
-        async def session_runner(session: Any) -> None:
-            async def zmq_listener() -> None:
-                while True:
-                    try:
-                        topic, msg = await sub_socket.recv_multipart()
-                        topic_str = topic.decode("utf-8")
-                        payload = json.loads(msg.decode("utf-8"))
-                        
+        # Maintain local history across the session
+        history = [
+            types.Content(role="user", parts=[types.Part.from_text(text=current_payload)])
+        ]
+        
+        interrupt_event = asyncio.Event()
+        override_text = []
+
+        async def queue_listener() -> None:
+            while True:
+                try:
+                    messages = message_bus.poll(["MACCRE.INTERRUPT", f"MACCRE.ROUTE.{current_node}"])
+                    for topic_str, payload in messages:
                         if topic_str == "MACCRE.INTERRUPT" and payload.get("job_id") == job_id:
-                            print(f"\n[{AGENT_ID}] ⚡ LIVE INTERRUPT: Manager triggered barge-in.")
-                            await session.send(input=f"[USER OVERRIDE]: {payload.get('override_text')}", end_of_turn=True)
+                            print(f"\n[{current_node}] ⚡ LIVE INTERRUPT: Manager triggered barge-in.")
+                            override_text.append(f"[User Barge-in]: {payload.get('override_text')}")
+                            interrupt_event.set()
                             
-                        elif topic_str == f"MACCRE.ROUTE.{AGENT_ID}" and payload.get("job_id") == job_id:
+                        elif topic_str == f"MACCRE.ROUTE.{current_node}" and payload.get("job_id") == job_id:
                             speaker = payload.get("speaker")
                             text = payload.get("text")
-                            await session.send(input=f"[{speaker}]: {text}", end_of_turn=True)
+                            override_text.append(f"[{speaker}]: {text}")
+                            interrupt_event.set()
                             
-                    except asyncio.CancelledError:
-                        break
-                    except Exception as e:
-                        print(f"[ZMQ Listener Error] {e}")
-                        
-            listener_task = asyncio.create_task(zmq_listener())
-            
-            print(f"[{AGENT_ID}] Live Session Bound to {model_id}. Streaming context...")
-            await session.send(input=current_payload, end_of_turn=True)
-            
-            try:
-                async for response in session.receive():
-                    server_content = response.server_content
-                    if server_content is None:
-                        continue
-                    
-                    if getattr(server_content, "interrupted", False):
-                        print(f"\n[{AGENT_ID}] Model acknowledges barge-in.")
-                        
-                    model_turn = server_content.model_turn
-                    if model_turn:
-                        for part in model_turn.parts:
-                            if part.text:
-                                gathered_text.append(part.text)
-                                print(part.text, end="", flush=True)
-                                # Publish speech to Manager for Routing & TUI Display
-                                chat_payload = {
-                                    "job_id": job_id,
-                                    "agent_name": AGENT_ID,
-                                    "text": part.text
-                                }
-                                pub_socket.send_multipart([b"MACCRE.CHAT", json.dumps(chat_payload).encode("utf-8")])
-                                
-            finally:
-                listener_task.cancel()
+                    await asyncio.sleep(0.1)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    print(f"[Queue Listener Error] {e}")
+                    await asyncio.sleep(1)
 
+        listener_task = asyncio.create_task(queue_listener())
+        print(f"[{current_node}] Live Session Bound to {model_id} (REST Streaming).")
+        
+        live_directive = f"\n\n[LIVE SESSION OVERRIDE]: You are in a multi-agent chat. Your specific identity and role is '{current_node}'. You must respond naturally as this entity. Do NOT mistake other agents' messages (e.g. [OtherAgent]: ...) as the user. Treat them as other AI agents working with you. The user is the one assigning tasks, while you collaborate with the swarm. IMPORTANT: Do NOT prefix your own response with your name (e.g. do not output '[{current_node}]:'). The system will automatically add your name prefix to the chat logs. CRITICAL: In this live conversational mode, tool execution is DISABLED. You must rely purely on your conversational knowledge. Do NOT attempt to output tool calls, JSON blocks, or state that you are executing a tool.\n\nFORMAT DIRECTIVE:\nBefore you respond, you MUST output a `<thought>` block containing your internal monologue, evaluating your persona, the topic, and what you should say. After your thought block, you MUST output a `<chat>` block containing the actual message you will send to the group. Example:\n<thought>\nI am the OSINT Analyst. I should provide objective data here.\n</thought>\n<chat>\nHere is the data on that topic...\n</chat>\nDo NOT output any text outside of these blocks."
+        
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt + live_directive,
+            temperature=1.0
+        )
+        
+        is_first_turn = True
+        
         try:
-            await client.run_session(system_instruction=system_prompt, run_loop_cb=session_runner)
+            while True:
+                interrupt_event.clear()
+                
+                if override_text:
+                    for text in override_text:
+                        history.append(types.Content(role="user", parts=[types.Part.from_text(text=text)]))
+                    override_text.clear()
+                
+                if is_first_turn and current_payload == "[SYSTEM] WAIT_FOR_USER":
+                    print(f"\n[{current_node}] Initialized in WAIT mode. Awaiting stimulus...")
+                    is_first_turn = False
+                else:
+                    is_first_turn = False
+                    try:
+                        chat_payload = {
+                            "job_id": job_id,
+                            "agent_name": current_node,
+                            "text": "",
+                            "is_typing": True
+                        }
+                        message_bus.publish("MACCRE.CHAT", chat_payload)
+                        
+                        stream = await client.aio.models.generate_content_stream(
+                            model=model_id,
+                            contents=history,
+                            config=config
+                        )
+                        
+                        turn_text = []
+                        async for chunk in stream:
+                            if interrupt_event.is_set():
+                                print(f"\n[{current_node}] Stream interrupted by incoming signal.")
+                                break
+                                
+                            if chunk.text:
+                                turn_text.append(chunk.text)
+                                gathered_text.append(chunk.text)
+                                print(chunk.text, end="", flush=True)
+                                
+                        if turn_text:
+                            full_text = "".join(turn_text)
+                            import re
+                            import time
+                            import json
+                            from maccre_core.utils.path_resolver import get_datacenter_path
+                            
+                            thought_match = re.search(r"<thought>(.*?)</thought>", full_text, re.DOTALL)
+                            chat_match = re.search(r"<chat>(.*?)</chat>", full_text, re.DOTALL)
+                            
+                            thought_text = thought_match.group(1).strip() if thought_match else ""
+                            chat_text = chat_match.group(1).strip() if chat_match else full_text
+                            
+                            if thought_text:
+                                thought_path = get_datacenter_path("03_Agent_Ledgers", f"{current_node}_thoughts.json")
+                                thought_entry = {"time": time.time(), "job_id": job_id, "agent": current_node, "thought": thought_text}
+                                with open(thought_path, "a", encoding="utf-8") as f:
+                                    f.write(json.dumps(thought_entry) + "\n")
+
+                                # ── Triple DB: Vectorize thought into session-scoped agent_thoughts.db ──
+                                try:
+                                    from maccre_core.tools.rag_tools import vectorize_thought  # noqa: PLC0415
+                                    vectorize_thought(
+                                        text=thought_text,
+                                        project_name=self.project_name,
+                                        session_id=job_id,
+                                        agent_id=current_node,
+                                    )
+                                except Exception as _vec_err:  # noqa: BLE001
+                                    print(f"[{current_node}] [VECTOR_WARN] thought vectorization failed (non-fatal): {_vec_err}")
+
+                            chat_payload = {
+                                "job_id": job_id,
+                                "agent_name": current_node,
+                                "text": chat_text,
+                                "is_typing": False
+                            }
+                            message_bus.publish("MACCRE.CHAT", chat_payload)
+
+                            # ── Triple DB: Vectorize chat response into session-scoped agent_ledgers.db ──
+                            if chat_text:
+                                try:
+                                    from maccre_core.tools.rag_tools import vectorize_ledger  # noqa: PLC0415
+                                    vectorize_ledger(
+                                        text=chat_text,
+                                        project_name=self.project_name,
+                                        session_id=job_id,
+                                        agent_id=current_node,
+                                    )
+                                except Exception as _vec_err:  # noqa: BLE001
+                                    print(f"[{current_node}] [VECTOR_WARN] ledger vectorization failed (non-fatal): {_vec_err}")
+
+                            history.append(types.Content(role="model", parts=[types.Part.from_text(text=full_text)]))
+                            
+                    except Exception as e:
+                        print(f"\n[{current_node}] Generation Error: {e}")
+                    finally:
+                        chat_payload = {
+                            "job_id": job_id,
+                            "agent_name": current_node,
+                            "text": "",
+                            "is_typing": False
+                        }
+                        message_bus.publish("MACCRE.CHAT", chat_payload)
+
+                
+                print(f"\n[{current_node}] Turn finished. Awaiting next stimulus...")
+                await interrupt_event.wait()
+
         finally:
-            sub_socket.close()
-            pub_socket.close()
+            listener_task.cancel()
             
         return "".join(gathered_text)
 
@@ -264,7 +351,7 @@ class UniversalSwarmWorker:
             """
             def __init__(self, filepath: str, orig_stream: Any) -> None:
                 self.orig_stream = orig_stream
-                self.log = open(filepath, "w", encoding="utf-8")  # noqa: SIM115
+                self.log = open(filepath, "w", buffering=1, encoding="utf-8")  # noqa: SIM115
 
             def write(self, msg: str) -> None:
                 self.orig_stream.write(msg)
@@ -294,9 +381,36 @@ class UniversalSwarmWorker:
             print(f"\n[{AGENT_ID}] Lock Acquired: job={job_id} | row={row_id} | Node: [{current_node}]")
             print(f"[{AGENT_ID}] Ledger -> {ledger_path}")
 
-            assert self.topology is not None, "TopologyEngine must be initialized before swarm execution"
-            node_config = self.topology.get_node_config(current_node)
-            base_prompt = self._load_json_card(node_config.get("prompt", "none"))
+            node_config = {}
+            if self.topology is not None:
+                try:
+                    node_config = self.topology.get_node_config(current_node)
+                except Exception:
+                    pass
+            
+            prompt_name = node_config.get("prompt", "none")
+            base_prompt = self._load_json_card(prompt_name)
+            
+            if prompt_name == "none" and not base_prompt.strip():
+                pass # Will handle fallback
+                
+            # If no topology prompt is found, check the agent roster
+            if base_prompt == "You are a MACCRE Agent. Analyze the payload and act according to your instructions.":
+                try:
+                    from maccre_core.agent_library import get_agent_store  # noqa: PLC0415
+                    _ag_store = get_agent_store(os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL"))
+                    for _ag_row in _ag_store.load_all():
+                        _ag_name = str(_ag_row.get("agent_name") or _ag_row.get("AGENT_NAME", ""))
+                        if _ag_name.strip() == current_node:
+                            base_prompt = str(
+                                _ag_row.get("system_prompt") or _ag_row.get("PERSONA", "")
+                            ) or base_prompt
+                            _ag_model = str(_ag_row.get("model") or _ag_row.get("MODEL", ""))
+                            if _ag_model:
+                                node_config["model"] = _ag_model
+                            break
+                except Exception:
+                    pass
 
             # ── Session-Scoped Artifact Directory ──────────────────────────────
             # Create 04_Code_Artifacts/{job_id}/ once per node execution.
@@ -342,7 +456,8 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     row_id=row_id
                 )
                 print(f"[{AGENT_ID}] Macro expansion complete. Yielding worker.")
-                self.topology.flush_cache()
+                if self.topology is not None:
+                    self.topology.flush_cache()
                 return True
 
             # ── Dual-Payload Construction ─────────────────────────────────────
@@ -377,7 +492,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 _gathered_blocks: list[str] = []
                 for _pred_node in _wait_for_nodes:
                     try:
-                        _pred_cfg = self.topology.get_node_config(_pred_node)
+                        _pred_cfg = self.topology.get_node_config(_pred_node) if self.topology else {}
                         _pred_art_rel: str = str(_pred_cfg.get("artifact_path", "") or "")
                         if not _pred_art_rel:
                             continue
@@ -624,7 +739,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
 
-            elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes"):
+            elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes") or os.environ.get("MACCRE_LIVE_OVERRIDE") == "1":
 
                 import asyncio
                 print(f"[{AGENT_ID}] Executing via STREAM 4 LIVE SESSION.")
@@ -769,22 +884,39 @@ You do NOT need to ask for permission to use them. If your instructions require 
             #  2. Target must be a valid string (not a terminal sentinel)
             #  3. The current node's max_recursion already bounds total re-queues
             import re as _re  # noqa: PLC0415
-            _ROUTE_TO_PATTERN = _re.compile(r"ROUTE_TO:([A-Z][A-Z0-9_]*)", _re.IGNORECASE)
+            _ROUTE_TO_PATTERN = _re.compile(r"ROUTE_TO:([A-Za-z][A-Za-z0-9_]*)", _re.IGNORECASE)
             _route_match = _ROUTE_TO_PATTERN.search(raw_model_output or "")
             if _route_match:
-                _candidate = _route_match.group(1).strip().upper()
-                _topology_map = self.topology.get_topology() if self.topology else {}
-                if _candidate and _candidate not in {"STOP", "DONE", "TERMINATE", "FAILED"} and _candidate in _topology_map:
+                _candidate = _route_match.group(1).strip()
+
+                # ACCEPTED means "all gates passed — proceed to static next_node"
+                if _candidate.upper() == "ACCEPTED":
                     print(
-                        f"[{AGENT_ID}] CONDITIONAL ROUTE: '{next_node}' overridden by "
-                        f"ROUTE_TO:{_candidate} (model-directed)"
+                        f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:ACCEPTED — "
+                        f"proceeding to static next_node '{next_node}'"
                     )
-                    next_node = _candidate
-                elif _candidate:
-                    print(
-                        f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:{_candidate} ignored "
-                        f"(target not in topology or is terminal sentinel)"
-                    )
+                elif _candidate.upper() not in {"STOP", "DONE", "TERMINATE", "FAILED"}:
+                    # Check main topology first, then ephemeral macros
+                    _topology_map = self.topology.get_topology() if self.topology else {}
+                    _ephemeral_path = get_datacenter_path("02_Dynamic_Context", "ephemeral_macros.json")
+                    _ephemeral_map: dict[str, Any] = {}
+                    if _ephemeral_path.exists():
+                        try:
+                            _ephemeral_map = json.loads(_ephemeral_path.read_text(encoding="utf-8"))
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                    if _candidate in _topology_map or _candidate in _ephemeral_map:
+                        print(
+                            f"[{AGENT_ID}] CONDITIONAL ROUTE: '{next_node}' overridden by "
+                            f"ROUTE_TO:{_candidate} (model-directed)"
+                        )
+                        next_node = _candidate
+                    else:
+                        print(
+                            f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:{_candidate} ignored "
+                            f"(target not in topology or ephemeral macros)"
+                        )
 
             ops_log.node_routed(
                 agent_name=str(node_config.get("agent_name", current_node)),

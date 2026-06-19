@@ -135,16 +135,21 @@ _BACKEND: str = "sovereign"   # "chroma" | "sovereign"
 _instances: dict[str, KnowledgeStore] = {}
 
 
-def get_knowledge_store(project_name: str, db_name: str = "thought_pins.db") -> KnowledgeStore:
+def get_knowledge_store(
+    project_name: str, 
+    db_name: str = "thought_pins.db",
+    scope: str = "project",
+    session_id: str = ""
+) -> KnowledgeStore:
     """
-    Return the singleton KnowledgeStore for project_name and db_name.
+    Return the singleton KnowledgeStore for project_name and db_name with specific scoping.
 
     Switch backend globally by changing _BACKEND above (or via env var
     MACCRE_MEMORY_BACKEND).  No callers need to change.
     """
     import os
     backend = os.environ.get("MACCRE_MEMORY_BACKEND", _BACKEND)
-    cache_key = f"{project_name}:{db_name}"
+    cache_key = f"{project_name}:{db_name}:{scope}:{session_id}"
 
     if cache_key not in _instances:
         if backend == "chroma":
@@ -152,7 +157,12 @@ def get_knowledge_store(project_name: str, db_name: str = "thought_pins.db") -> 
             _instances[cache_key] = ChromaDBStore(project_name)
         else:
             from maccre_core.memory.sovereign_store import SovereignPinStore  # noqa: PLC0415
-            _instances[cache_key] = SovereignPinStore(project_name, db_name)
+            _instances[cache_key] = SovereignPinStore(
+                project_name=project_name, 
+                db_name=db_name,
+                scope=scope,
+                session_id=session_id
+            )
 
     return _instances[cache_key]
 
