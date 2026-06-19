@@ -232,7 +232,7 @@ class DialogueRunner:
         )
 
         # Agent A opens — this is round 0, the anchor generation.
-        print(
+        logger.info(
             f"[DialogueRunner] ── Round 0 / {self._num_rounds}: "
             f"{self._agent_a.label} opening ──"
         )
@@ -243,7 +243,7 @@ class DialogueRunner:
 
         # Alternate for num_rounds full B→A exchanges.
         for round_idx in range(1, self._num_rounds + 1):
-            print(
+            logger.info(
                 f"[DialogueRunner] ── Round {round_idx} / {self._num_rounds}: "
                 f"{self._agent_b.label} responding ──"
             )
@@ -253,7 +253,7 @@ class DialogueRunner:
             )
 
             if round_idx < self._num_rounds:
-                print(
+                logger.info(
                     f"[DialogueRunner] ── Round {round_idx} / {self._num_rounds}: "
                     f"{self._agent_a.label} responding ──"
                 )
@@ -263,7 +263,7 @@ class DialogueRunner:
                 )
             else:
                 # Final A reply — closes the exchange for CounterPartner.
-                print(
+                logger.info(
                     f"[DialogueRunner] ── Round {round_idx} FINAL: "
                     f"{self._agent_a.label} final reply ──"
                 )
@@ -279,7 +279,7 @@ class DialogueRunner:
             "[DialogueRunner] Dialogue complete | total_rounds=%d | total_cost=%.6f",
             self._num_rounds, total_cost,
         )
-        print(f"[DialogueRunner] ✓ Complete — {self._num_rounds} rounds | cost=${total_cost:.6f}")
+        logger.info(f"[DialogueRunner] ✓ Complete — {self._num_rounds} rounds | cost=${total_cost:.6f}")
         return transcript, a_reply, total_cost
 
     @property
@@ -407,13 +407,13 @@ class GroupDialogueRunner:
             "[GroupDialogueRunner] Starting: host=%s | participants=[%s] | rounds=%d",
             self._host.label, p_labels, self._num_rounds,
         )
-        print(
+        logger.info(
             f"[GroupDialogueRunner] HOST={self._host.label} | "
             f"PARTICIPANTS=[{p_labels}] | rounds={self._num_rounds}"
         )
 
         # ── Round 0: host opens ───────────────────────────────────────────────
-        print(f"[GroupDialogueRunner] ── Round 0: {self._host.label} opening ──")
+        logger.info(f"[GroupDialogueRunner] ── Round 0: {self._host.label} opening ──")
         host_reply = self._host.send(self._router, initial_message)
         transcript_parts.append(f"[{self._host.label} — Opening]\n{host_reply}")
 
@@ -422,7 +422,7 @@ class GroupDialogueRunner:
             p_replies: list[tuple[str, str]] = []
 
             for participant in self._participants:
-                print(
+                logger.info(
                     f"[GroupDialogueRunner] ── Round {round_idx}: "
                     f"{participant.label} responding ──"
                 )
@@ -437,7 +437,7 @@ class GroupDialogueRunner:
 
             is_final = round_idx == self._num_rounds
             round_label = "Final Synthesis" if is_final else f"Round {round_idx}"
-            print(
+            logger.info(
                 f"[GroupDialogueRunner] ── {round_label}: "
                 f"{self._host.label} responding ──"
             )
@@ -457,7 +457,7 @@ class GroupDialogueRunner:
             "[GroupDialogueRunner] Complete | rounds=%d | participants=%d | total_cost=%.6f",
             self._num_rounds, len(self._participants), total_cost,
         )
-        print(
+        logger.info(
             f"[GroupDialogueRunner] ✓ Complete — {self._num_rounds} rounds | "
             f"{len(self._participants)} participants | cost=${total_cost:.6f}"
         )

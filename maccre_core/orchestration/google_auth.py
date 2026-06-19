@@ -16,6 +16,7 @@
 # pyright: reportMissingTypeStubs=false
 # pyright: reportUnknownMemberType=false
 # pyright: reportReturnType=false
+import logging
 import os
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
@@ -29,6 +30,8 @@ SCOPES =[
     'https://www.googleapis.com/auth/cloud-platform' # Covers Vertex AND AI Studio
 ]
 
+logger = logging.getLogger(__name__)
+
 def get_google_credentials() -> Credentials:
     creds = None
     _root = get_maccre_root()
@@ -40,10 +43,10 @@ def get_google_credentials() -> Credentials:
     
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            print("[Auth Engine] Refreshing expired master token...")
+            logger.info("Refreshing expired master token...")
             creds.refresh(Request())
         else:
-            print("[Auth Engine] No token found. Initiating secure OAuth flow...")
+            logger.info("No token found. Initiating secure OAuth flow...")
             if not os.path.exists(creds_path):
                 raise FileNotFoundError(f"CRITICAL: {creds_path} is missing. Halting.")
             flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
@@ -51,6 +54,6 @@ def get_google_credentials() -> Credentials:
         
         with open(token_path, 'w') as token:
             token.write(creds.to_json())
-            print("[Auth Engine] Master Token secured.")
+            logger.info("Master Token secured.")
             
     return creds

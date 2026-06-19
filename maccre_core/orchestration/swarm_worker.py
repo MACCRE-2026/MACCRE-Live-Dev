@@ -25,6 +25,7 @@ All I/O paths are fully project-scoped via get_datacenter_path().
 import atexit
 import json
 import os
+import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -45,11 +46,12 @@ from maccre_core.utils.path_resolver import get_datacenter_path
 atexit.register(close_all)
 
 AGENT_ID = f"universal_node_{os.getpid()}"
+logger = logging.getLogger("maccre_core.swarm_worker")
 
 
 class UniversalSwarmWorker:
     def __init__(self) -> None:
-        print(f"[{AGENT_ID}] Initializing Universal Swarm Node...")
+        logger.info(f"[{AGENT_ID}] Initializing Universal Swarm Node...")
         self.project_name = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
         self.router = UniversalRouter()
         self.topology: TopologyProvider | None = TopologyEngine()
@@ -83,14 +85,14 @@ class UniversalSwarmWorker:
         card_path = get_datacenter_path("02_Dynamic_Context", card_str)
         if not card_path.exists():
             # Short text that isn't a valid card name — warn and return as-is
-            print(f"[{AGENT_ID}] WARNING: Missing ROM Cartridge -> {card_str} (using as inline instruction)")
+            logger.warning(f"[{AGENT_ID}] WARNING: Missing ROM Cartridge -> {card_str} (using as inline instruction)")
             return str(card_name).strip()
 
         try:
             persona_data: dict[str, Any] = json.loads(card_path.read_text(encoding="utf-8"))
             return str(persona_data.get("instructions", ""))
         except Exception as e:
-            print(f"[{AGENT_ID}] ERROR reading persona {card_str}: {e}")
+            logger.error(f"[{AGENT_ID}] ERROR reading persona {card_str}: {e}")
             return ""
 
     def _load_memory_pins(self) -> str:
@@ -115,7 +117,7 @@ class UniversalSwarmWorker:
             with open(payload_path, "r", encoding="utf-8") as f:
                 return f.read()
         except Exception as e:
-            print(f"[{AGENT_ID}] WARNING: Could not read payload at {payload_path}: {e}")
+            logger.warning(f"[{AGENT_ID}] WARNING: Could not read payload at {payload_path}: {e}")
             return "NO PAYLOAD DATA."
 
     async def _run_live_session(self, model_id: str, system_prompt: str, current_payload: str, job_id: str, current_node: str) -> str:
@@ -146,7 +148,7 @@ class UniversalSwarmWorker:
                     messages = message_bus.poll(["MACCRE.INTERRUPT", f"MACCRE.ROUTE.{current_node}"])
                     for topic_str, payload in messages:
                         if topic_str == "MACCRE.INTERRUPT" and payload.get("job_id") == job_id:
-                            print(f"\n[{current_node}] ⚡ LIVE INTERRUPT: Manager triggered barge-in.")
+                            logger.info(f"\n[{current_node}] ⚡ LIVE INTERRUPT: Manager triggered barge-in.")
                             override_text.append(f"[User Barge-in]: {payload.get('override_text')}")
                             interrupt_event.set()
                             
@@ -160,11 +162,11 @@ class UniversalSwarmWorker:
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    print(f"[Queue Listener Error] {e}")
+                    logger.error(f"[Queue Listener Error] {e}")
                     await asyncio.sleep(1)
 
         listener_task = asyncio.create_task(queue_listener())
-        print(f"[{current_node}] Live Session Bound to {model_id} (REST Streaming).")
+        logger.info(f"[{current_node}] Live Session Bound to {model_id} (REST Streaming).")
         
         live_directive = f"\n\n[LIVE SESSION OVERRIDE]: You are in a multi-agent chat. Your specific identity and role is '{current_node}'. You must respond naturally as this entity. Do NOT mistake other agents' messages (e.g. [OtherAgent]: ...) as the user. Treat them as other AI agents working with you. The user is the one assigning tasks, while you collaborate with the swarm. IMPORTANT: Do NOT prefix your own response with your name (e.g. do not output '[{current_node}]:'). The system will automatically add your name prefix to the chat logs. CRITICAL: In this live conversational mode, tool execution is DISABLED. You must rely purely on your conversational knowledge. Do NOT attempt to output tool calls, JSON blocks, or state that you are executing a tool.\n\nFORMAT DIRECTIVE:\nBefore you respond, you MUST output a `<thought>` block containing your internal monologue, evaluating your persona, the topic, and what you should say. After your thought block, you MUST output a `<chat>` block containing the actual message you will send to the group. Example:\n<thought>\nI am the OSINT Analyst. I should provide objective data here.\n</thought>\n<chat>\nHere is the data on that topic...\n</chat>\nDo NOT output any text outside of these blocks."
         
@@ -185,7 +187,7 @@ class UniversalSwarmWorker:
                     override_text.clear()
                 
                 if is_first_turn and current_payload == "[SYSTEM] WAIT_FOR_USER":
-                    print(f"\n[{current_node}] Initialized in WAIT mode. Awaiting stimulus...")
+                    logger.info(f"\n[{current_node}] Initialized in WAIT mode. Awaiting stimulus...")
                     is_first_turn = False
                 else:
                     is_first_turn = False
@@ -207,13 +209,13 @@ class UniversalSwarmWorker:
                         turn_text = []
                         async for chunk in stream:
                             if interrupt_event.is_set():
-                                print(f"\n[{current_node}] Stream interrupted by incoming signal.")
+                                logger.info(f"\n[{current_node}] Stream interrupted by incoming signal.")
                                 break
                                 
                             if chunk.text:
                                 turn_text.append(chunk.text)
                                 gathered_text.append(chunk.text)
-                                print(chunk.text, end="", flush=True)
+                                print(chunk.text, end="", flush=True)  # noqa: T201 — live streaming output
                                 
                         if turn_text:
                             full_text = "".join(turn_text)
@@ -244,7 +246,7 @@ class UniversalSwarmWorker:
                                         agent_id=current_node,
                                     )
                                 except Exception as _vec_err:  # noqa: BLE001
-                                    print(f"[{current_node}] [VECTOR_WARN] thought vectorization failed (non-fatal): {_vec_err}")
+                                    logger.warning(f"[{current_node}] [VECTOR_WARN] thought vectorization failed (non-fatal): {_vec_err}")
 
                             chat_payload = {
                                 "job_id": job_id,
@@ -265,12 +267,12 @@ class UniversalSwarmWorker:
                                         agent_id=current_node,
                                     )
                                 except Exception as _vec_err:  # noqa: BLE001
-                                    print(f"[{current_node}] [VECTOR_WARN] ledger vectorization failed (non-fatal): {_vec_err}")
+                                    logger.warning(f"[{current_node}] [VECTOR_WARN] ledger vectorization failed (non-fatal): {_vec_err}")
 
                             history.append(types.Content(role="model", parts=[types.Part.from_text(text=full_text)]))
                             
                     except Exception as e:
-                        print(f"\n[{current_node}] Generation Error: {e}")
+                        logger.error(f"\n[{current_node}] Generation Error: {e}")
                     finally:
                         chat_payload = {
                             "job_id": job_id,
@@ -281,7 +283,7 @@ class UniversalSwarmWorker:
                         message_bus.publish("MACCRE.CHAT", chat_payload)
 
                 
-                print(f"\n[{current_node}] Turn finished. Awaiting next stimulus...")
+                logger.info(f"\n[{current_node}] Turn finished. Awaiting next stimulus...")
                 await interrupt_event.wait()
 
         finally:
@@ -317,7 +319,7 @@ class UniversalSwarmWorker:
         )
         if not task:
             if not self._is_sleeping:
-                print(f"[{AGENT_ID}] Queue empty or waiting on dependencies. Sleeping.")
+                logger.info(f"[{AGENT_ID}] Queue empty or waiting on dependencies. Sleeping.")
                 self._is_sleeping = True
             time.sleep(3)
             return True
@@ -380,8 +382,8 @@ class UniversalSwarmWorker:
         sys.stderr = dual_err  # type: ignore[assignment]
 
         try:
-            print(f"\n[{AGENT_ID}] Lock Acquired: job={job_id} | row={row_id} | Node: [{current_node}]")
-            print(f"[{AGENT_ID}] Ledger -> {ledger_path}")
+            logger.info(f"\n[{AGENT_ID}] Lock Acquired: job={job_id} | row={row_id} | Node: [{current_node}]")
+            logger.info(f"[{AGENT_ID}] Ledger -> {ledger_path}")
 
             node_config = {}
             if self.topology is not None:
@@ -457,7 +459,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     broker=self.broker,
                     row_id=row_id
                 )
-                print(f"[{AGENT_ID}] Macro expansion complete. Yielding worker.")
+                logger.info(f"[{AGENT_ID}] Macro expansion complete. Yielding worker.")
                 if self.topology is not None:
                     self.topology.flush_cache()
                 return True
@@ -467,7 +469,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
             #   [SOURCE DOCUMENT] — the original user input (unchanged through all hops)
             #   [PREVIOUS NODE OUTPUT] — the ledger written by the prior agent
             # For the first node (INGEST), these are the same file; we skip the duplicate block.
-            print(f"[{AGENT_ID}] Reading payload: {payload_path}")
+            logger.info(f"[{AGENT_ID}] Reading payload: {payload_path}")
             ledger_content = self._read_local_payload(payload_path)
             source_content = self._read_local_payload(source_payload_path)
 
@@ -510,18 +512,18 @@ You do NOT need to ask for permission to use them. If your instructions require 
                             _gathered_blocks.append(
                                 f"[GATHERED ARTIFACT: {_pred_node}]\n{_art_content}\n[END ARTIFACT: {_pred_node}]"
                             )
-                            print(f"[{AGENT_ID}] Injected artifact from {_pred_node}: {_pred_art_rel}")
+                            logger.info(f"[{AGENT_ID}] Injected artifact from {_pred_node}: {_pred_art_rel}")
                         else:
-                            print(f"[{AGENT_ID}] WARNING: artifact not found for {_pred_node}: {_pred_art_abs}")
+                            logger.warning(f"[{AGENT_ID}] WARNING: artifact not found for {_pred_node}: {_pred_art_abs}")
                     except Exception as _exc:  # noqa: BLE001
-                        print(f"[{AGENT_ID}] WARNING: could not inject artifact for {_pred_node}: {_exc}")
+                        logger.warning(f"[{AGENT_ID}] WARNING: could not inject artifact for {_pred_node}: {_exc}")
                 if _gathered_blocks:
                     payload_content = (
                         "\n\n".join(_gathered_blocks)
                         + "\n\n"
                         + payload_content
                     )
-                    print(f"[{AGENT_ID}] Fan-in: injected {len(_gathered_blocks)} gathered artifact(s) into payload.")
+                    logger.info(f"[{AGENT_ID}] Fan-in: injected {len(_gathered_blocks)} gathered artifact(s) into payload.")
 
             # ── HOT-MIC PRIORITY INGESTION ────────────────────────────────────
             # Polled gracefully just before inference. Asynchronous intercept vector!
@@ -534,7 +536,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     f"YOU MUST PIVOT TO ADDRESS THIS IMMEDIATELY BEFORE PROCEEDING WITH YOUR NORMAL INSTRUCTIONS!]"
                 )
                 system_prompt += sys_intercept
-                print(f"\n[{AGENT_ID}] 🔥 HOT-MIC INTERCEPT RECEIVED & INJECTED! 🔥")
+                logger.info(f"\n[{AGENT_ID}] 🔥 HOT-MIC INTERCEPT RECEIVED & INJECTED! 🔥")
 
             model_id: str = str(node_config.get("model", "gemini-2.5-flash"))
             tools_str: str = str(node_config.get("tools_allowed", "none"))
@@ -560,7 +562,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         _agent_extra = _extras.get(_agent_name, {})
                         if _agent_extra.get("search_grounding") and "google_search" not in tools_str:
                             tools_str = f"{tools_str}|google_search" if tools_str.lower() != "none" else "google_search"
-                            print(f"[{AGENT_ID}] Search grounding enabled for '{_agent_name}' via agent_extras.")
+                            logger.info(f"[{AGENT_ID}] Search grounding enabled for '{_agent_name}' via agent_extras.")
                 except Exception:  # noqa: BLE001
                     pass  # Non-fatal — grounding simply won't activate
 
@@ -674,16 +676,16 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     _abs.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         _abs.write_text(text, encoding="utf-8")
-                        print(f"[{AGENT_ID}] Dialogue transcript written → {_abs}")
+                        logger.info(f"[{AGENT_ID}] Dialogue transcript written → {_abs}")
                     except Exception as _we:  # noqa: BLE001
-                        print(f"[{AGENT_ID}] WARNING: Could not write dialogue artifact '{_rel}': {_we}")
+                        logger.warning(f"[{AGENT_ID}] WARNING: Could not write dialogue artifact '{_rel}': {_we}")
 
                 if len(_partner_names) == 1:
                     # ── PAIR DIALOGUE (original DialogueRunner) ───────────────
                     _partner = _partner_names[0]
                     _, _, _, _host_tls = _load_agent_cfg(_host_label, model_id, _host_temp)
                     _p_sys, _p_mdl, _p_tmp, _p_tls = _load_agent_cfg(_partner, model_id, _host_temp)
-                    print(
+                    logger.info(
                         f"[{AGENT_ID}] DIALOGUE MODE: {current_node} ↔ {_partner} "
                         f"| rounds={_dialogue_rounds} | partner_model={_p_mdl}"
                     )
@@ -723,7 +725,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                             )
                         )
                     p_label_str = ", ".join(_partner_names)
-                    print(
+                    logger.info(
                         f"[{AGENT_ID}] GROUP DIALOGUE MODE: host={current_node} "
                         f"| participants=[{p_label_str}] | rounds={_dialogue_rounds}"
                     )
@@ -744,7 +746,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
             elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes") or os.environ.get("MACCRE_LIVE_OVERRIDE") == "1":
 
                 import asyncio
-                print(f"[{AGENT_ID}] Executing via STREAM 4 LIVE SESSION.")
+                logger.info(f"[{AGENT_ID}] Executing via STREAM 4 LIVE SESSION.")
                 final_output_text = asyncio.run(self._run_live_session(model_id, system_prompt, current_payload, job_id, current_node))
                 task_cost = 0.0
                 total_cost = 0.0
@@ -776,7 +778,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         # Clean prose output — loop terminates naturally.
                         final_output_text = output_text
                         if tool_audit_lines:
-                            print(f"[{AGENT_ID}] Tool loop complete: {turn_idx} tool turn(s) → clean output.")
+                            logger.info(f"[{AGENT_ID}] Tool loop complete: {turn_idx} tool turn(s) → clean output.")
                         break
 
                     # Capture raw tool call text for forensic audit sidecar.
@@ -787,7 +789,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         # Give it one final tool-free generation to flush accumulated work.
                         # This applies universally — any agent in any topology recovers here
                         # rather than producing a dangling tool-call as its ledger output.
-                        print(f"[{AGENT_ID}] Max tool turns ({max_tool_turns}) reached — graceful close turn.")
+                        logger.info(f"[{AGENT_ID}] Max tool turns ({max_tool_turns}) reached — graceful close turn.")
                         close_prompt = (
                             f"{updated_prompt}\n\n"
                             "[SYSTEM: Your tool budget is exhausted. Do not request any more tool calls. "
@@ -805,7 +807,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         total_cost += close_cost
                         final_output_text = close_text
                         tool_audit_lines.append(f"## GRACEFUL CLOSE TURN\n{close_text}")
-                        print(f"[{AGENT_ID}] Graceful close: {len(close_text)} chars flushed.")
+                        logger.info(f"[{AGENT_ID}] Graceful close: {len(close_text)} chars flushed.")
                         break
 
                     # ── Terminal tool detection ───────────────────────────────────
@@ -821,7 +823,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     )
                     if _fired_terminal:
                         final_output_text = output_text
-                        print(f"[{AGENT_ID}] Terminal tool fired — closing loop after turn {turn_idx + 1}.")
+                        logger.info(f"[{AGENT_ID}] Terminal tool fired — closing loop after turn {turn_idx + 1}.")
                         break
                     # ─────────────────────────────────────────────────────────────
 
@@ -847,7 +849,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
             task_cost = total_cost
             raw_model_output = final_output_text
 
-            print(f"[{AGENT_ID}] Generation complete. Billed Cost: ${task_cost:.6f}")
+            logger.info(f"[{AGENT_ID}] Generation complete. Billed Cost: ${task_cost:.6f}")
 
             ledger_content_out = raw_model_output
             with open(ledger_path, "w", encoding="utf-8") as f:
@@ -864,7 +866,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 audit_body = "\n\n".join(tool_audit_lines) + f"\n\n## FINAL OUTPUT\n{final_output_text}"
                 with open(audit_path, "w", encoding="utf-8") as af:
                     af.write(audit_header + audit_body)
-                print(f"[{AGENT_ID}] Tool audit sidecar: {audit_path}")
+                logger.info(f"[{AGENT_ID}] Tool audit sidecar: {audit_path}")
 
             # ── LIVE STREAMING ACOUSTICS ──────────────────────────────────────
             # Trigger real-time conversational streaming for non-director nodes
@@ -893,7 +895,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
 
                 # ACCEPTED means "all gates passed — proceed to static next_node"
                 if _candidate.upper() == "ACCEPTED":
-                    print(
+                    logger.info(
                         f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:ACCEPTED — "
                         f"proceeding to static next_node '{next_node}'"
                     )
@@ -909,13 +911,13 @@ You do NOT need to ask for permission to use them. If your instructions require 
                             pass
 
                     if _candidate in _topology_map or _candidate in _ephemeral_map:
-                        print(
+                        logger.info(
                             f"[{AGENT_ID}] CONDITIONAL ROUTE: '{next_node}' overridden by "
                             f"ROUTE_TO:{_candidate} (model-directed)"
                         )
                         next_node = _candidate
                     else:
-                        print(
+                        logger.info(
                             f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:{_candidate} ignored "
                             f"(target not in topology or ephemeral macros)"
                         )
@@ -958,10 +960,10 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 _artifact_abs: Path = get_datacenter_path(_artifact_rel)
                 if _artifact_abs.exists():
                     routing_payload_path = str(_artifact_abs)
-                    print(f"[{AGENT_ID}] Routing via artifact: {routing_payload_path}")
+                    logger.info(f"[{AGENT_ID}] Routing via artifact: {routing_payload_path}")
                 else:
                     routing_payload_path = ledger_path
-                    print(
+                    logger.info(
                         f"[{AGENT_ID}] WARNING: artifact_path '{_artifact_rel}' not found — "
                         f"falling back to ledger."
                     )
@@ -987,20 +989,20 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         topology_name=promo_name,
                         job_id=job_id,
                     )
-                    print(f"[{AGENT_ID}] Topology Promotion: {promo_result}")
+                    logger.info(f"[{AGENT_ID}] Topology Promotion: {promo_result}")
                 except Exception as promo_err:
-                    print(f"[{AGENT_ID}] WARNING: Topology promotion failed (non-fatal): {promo_err}")
+                    logger.warning(f"[{AGENT_ID}] WARNING: Topology promotion failed (non-fatal): {promo_err}")
 
         except Exception as e:
             import traceback
-            print(f"[{AGENT_ID}] CRITICAL FAILURE: {e}.")
-            print(traceback.format_exc())
+            logger.critical(f"[{AGENT_ID}] CRITICAL FAILURE: {e}.")
+            logger.info(traceback.format_exc())
             fail_target = "FAILED"
             try:
                 fail_target = str(node_config.get("next_node_failure", "FAILED")).strip()  # type: ignore[possibly-unbound]
             except Exception:
                 pass
-            print(f"[{AGENT_ID}] Routing task to [{fail_target}]")
+            logger.info(f"[{AGENT_ID}] Routing task to [{fail_target}]")
             self.broker.route_task(  # type: ignore[possibly-unbound]
                 row_id,
                 job_id,
@@ -1020,7 +1022,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
 
 if __name__ == "__main__":
     worker = UniversalSwarmWorker()
-    print(f"=== UNIVERSAL SWARM NODE {AGENT_ID} ONLINE ===")
+    logger.info(f"=== UNIVERSAL SWARM NODE {AGENT_ID} ONLINE ===")
     while True:
         if not worker.execute_cycle():
             break

@@ -59,6 +59,10 @@ from maccre_core.orchestration.telemetry_db import (
 )
 from maccre_core.utils.path_resolver import get_maccre_root
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 _REPO_ROOT    = get_maccre_root()
 _VENV_PYTHON  = _REPO_ROOT / ".venv" / "Scripts" / "python.exe"
 _VENV_ACTIVATE = _REPO_ROOT / ".venv" / "Scripts" / "activate.bat"
@@ -145,14 +149,14 @@ class PersistentVenvShell:
 
         shell = PersistentVenvShell(session_id="gui-001", project_id="PRISM")
         for line in shell.execute_command("python test_scatter.py"):
-            print(line)
+            logger.info(line)
         shell.close()
 
     Or use as a context manager::
 
         with PersistentVenvShell("gui-001", "PRISM") as shell:
             for line in shell.execute_command("omni qa maccre_core"):
-                print(line)
+                logger.info(line)
     """
 
     def __init__(self, session_id: str = "", project_id: str = "") -> None:

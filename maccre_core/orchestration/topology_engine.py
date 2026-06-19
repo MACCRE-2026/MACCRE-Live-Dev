@@ -30,6 +30,10 @@ from typing import Dict, Any
 from maccre_core.utils.path_resolver import get_datacenter_path
 from maccre_core.orchestration.topology_interface import TopologyProvider
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class NodeConfig(dict):  # type: ignore[type-arg]
     """Typed dict shape for a single swarm node configuration."""
@@ -154,12 +158,12 @@ class TopologyEngine(TopologyProvider):
                         for k, v in ephemeral_data.items():
                             graph[k] = v
                 except Exception as e:
-                    print(f"[TopologyEngine] Failed to merge ephemeral macros: {e}")
+                    logger.info(f"[TopologyEngine] Failed to merge ephemeral macros: {e}")
 
             return graph
 
         except Exception as e:
-            print(f"[TopologyEngine] Read Collision / Failure: {e}")
+            logger.info(f"[TopologyEngine] Read Collision / Failure: {e}")
             return self._cached_graph  # Fallback to RAM cache
 
     def get_node_config(self, node_id: str) -> Dict[str, Any]:
@@ -380,4 +384,4 @@ class ValidationReport:
             lines.append(
                 f"  {issue['node']:<20} {issue['severity']:<8} {issue['field']:<28} {issue['detail']}"
             )
-        return "\n".join(lines) + "\n"
+        return "\n".join(lines) + "\n"

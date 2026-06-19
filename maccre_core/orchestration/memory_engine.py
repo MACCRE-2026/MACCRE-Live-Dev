@@ -34,6 +34,10 @@ from maccre_core._net.gemini_client import GeminiClient, user_turn
 from maccre_core.orchestration.windows_vault import get_native_credential
 from maccre_core.utils.path_resolver import get_maccre_root
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # ── Strict Schema for a "Thought Pin" ─────────────────────────────────────────
 
@@ -113,7 +117,7 @@ class CognitiveMemoryEngine:
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(triplets, f, indent=2)
 
-            print(f"[Memory Engine] Extracted {len(triplets)} thought pins to the Corkboard.")
+            logger.info(f"[Memory Engine] Extracted {len(triplets)} thought pins to the Corkboard.")
 
             # NOTE: Session-level thought_pins.db creation has been removed.
             # Knowledge triplets (thought-pins) are now only vectorized during
@@ -122,4 +126,4 @@ class CognitiveMemoryEngine:
             # until the session is promoted to the project-level canon.
 
         except Exception as e:
-            print(f"[Memory Engine] Extraction skipped/failed: {e}")
+            logger.info(f"[Memory Engine] Extraction skipped/failed: {e}")

@@ -25,12 +25,16 @@ interception in topology.csv.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from maccre_core.utils.path_resolver import get_datacenter_path
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -702,7 +706,7 @@ def expand_macro(
     from maccre_core.macronode_registry import get_macronode_store  # noqa: PLC0415
 
     macro_type = agent_name.split(":", 1)[1].strip()
-    print(f"[MACRO_FACTORY] Intercepted MACRO request: '{macro_type}'. Expanding...")
+    logger.info(f"[MACRO_FACTORY] Intercepted MACRO request: '{macro_type}'. Expanding...")
 
     # ── Try loading from registry ─────────────────────────────────────────────
     try:
@@ -711,7 +715,7 @@ def expand_macro(
         topology_rows = macro.get("topology_rows", [])
 
         if not topology_rows:
-            print(f"[MACRO_FACTORY] Registry entry '{macro_type}' has no topology rows.")
+            logger.info(f"[MACRO_FACTORY] Registry entry '{macro_type}' has no topology rows.")
             broker.route_task(row_id, job_id, "FAILED", payload_path, source_payload_path=source_payload_path)
             return
 
@@ -760,7 +764,7 @@ def expand_macro(
         _register_ephemeral_nodes(ephemeral_nodes)
 
         next_node_str = ",".join(first_nodes) if first_nodes else list(ephemeral_nodes.keys())[0]
-        print(f"[MACRO_FACTORY] Spawned {len(ephemeral_nodes)} ephemeral nodes from registry. Queueing: {next_node_str}")
+        logger.info(f"[MACRO_FACTORY] Spawned {len(ephemeral_nodes)} ephemeral nodes from registry. Queueing: {next_node_str}")
         broker.route_task(
             row_id, job_id, next_node_str, payload_path,
             actual_cost=0.0, source_payload_path=source_payload_path,
@@ -771,10 +775,10 @@ def expand_macro(
         # Not in registry — fall through to error
         pass
     except Exception as exc:  # noqa: BLE001
-        print(f"[MACRO_FACTORY] Registry lookup failed: {exc}")
+        logger.info(f"[MACRO_FACTORY] Registry lookup failed: {exc}")
 
     # ── Unknown type ──────────────────────────────────────────────────────────
-    print(f"[MACRO_FACTORY] Unknown macro type: {macro_type}")
+    logger.info(f"[MACRO_FACTORY] Unknown macro type: {macro_type}")
     broker.route_task(row_id, job_id, "FAILED", payload_path, source_payload_path=source_payload_path)
 
 

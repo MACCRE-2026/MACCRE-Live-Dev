@@ -365,20 +365,30 @@ def _cli() -> None:
         emit_manifest=not args.dry_run,
     )
 
-    print(f"\n{'═' * 60}")
-    print("  DEDUP SCAN COMPLETE")
-    print(f"{'─' * 60}")
-    print(f"  Source:          {manifest.source_dir}")
-    print(f"  Files scanned:   {manifest.total_files_scanned:,}")
-    print(f"  Canonical files: {len(manifest.records):,}")
-    print(f"  ├─ Docs:         {manifest.doc_count:,}")
-    print(f"  ├─ Code:         {manifest.code_count:,}")
-    print(f"  └─ Media:        {manifest.media_count:,}")
-    print(f"  Dedup savings:   {manifest.dedup_savings:,} duplicates collapsed")
-    print(f"  Binary skipped:  {manifest.skipped_binary:,}")
     total_mb = manifest.total_size_bytes / (1024 ** 2)
-    print(f"  Total scanned:   {total_mb:,.1f} MB")
-    print(f"{'═' * 60}\n")
+    logger.info(
+        "\n%s\n  DEDUP SCAN COMPLETE\n%s\n"
+        "  Source:          %s\n"
+        "  Files scanned:   %s\n"
+        "  Canonical files: %s\n"
+        "  ├─ Docs:         %s\n"
+        "  ├─ Code:         %s\n"
+        "  └─ Media:        %s\n"
+        "  Dedup savings:   %s duplicates collapsed\n"
+        "  Binary skipped:  %s\n"
+        "  Total scanned:   %s MB\n%s",
+        "═" * 60, "─" * 60,
+        manifest.source_dir,
+        f"{manifest.total_files_scanned:,}",
+        f"{len(manifest.records):,}",
+        f"{manifest.doc_count:,}",
+        f"{manifest.code_count:,}",
+        f"{manifest.media_count:,}",
+        f"{manifest.dedup_savings:,}",
+        f"{manifest.skipped_binary:,}",
+        f"{total_mb:,.1f}",
+        "═" * 60,
+    )
 
 
 if __name__ == "__main__":

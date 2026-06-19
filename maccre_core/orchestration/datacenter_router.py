@@ -21,6 +21,10 @@ from typing import Any, Dict, cast
 
 from maccre_core.utils.path_resolver import get_maccre_root
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # --- PYRIGHT DYNAMIC SHIELD ---
 # The Google API client builds objects at runtime via discovery documents.
 # Strict type-checking is suppressed for all dynamic calls in this file.
@@ -80,7 +84,7 @@ class DatacenterRouter:
             
         except Exception as e:
             # If Drive throws a 403/404 or concurrency collision, we fail gracefully
-            print(f"Failed to acquire lock on {file_id}: {str(e)}")
+            logger.info(f"Failed to acquire lock on {file_id}: {str(e)}")
             return False
 
     def release_task_lock(self, drive_service: Any, file_id: str) -> None:

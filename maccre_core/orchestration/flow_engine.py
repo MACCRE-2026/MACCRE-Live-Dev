@@ -19,6 +19,8 @@ writes them to topology.csv dynamically, and executes them sequentially.
 """
 from __future__ import annotations
 
+import logging
+
 import os
 import sqlite3
 import time
@@ -30,6 +32,8 @@ from maccre_core.orchestration.swarm_worker import UniversalSwarmWorker
 from maccre_core.tools.admin_tools import build_topology, ensure_project_workbook
 from maccre_core.utils.path_resolver import get_datacenter_path
 from maccre_core.utils.session_manager import generate_session_id
+
+logger = logging.getLogger(__name__)
 
 
 class FlowStep:
@@ -121,19 +125,19 @@ class FlowRunner:
         ensure_project_workbook(self.project_name)
 
         job_id = f"job_{generate_session_id()}"
-        print(f"[FLOW_ENGINE] Booting Linear Flow (Job: {job_id}) across {len(steps)} MacroNode(s).")
+        logger.info(f"[FLOW_ENGINE] Booting Linear Flow (Job: {job_id}) across {len(steps)} MacroNode(s).")
 
         current_payload = initial_payload_path
         broker = LocalMessageBroker()
         
         for idx, step in enumerate(steps):
-            print(f"\n[FLOW_ENGINE] === STEP {idx+1}/{len(steps)}: Loading MacroNode '{step.macronode_name}' ===")
+            logger.info(f"\n[FLOW_ENGINE] === STEP {idx+1}/{len(steps)}: Loading MacroNode '{step.macronode_name}' ===")
             
             # 1. Load the MacroNode
             try:
                 macro_def = self._get_macronode(step.macronode_name)
             except KeyError:
-                print(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
+                logger.error(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
                 return current_payload
                 
             # 2. Hydrate Agent Slots
@@ -142,12 +146,12 @@ class FlowRunner:
             
             # 3. Write to topology.csv
             build_res = build_topology(hydrated_lists)
-            print(f"[FLOW_ENGINE] {build_res}")
+            logger.info(f"[FLOW_ENGINE] {build_res}")
             
             # 4. Inject Initial Task
             start_node = self._find_starting_node(topo_rows)
             broker.inject_task(job_id=job_id, payload_path=current_payload, starting_node=start_node)
-            print(f"[FLOW_ENGINE] Queued entrypoint: {start_node} with payload '{current_payload}'")
+            logger.info(f"[FLOW_ENGINE] Queued entrypoint: {start_node} with payload '{current_payload}'")
 
             # 5. Ignite the Swarm Worker for this DAG
             db_path = str(get_datacenter_path("swarm_queue.db"))
@@ -162,7 +166,7 @@ class FlowRunner:
             
             for _ in range(500):
                 if time.time() - start_time > timeout_seconds:
-                    print("[FLOW_ENGINE] Swarm Worker Timeout reached.")
+                    logger.info("[FLOW_ENGINE] Swarm Worker Timeout reached.")
                     break
                     
                 worker.execute_cycle()
@@ -176,15 +180,15 @@ class FlowRunner:
                 if still_open == 0:
                     break
 
-            print(f"[FLOW_ENGINE] MacroNode '{step.macronode_name}' completed execution.")
+            logger.info(f"[FLOW_ENGINE] MacroNode '{step.macronode_name}' completed execution.")
             
             # 6. Capture output to pass to next step
             latest_ledger = self._find_final_ledger_path(job_id, topo_rows)
             if latest_ledger:
                 current_payload = latest_ledger
-                print(f"[FLOW_ENGINE] Output captured: {current_payload}")
+                logger.info(f"[FLOW_ENGINE] Output captured: {current_payload}")
             else:
-                print(f"[FLOW_ENGINE] Warning: No output ledger found for {step.macronode_name}.")
+                logger.warning(f"[FLOW_ENGINE] Warning: No output ledger found for {step.macronode_name}.")
 
-        print(f"\n[FLOW_ENGINE] Linear Flow Complete. Final artifact: {current_payload}")
+        logger.info(f"\n[FLOW_ENGINE] Linear Flow Complete. Final artifact: {current_payload}")
         return current_payload

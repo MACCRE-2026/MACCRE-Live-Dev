@@ -1062,6 +1062,6 @@ def ingest_project(project_name: str, session_id: str = "") -> str:
         f"SKIPPED={skipped_count}  ERROR={error_count}"
     )
     report = "\n".join(lines)
-    print(report)
+    _log.info(report)
     return report
 
