@@ -392,6 +392,44 @@ class UniversalSwarmWorker:
                     node_config = self.topology.get_node_config(current_node)
                 except Exception:
                     pass
+
+            # ── Deterministic Node Interception ──────────────────────────────────
+            from maccre_core.orchestration.deterministic_nodes import (  # noqa: PLC0415
+                is_deterministic_node,
+                execute_deterministic_node,
+            )
+            if is_deterministic_node(current_node):
+                det_result = execute_deterministic_node(current_node, task, node_config)
+                logger.info(f"[{AGENT_ID}] DET Node: {det_result.log_message}")
+
+                # Write a minimal ledger entry
+                Path(ledger_path).write_text(
+                    f"# {current_node}\n\n{det_result.log_message}\n",
+                    encoding="utf-8",
+                )
+
+                if det_result.should_pause:
+                    # Set task to paused — manual resume needed
+                    self.broker.release_task(row_id)
+                    sys.stdout = orig_stdout
+                    sys.stderr = orig_stderr
+                    dual_out.close()
+                    dual_err.close()
+                    return True
+
+                next_node = det_result.next_node or str(node_config.get("Next_Node", "END"))
+                self.broker.route_task(
+                    row_id=row_id,
+                    job_id=job_id,
+                    next_node_str=next_node,
+                    new_payload_path=det_result.output_payload_path,
+                    source_payload_path=source_payload_path,
+                )
+                sys.stdout = orig_stdout
+                sys.stderr = orig_stderr
+                dual_out.close()
+                dual_err.close()
+                return True
             
             prompt_name = node_config.get("prompt", "none")
             base_prompt = self._load_json_card(prompt_name)
