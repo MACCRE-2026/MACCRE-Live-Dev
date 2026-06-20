@@ -31,6 +31,7 @@ import sqlite3
 import string
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from maccre_core.utils.path_resolver import get_maccre_root
 
@@ -104,6 +105,20 @@ def _ensure_registry() -> None:
                 status          TEXT NOT NULL DEFAULT 'started',
                 created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
                 completed_at    DATETIME
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS flow_history (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id           TEXT NOT NULL UNIQUE,
+                project_name     TEXT NOT NULL,
+                flow_steps_json  TEXT NOT NULL,
+                initial_payload  TEXT NOT NULL DEFAULT '',
+                final_artifact   TEXT NOT NULL DEFAULT '',
+                total_cost       REAL NOT NULL DEFAULT 0.0,
+                status           TEXT NOT NULL DEFAULT 'running',
+                created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at     DATETIME
             )
         """)
         conn.commit()
@@ -225,3 +240,96 @@ def get_project_sessions(project_name: str, limit: int = 20) -> list[dict[str, s
             (project_name, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Flow History ──────────────────────────────────────────────────────────────
+
+
+def save_flow_history(
+    job_id: str,
+    project_name: str,
+    flow_steps_json: str,
+    initial_payload: str = "",
+    final_artifact: str = "",
+    total_cost: float = 0.0,
+    status: str = "completed",
+) -> None:
+    """Persist a completed (or failed) flow execution for the history browser.
+
+    Args:
+        job_id:          Unique job identifier from the flow run.
+        project_name:    Owning project silo name.
+        flow_steps_json: JSON-serialized list of FlowStep dicts.
+        initial_payload: Path to the original payload used at launch.
+        final_artifact:  Path to the final output artifact.
+        total_cost:      Total API cost incurred.
+        status:          'completed' or 'failed'.
+    """
+    _ensure_registry()
+    db = str(_registry_path())
+    with sqlite3.connect(db) as conn:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("""
+            INSERT INTO flow_history
+                (job_id, project_name, flow_steps_json, initial_payload,
+                 final_artifact, total_cost, status, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(job_id) DO UPDATE SET
+                final_artifact = excluded.final_artifact,
+                total_cost     = excluded.total_cost,
+                status         = excluded.status,
+                completed_at   = CURRENT_TIMESTAMP
+        """, (job_id, project_name, flow_steps_json, initial_payload,
+              final_artifact, total_cost, status))
+        conn.commit()
+
+
+def list_completed_flows(
+    project_name: str = "",
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return completed flows with artifacts, optionally filtered by project.
+
+    Args:
+        project_name: If non-empty, filter to this project only.
+        limit:        Maximum rows to return.
+
+    Returns:
+        List of flow history dicts ordered by completed_at DESC.
+    """
+    _ensure_registry()
+    db = str(_registry_path())
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        if project_name:
+            rows = conn.execute(
+                "SELECT * FROM flow_history "
+                "WHERE project_name = ? AND status = 'completed' "
+                "ORDER BY completed_at DESC LIMIT ?",
+                (project_name, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM flow_history "
+                "WHERE status = 'completed' "
+                "ORDER BY completed_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def load_flow_history(job_id: str) -> dict[str, Any] | None:
+    """Load a single flow history record by job_id.
+
+    Returns:
+        Dict with all columns, or None if not found.
+    """
+    _ensure_registry()
+    db = str(_registry_path())
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM flow_history WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    return dict(row) if row else None

@@ -33,7 +33,8 @@ from textual.widgets import (
     Switch,
     SelectionList,
     RadioSet,
-    RadioButton
+    RadioButton,
+    DataTable,
 )
 
 from maccre_core.orchestration.nexus_agent import NexusAgent
@@ -738,23 +739,99 @@ class NodeLiveChatModal(ModalScreen[dict[str, str] | None]):
         self.dismiss(None)
 
 
-class FlowHistoryModalScreen(ModalScreen[str]):
+class FlowHistoryModalScreen(ModalScreen[dict | None]):
+    """Browse completed flow sessions by project and load them as templates."""
+
     def compose(self) -> ComposeResult:
         with Container(classes="dialog", id="flow-history-dialog"):
-            yield Label("Flow History")
-            yield Static("No past flows available yet.") # Placeholder
+            yield Label("Flow History", id="flow-history-title")
+            yield Static("Project:", classes="flow-history-label")
+            yield Select(
+                options=[("All Projects", "")],
+                value="",
+                id="fh-project-select",
+                allow_blank=False,
+            )
+            yield DataTable(id="fh-session-table", cursor_type="row")
             with Horizontal(classes="dialog-buttons"):
-                yield Button("Close", variant="default", id="close-btn")
-                yield Button("Canonize Flow", variant="success", id="btn-canonize-flow")
+                yield Button("Close", variant="default", id="fh-close-btn")
+                yield Button("Load Flow", variant="success", id="fh-load-btn")
+                yield Button("Canonize", variant="warning", id="fh-canonize-btn")
 
-    @on(Button.Pressed, "#close-btn")
-    def close(self):
+    def on_mount(self) -> None:
+        # Populate project selector
+        try:
+            from maccre_core.utils.session_manager import list_projects  # noqa: PLC0415
+            projects = list_projects()
+            options: list[tuple[str, str]] = [("All Projects", "")]
+            for p in projects:
+                name = p.get("project_name", "")
+                if name:
+                    options.append((name, name))
+            select = self.query_one("#fh-project-select", Select)
+            select.set_options(options)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Set up DataTable columns
+        table = self.query_one("#fh-session-table", DataTable)
+        table.add_columns("Job ID", "Flow", "Cost", "Date", "Artifact")
+        self._refresh_table("")
+
+    def _refresh_table(self, project: str) -> None:
+        """Re-query flow_history and populate the DataTable."""
+        table = self.query_one("#fh-session-table", DataTable)
+        table.clear()
+        self._flow_records: list[dict] = []
+        try:
+            from maccre_core.utils.session_manager import list_completed_flows  # noqa: PLC0415
+            import json  # noqa: PLC0415
+            flows = list_completed_flows(project_name=project)
+            for flow in flows:
+                job_id = str(flow.get("job_id", "?"))
+                # Parse flow steps for display
+                try:
+                    steps = json.loads(flow.get("flow_steps_json", "[]"))
+                    flow_names = " → ".join(s.get("macronode_name", "?") for s in steps)
+                except Exception:  # noqa: BLE001
+                    flow_names = "?"
+                cost = f"${flow.get('total_cost', 0.0):.4f}"
+                date = str(flow.get("completed_at", "?"))[:16]
+                artifact = str(flow.get("final_artifact", ""))
+                has_artifact = "✓" if artifact and artifact != "none" else "—"
+                table.add_row(job_id, flow_names, cost, date, has_artifact)
+                self._flow_records.append(flow)
+        except Exception:  # noqa: BLE001
+            pass
+
+    @on(Select.Changed, "#fh-project-select")
+    def on_project_change(self, event: Select.Changed) -> None:
+        project = str(event.value) if event.value is not None else ""
+        self._refresh_table(project)
+
+    @on(Button.Pressed, "#fh-close-btn")
+    def close(self) -> None:
         self.dismiss(None)
-        
-    @on(Button.Pressed, "#btn-canonize-flow")
-    def canonize(self):
-        self.dismiss("canonize")
 
+    @on(Button.Pressed, "#fh-load-btn")
+    def load_flow(self) -> None:
+        table = self.query_one("#fh-session-table", DataTable)
+        cursor = table.cursor_row
+        if cursor is not None and 0 <= cursor < len(self._flow_records):
+            record = self._flow_records[cursor]
+            self.dismiss({"action": "load", "record": record})
+        else:
+            self.dismiss(None)
+
+    @on(Button.Pressed, "#fh-canonize-btn")
+    def canonize(self) -> None:
+        table = self.query_one("#fh-session-table", DataTable)
+        cursor = table.cursor_row
+        if cursor is not None and 0 <= cursor < len(self._flow_records):
+            record = self._flow_records[cursor]
+            self.dismiss({"action": "canonize", "record": record})
+        else:
+            self.dismiss(None)
 
 class FileCabinetModalScreen(ModalScreen[dict]):
     def compose(self) -> ComposeResult:
@@ -1396,6 +1473,10 @@ class NexusPlex(App[None]):
         self._node_payloads: list[str] = []  # captured output path per completed step
         self._injected_context: str = ""  # text from context injection modal
         self._hitl_job_id: str = ""  # job_id for HITL pause resume
+        # Flow history tracking (duplicate-run guard)
+        self._flow_loaded_from_history: bool = False
+        self._flow_history_job_id: str = ""
+        self._flow_history_hash: str = ""
         
         self.nexus = NexusAgent(
             print_callback=self.write_nexus_log,
@@ -2071,6 +2152,23 @@ class NexusPlex(App[None]):
         except Exception as e:  # noqa: BLE001
             self.write_agent_log(f"[yellow]Pre-flight check skipped: {e}[/yellow]")
 
+        # ── Duplicate-Run Guard ───────────────────────────────────────────────
+        if self._flow_loaded_from_history:
+            current_hash = self._hash_flow_config(self.active_flow_steps, self._pending_payload_path)
+            if current_hash == self._flow_history_hash:
+                self.write_agent_log(
+                    f"\n[bold yellow]⚠ DUPLICATE RUN DETECTED[/bold yellow]\n"
+                    f"[dim]This is an unmodified replay of job {self._flow_history_job_id}.[/dim]\n"
+                    f"[dim]Modify the flow or payload, or click [Proceed Anyway] to launch as-is.[/dim]"
+                )
+                self._preflight_override_pending = True
+                self.query_one("#btn-proceed-anyway", Button).remove_class("hidden")
+                return
+            else:
+                self.write_agent_log("[green]✓ Flow modified from history template — proceeding.[/green]")
+
+        # Reset history tracking on launch
+        self._flow_loaded_from_history = False
         self._do_launch_flow()
 
     @on(Button.Pressed, "#btn-proceed-anyway")
@@ -2230,10 +2328,83 @@ class NexusPlex(App[None]):
 
     @on(Button.Pressed, "#btn-flow-history")
     def action_flow_history(self) -> None:
-        def handle_flow_history_result(result: str | None):
-            if result == "canonize":
-                self.write_agent_log("[green]Flow Canonized![/green]")
+        def handle_flow_history_result(result: dict | None) -> None:
+            if result is None:
+                return
+            action = result.get("action", "")
+            record = result.get("record", {})
+
+            if action == "load":
+                self._load_flow_from_history(record)
+            elif action == "canonize":
+                self._canonize_from_history(record)
+
         self.push_screen(FlowHistoryModalScreen(), handle_flow_history_result)
+
+    def _load_flow_from_history(self, record: dict) -> None:
+        """Deserialize a flow_history record into the active flow sequence."""
+        import json  # noqa: PLC0415
+        from maccre_core.orchestration.flow_engine import FlowStep  # noqa: PLC0415
+
+        job_id = record.get("job_id", "?")
+        steps_json = record.get("flow_steps_json", "[]")
+        initial_payload = record.get("initial_payload", "none")
+
+        try:
+            step_dicts = json.loads(steps_json)
+            loaded_steps = [FlowStep.from_dict(d) for d in step_dicts]
+        except Exception as e:  # noqa: BLE001
+            self.write_agent_log(f"[red]Failed to parse flow steps from history:[/red] {e}")
+            return
+
+        if not loaded_steps:
+            self.write_agent_log("[yellow]Flow history record contains no steps.[/yellow]")
+            return
+
+        # Populate active flow sequence
+        self.active_flow_steps = loaded_steps
+        self._refresh_flow_line()
+
+        # Populate payload
+        self._pending_payload_path = initial_payload
+
+        # Track history source for duplicate-run guard
+        self._flow_loaded_from_history = True
+        self._flow_history_job_id = job_id
+        self._flow_history_hash = self._hash_flow_config(loaded_steps, initial_payload)
+
+        flow_names = " → ".join(s.macronode_name for s in loaded_steps)
+        self.write_agent_log(
+            f"\n[bold green]Flow loaded from history:[/bold green] {job_id}\n"
+            f"[dim]Steps: {flow_names}[/dim]\n"
+            f"[dim]Payload: {initial_payload}[/dim]\n"
+            f"[dim]Edit the flow or payload before launching, or launch as-is.[/dim]"
+        )
+
+    def _canonize_from_history(self, record: dict) -> None:
+        """Trigger canonization for a flow history session."""
+        job_id = record.get("job_id", "?")
+        project = record.get("project_name", self.active_project)
+        self.write_agent_log(
+            f"[bold yellow]Canonizing session {job_id} for project {project}...[/bold yellow]"
+        )
+        try:
+            from maccre_core.tools.rag_tools import canonize_session  # noqa: PLC0415
+            result = canonize_session(project, job_id)
+            self.write_agent_log(f"[green]Canonization complete:[/green] {result}")
+        except Exception as e:  # noqa: BLE001
+            self.write_agent_log(f"[red]Canonization failed:[/red] {e}")
+
+    @staticmethod
+    def _hash_flow_config(steps: list, payload: str) -> str:
+        """Generate a hash of the flow config for duplicate detection."""
+        import hashlib  # noqa: PLC0415
+        import json  # noqa: PLC0415
+        content = json.dumps([
+            {"name": s.macronode_name, "mapping": s.agent_mapping}
+            for s in steps
+        ], sort_keys=True) + "|" + payload
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     @on(Button.Pressed, "#btn-expand-input")
     def action_expand_input(self) -> None:

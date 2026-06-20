@@ -44,6 +44,18 @@ class FlowStep:
         self.macronode_name = macronode_name
         self.agent_mapping = agent_mapping or {}
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for JSON persistence in flow_history."""
+        return {"macronode_name": self.macronode_name, "agent_mapping": self.agent_mapping}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "FlowStep":
+        """Reconstruct from a dict (flow_history deserialization)."""
+        return cls(
+            macronode_name=d.get("macronode_name", ""),
+            agent_mapping=d.get("agent_mapping", {}),
+        )
+
 
 @dataclass
 class PreflightReport:
@@ -458,6 +470,37 @@ class FlowRunner:
             logger.info(f"[FLOW_ENGINE] Unified Session Ledger → {unified_path}")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[FLOW_ENGINE] Could not generate unified ledger: {e}")
+
+        # ── 9. Persist Flow History ───────────────────────────────────────────
+        try:
+            import json as _json  # noqa: PLC0415
+            from maccre_core.utils.session_manager import save_flow_history  # noqa: PLC0415
+
+            steps_json = _json.dumps([s.to_dict() for s in steps])
+            # Calculate total cost from task_queue
+            total_cost = 0.0
+            try:
+                db_path = str(get_datacenter_path("swarm_queue.db"))
+                with sqlite3.connect(db_path) as _q:
+                    total_cost = _q.execute(
+                        "SELECT COALESCE(SUM(actual_cost), 0) FROM task_queue WHERE job_id = ?",
+                        (job_id,),
+                    ).fetchone()[0]
+            except Exception:  # noqa: BLE001
+                pass
+
+            save_flow_history(
+                job_id=job_id,
+                project_name=self.project_name,
+                flow_steps_json=steps_json,
+                initial_payload=initial_payload_path,
+                final_artifact=current_payload,
+                total_cost=total_cost,
+                status="completed",
+            )
+            logger.info(f"[FLOW_ENGINE] Flow History persisted: {job_id} (${total_cost:.6f})")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[FLOW_ENGINE] Could not persist flow history: {e}")
 
         return current_payload
 

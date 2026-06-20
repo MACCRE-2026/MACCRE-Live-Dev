@@ -762,3 +762,51 @@ FlowExecutionPanel {
 #live-chat-buttons Button {
     margin: 0 0 0 1;
 }
+
+/* ── Flow History Modal ──────────────────────────────────────────────────── */
+
+#flow-history-dialog {
+    width: 100;
+    max-width: 110;
+    min-height: 20;
+    max-height: 40;
+    padding: 1 2;
+    background: #0d1117;
+    border: thick #1f6feb;
+}
+
+#flow-history-title {
+    text-style: bold;
+    color: #58a6ff;
+    margin-bottom: 1;
+}
+
+.flow-history-label {
+    color: #8b949e;
+    margin-bottom: 0;
+}
+
+#fh-project-select {
+    margin-bottom: 1;
+    width: 100%;
+}
+
+#fh-session-table {
+    height: 12;
+    max-height: 20;
+    margin-bottom: 1;
+    background: #161b22;
+    scrollbar-size: 1 1;
+}
+
+#fh-session-table > .datatable--cursor {
+    background: #1f6feb40;
+}
+
+#fh-load-btn {
+    margin-left: 1;
+}
+
+#fh-canonize-btn {
+    margin-left: 1;
+}
