@@ -20,11 +20,11 @@ writes them to topology.csv dynamically, and executes them sequentially.
 from __future__ import annotations
 
 import logging
-
 import os
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from maccre_core.macronode_registry import get_macronode_store
@@ -44,6 +44,42 @@ class FlowStep:
         self.agent_mapping = agent_mapping or {}
 
 
+@dataclass
+class PreflightReport:
+    """Aggregated result of all pre-flight validation checks."""
+
+    issues: list[dict[str, str]] = field(default_factory=list)
+    estimated_cost: float = 0.0
+
+    @property
+    def is_ok(self) -> bool:
+        """True when no ERROR-severity issues were recorded."""
+        return not any(i['severity'] == 'ERROR' for i in self.issues)
+
+    def render(self) -> str:
+        """Return Rich markup string for the Flow Monitor."""
+        lines: list[str] = ['[bold cyan]━━━ Pre-Flight Report ━━━[/bold cyan]']
+        for issue in self.issues:
+            sev = issue['severity']
+            if sev == 'ERROR':
+                icon = '[red]✗[/red]'
+            elif sev == 'WARN':
+                icon = '[yellow]⚠[/yellow]'
+            else:
+                icon = '[green]✓[/green]'
+            lines.append(f"  {icon} {issue['detail']}")
+
+        lines.append(f"\n  Estimated Cost: [bold]${self.estimated_cost:.4f}[/bold]")
+
+        error_count = sum(1 for i in self.issues if i['severity'] == 'ERROR')
+        if error_count:
+            lines.append(f"\n  [bold red]{error_count} ERROR(s) found. Flow blocked.[/bold red]")
+        else:
+            lines.append("\n  [bold green]All checks passed.[/bold green]")
+        return '\n'.join(lines)
+
+
+
 class FlowRunner:
     """Supervises the execution of a Linear Flow."""
 
@@ -59,6 +95,121 @@ class FlowRunner:
             return self.macronode_store.load(name)
         except KeyError:
             return self.global_store.load(name)
+
+    # ── Phase B: Pre-Flight Validation Gate ────────────────────────────────────
+
+    def preflight_check(self, steps: list[FlowStep]) -> PreflightReport:
+        """Run all pre-flight validations against the proposed flow.
+
+        Checks performed (in order):
+          a) MacroNode existence in project/GLOBAL registries.
+          b) Agent mapping — every mapped agent must exist in the roster.
+          c) Topology schema — hydrate, write, and validate each step's DAG.
+          d) Model health — non-blocking WARN via ModelSentinel (if available).
+          e) Cost estimation — sum estimated API costs across all topology rows.
+
+        Returns:
+            PreflightReport with collected issues and estimated cost.
+        """
+        # Deferred imports to break circular dependency chains.
+        from maccre_core.orchestration.roster_loader import validate_agents_exist
+        from maccre_core.orchestration.topology_engine import TopologyEngine
+        from maccre_core.tools.workbook_engine import _estimate_node_cost, get_pricing_table
+
+        report = PreflightReport()
+        pricing: dict[str, dict[str, float]] = get_pricing_table()
+        all_models: list[str] = []
+
+        for step in steps:
+            macro_name = step.macronode_name
+
+            # ── (a) MacroNode existence ───────────────────────────────────────
+            try:
+                macro_def = self._get_macronode(macro_name)
+            except KeyError:
+                report.issues.append({
+                    'severity': 'ERROR',
+                    'detail': f"MacroNode '{macro_name}' not found in project or GLOBAL registry.",
+                })
+                logger.error("[PREFLIGHT] MacroNode '%s' not found.", macro_name)
+                continue  # Can't validate further without the definition
+
+            # ── (b) Agent mapping validation ──────────────────────────────────
+            if step.agent_mapping:
+                mapped_agents: list[str] = list(step.agent_mapping.values())
+                missing = validate_agents_exist(mapped_agents)
+                for agent_name in missing:
+                    report.issues.append({
+                        'severity': 'ERROR',
+                        'detail': (
+                            f"Agent '{agent_name}' (mapped in step '{macro_name}') "
+                            "not found in roster."
+                        ),
+                    })
+                    logger.error("[PREFLIGHT] Agent '%s' missing from roster.", agent_name)
+
+            # ── (c) Topology schema validation ────────────────────────────────
+            topo_rows: list[dict[str, Any]] = macro_def.get('topology_rows', [])
+            if topo_rows:
+                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping)
+                try:
+                    build_topology(hydrated_lists)
+                    topo_engine = TopologyEngine()
+                    topo_engine.flush_cache()
+                    val_report = topo_engine.validate()
+                    for issue in val_report.issues:
+                        report.issues.append({
+                            'severity': issue['severity'],
+                            'detail': (
+                                f"[{macro_name}/{issue.get('node', '?')}] "
+                                f"{issue['detail']}"
+                            ),
+                        })
+                except Exception as exc:  # noqa: BLE001
+                    report.issues.append({
+                        'severity': 'ERROR',
+                        'detail': f"Topology build/validate failed for '{macro_name}': {exc}",
+                    })
+                    logger.error("[PREFLIGHT] Topology error for '%s': %s", macro_name, exc)
+
+                # Collect model names for health & cost checks
+                for row in topo_rows:
+                    model = str(row.get('Model_Override', 'none')).strip()
+                    if model and model.lower() != 'none':
+                        all_models.append(model)
+
+        # ── (d) Model health — non-blocking WARN ─────────────────────────────
+        try:
+            from maccre_core._net.model_sentinel import get_sentinel
+            api_key = os.environ.get('GOOGLE_API_KEY', '')
+            if api_key:
+                sentinel = get_sentinel(api_key)
+                for model in set(all_models):
+                    if not sentinel.is_healthy(model):
+                        report.issues.append({
+                            'severity': 'WARN',
+                            'detail': f"Model '{model}' reported unhealthy by ModelSentinel.",
+                        })
+                        logger.warning("[PREFLIGHT] Model '%s' unhealthy.", model)
+        except Exception:  # noqa: BLE001
+            # Sentinel not available or no API key — skip silently
+            pass
+
+        # ── (e) Cost estimation ───────────────────────────────────────────────
+        total_cost: float = 0.0
+        for model in all_models:
+            total_cost += _estimate_node_cost(model, pricing)
+        report.estimated_cost = round(total_cost, 6)
+        logger.info("[PREFLIGHT] Estimated flow cost: $%.4f across %d node(s).", total_cost, len(all_models))
+
+        # Summary log
+        error_count = sum(1 for i in report.issues if i['severity'] == 'ERROR')
+        warn_count = sum(1 for i in report.issues if i['severity'] == 'WARN')
+        logger.info(
+            "[PREFLIGHT] Complete — %d ERROR(s), %d WARN(s), cost=$%.4f.",
+            error_count, warn_count, report.estimated_cost,
+        )
+        return report
 
     def _hydrate_topology(self, topology_rows: list[dict[str, Any]], agent_mapping: dict[str, str]) -> list[list[str]]:
         """Apply agent mapping and convert JSON dict rows back into a List[List[str]] format suitable for topology.csv."""
@@ -116,6 +267,8 @@ class FlowRunner:
         steps: list[FlowStep],
         initial_payload_path: str = "none",
         cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+        step_callback: Any = None,
     ) -> str:
         """
         Execute a sequential linear flow of MacroNodes.
@@ -124,6 +277,9 @@ class FlowRunner:
             steps: List of FlowStep objects.
             initial_payload_path: Starting context.
             cancel_event: Optional threading.Event — checked between nodes for graceful cancellation.
+            pause_event: Optional threading.Event — when cleared, blocks worker loop (VCR pause).
+                         Must be set (unblocked) to allow execution.
+            step_callback: Optional callable(step_index: int, output_path: str) — called after each step.
 
         Returns:
             The path to the final output file from the last step in the flow.
@@ -142,6 +298,10 @@ class FlowRunner:
             if cancel_event and cancel_event.is_set():
                 logger.info("[FLOW_ENGINE] Cancellation requested — halting flow.")
                 break
+
+            # VCR pause gate — blocks here when pause_event is cleared
+            if pause_event is not None:
+                pause_event.wait()
 
             logger.info(f"\n[FLOW_ENGINE] === STEP {idx+1}/{len(steps)}: Loading MacroNode '{step.macronode_name}' ===")
             
@@ -181,6 +341,10 @@ class FlowRunner:
                     logger.info("[FLOW_ENGINE] Cancellation requested — aborting current MacroNode.")
                     break
 
+                # VCR pause gate — blocks inside the worker loop too
+                if pause_event is not None:
+                    pause_event.wait()
+
                 if time.time() - start_time > timeout_seconds:
                     logger.info("[FLOW_ENGINE] Swarm Worker Timeout reached.")
                     break
@@ -205,6 +369,13 @@ class FlowRunner:
                 logger.info(f"[FLOW_ENGINE] Output captured: {current_payload}")
             else:
                 logger.warning(f"[FLOW_ENGINE] Warning: No output ledger found for {step.macronode_name}.")
+
+            # 7. Notify step callback (for TUI payload tracking)
+            if step_callback is not None:
+                try:
+                    step_callback(idx, current_payload)
+                except Exception:  # noqa: BLE001
+                    pass
 
         logger.info(f"\n[FLOW_ENGINE] Linear Flow Complete. Final artifact: {current_payload}")
         return current_payload

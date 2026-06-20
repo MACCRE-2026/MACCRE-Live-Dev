@@ -613,6 +613,131 @@ class ContextInjectModalScreen(ModalScreen[str]):
         self.dismiss(text)
 
 
+class NodeLiveChatModal(ModalScreen[dict[str, str] | None]):
+    """Live Chat with a specific flow node's agent. Staged payload + preparatory chat."""
+
+    BINDINGS = [("escape", "close_chat", "Close")]
+
+    def __init__(
+        self,
+        agent_name: str,
+        node_name: str,
+        staged_payload: str,
+        system_prompt: str = "",
+    ) -> None:
+        super().__init__()
+        self._agent_name = agent_name
+        self._node_name = node_name
+        self._staged_payload = staged_payload
+        self._system_prompt = system_prompt
+        self._conversation: list[dict[str, str]] = []
+        self._payload_delivered = False
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="dialog", id="live-chat-modal"):
+            yield Label(
+                f"💬 Live Chat: {self._agent_name} (Node: {self._node_name})",
+                classes="pane-title",
+            )
+
+            # Staged payload display (read-only)
+            yield Label("Staged Payload [dim](will be delivered on Continue Flow)[/dim]")
+            yield Static(
+                f"[dim]{self._staged_payload[:500]}{'...' if len(self._staged_payload) > 500 else ''}[/dim]",
+                id="staged-payload-display",
+            )
+
+            # Conversation log
+            yield Label("Conversation")
+            yield RichLog(id="live-chat-log", wrap=True, highlight=True, markup=True)
+
+            # Chat input
+            with Horizontal(classes="chat-input-row"):
+                yield TextArea(id="live-chat-input")
+                yield Button("Send", id="btn-live-chat-send", variant="primary")
+
+            # Action buttons
+            with Horizontal(id="live-chat-buttons"):
+                yield Button("Continue Flow", id="btn-continue-flow", variant="success")
+                yield Button("Re-Run Node", id="btn-rerun-node", variant="warning")
+                yield Button("Close", id="btn-close-live-chat", variant="error")
+
+    @on(Button.Pressed, "#btn-live-chat-send")
+    def send_message(self) -> None:
+        inp = self.query_one("#live-chat-input", TextArea)
+        msg = inp.text.strip()
+        if not msg:
+            return
+        inp.text = ""
+        log = self.query_one("#live-chat-log", RichLog)
+        log.write(f"\n[bold green]You:[/bold green] {msg}")
+        self._conversation.append({"role": "user", "text": msg})
+
+        # Generate agent response in background
+        self._generate_response(msg, log)
+
+    @work(thread=True)
+    def _generate_response(self, user_msg: str, log: RichLog) -> None:
+        """Generate agent response via UniversalRouter."""
+        try:
+            from maccre_core.maccre_router import UniversalRouter  # noqa: PLC0415
+            router = UniversalRouter()
+
+            # Build context: system prompt + conversation history
+            context_parts: list[str] = []
+            if self._system_prompt:
+                context_parts.append(f"System: {self._system_prompt}")
+            for turn in self._conversation[:-1]:  # All except last (which is current)
+                role = "User" if turn["role"] == "user" else self._agent_name
+                context_parts.append(f"{role}: {turn['text']}")
+
+            full_prompt = "\n\n".join(context_parts) + f"\n\nUser: {user_msg}"
+
+            response = router.generate(full_prompt, temperature=0.7)
+            response_text = response.text if hasattr(response, "text") else str(response)
+
+            self._conversation.append({"role": "agent", "text": response_text})
+            self.call_from_thread(
+                log.write,
+                f"\n[bold blue]{self._agent_name}:[/bold blue] {response_text}",
+            )
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(
+                log.write,
+                f"\n[red]Error generating response: {e}[/red]",
+            )
+
+    @on(Button.Pressed, "#btn-continue-flow")
+    def continue_flow(self) -> None:
+        """Deliver staged payload + conversation context, then dismiss."""
+        log = self.query_one("#live-chat-log", RichLog)
+        log.write("\n[bold cyan]Delivering staged payload to agent...[/bold cyan]")
+
+        # Build combined context: staged payload + conversation
+        combined_parts = [self._staged_payload]
+        for turn in self._conversation:
+            role = "User" if turn["role"] == "user" else self._agent_name
+            combined_parts.append(f"{role}: {turn['text']}")
+
+        combined = "\n\n".join(combined_parts)
+        self._payload_delivered = True
+        self.dismiss({"action": "continue", "payload": combined})
+
+    @on(Button.Pressed, "#btn-rerun-node")
+    def rerun_node(self) -> None:
+        """Clear conversation and restart."""
+        self._conversation.clear()
+        self._payload_delivered = False
+        log = self.query_one("#live-chat-log", RichLog)
+        log.clear()
+        log.write("[yellow]Node reset. Start a new preparatory conversation.[/yellow]")
+
+    @on(Button.Pressed, "#btn-close-live-chat")
+    def action_close_chat(self) -> None:
+        """Close without delivering — flow stays paused."""
+        self.dismiss(None)
+
+
 class FlowHistoryModalScreen(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         with Container(classes="dialog", id="flow-history-dialog"):
@@ -1198,19 +1323,35 @@ class FlowExecutionPanel(Vertical):
             with Horizontal(classes="flow-controls"):
                 yield Button("Launch Flow", variant="success", id="btn-launch-flow")
                 yield Button("Stop Flow", variant="error", id="btn-stop-flow", disabled=True)
-                yield Button("Resume", variant="primary", id="btn-resume-flow", disabled=True)
                 yield Button("Create Payload", variant="primary", id="btn-create-payload")
                 yield Button("Linear Flow Editor", variant="warning", id="btn-flow-editor")
-                
+
             yield Label("Active Flow Sequence")
-            with Horizontal(classes="flow-controls"):
-                yield Static("No flow loaded.", id="active-flow-sequence")
-                yield Button("Rewind Last Step", variant="warning", id="btn-rewind-flow")
+            with Horizontal(id="active-flow-sequence", classes="flow-controls"):
+                yield Static("No flow loaded.", id="flow-seq-text")
 
         # Flow Monitor Panel
         with Vertical(classes="panel-section", id="flow-monitor-section"):
             yield Label("Flow Monitor", classes="pane-title")
             yield RichLog(id="flow-execution-log", wrap=True, highlight=True, markup=True)
+
+            # VCR Transport + Instruction Panel
+            with Horizontal(id="vcr-transport-row"):
+                yield Button("⏸", id="btn-vcr", classes="vcr-btn vcr-btn--idle", disabled=True)
+                yield Static(
+                    "[dim]While paused: click a node → ○ radios appear → "
+                    "left = inject before (+ Live Chat) · right = inject after (fork) → "
+                    "orange arrow = open injection modal → ▶ to resume[/dim]",
+                    id="vcr-instructions",
+                    classes="vcr-instructions",
+                )
+
+            # Pre-flight override (hidden by default, shown on validation failure)
+            yield Button(
+                "⚠ Proceed Anyway", id="btn-proceed-anyway",
+                variant="warning", classes="btn-proceed-anyway hidden",
+            )
+
             with Horizontal(classes="input-row"):
                 yield Input(placeholder="Inject context to flow...", id="fe-input")
                 yield Button("↗", id="btn-expand-input", variant="primary", classes="btn-icon")
@@ -1247,6 +1388,13 @@ class NexusPlex(App[None]):
         self._flow_cancel_event: threading.Event | None = None
         self._flow_pause_event: threading.Event | None = None
         self._pending_payload_path: str = "none"
+        # VCR state: "idle" | "running" | "paused"
+        self._vcr_state: str = "idle"
+        # Time-travel state
+        self._paused_selected_node: int | None = None
+        self._paused_radio_side: str = ""  # "left" | "right" | ""
+        self._node_payloads: list[str] = []  # captured output path per completed step
+        self._injected_context: str = ""  # text from context injection modal
         
         self.nexus = NexusAgent(
             print_callback=self.write_nexus_log,
@@ -1596,7 +1744,7 @@ class NexusPlex(App[None]):
                     self.active_flow_steps.append(FlowStep(macro_name, mapping))
 
                 seq_str = " → ".join([s.macronode_name for s in self.active_flow_steps])
-                self.query_one("#active-flow-sequence", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
+                self.query_one("#flow-seq-text", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
                 self.write_agent_log(
                     f"[green]Flow Line updated: {len(self.active_flow_steps)} step(s).[/green]"
                 )
@@ -1640,15 +1788,255 @@ class NexusPlex(App[None]):
 
         self.push_screen(CreatePayloadModal(), handle_payload)
 
-    @on(Button.Pressed, "#btn-resume-flow")
-    def action_resume_flow(self) -> None:
-        """Resume a paused flow (DET_PAUSE)."""
-        if self._flow_pause_event:
-            self._flow_pause_event.set()
-            self.query_one("#btn-resume-flow", Button).disabled = True
-            self.write_agent_log("[bold cyan]Flow resumed.[/bold cyan]")
+    @on(Button.Pressed, "#btn-vcr")
+    def action_vcr_toggle(self) -> None:
+        """Toggle pause/play — the VCR transport button."""
+        if self._vcr_state == "running":
+            # PAUSE the flow
+            self._vcr_state = "paused"
+            if self._flow_pause_event:
+                self._flow_pause_event.clear()  # Block the flow worker
+            vcr_btn = self.query_one("#btn-vcr", Button)
+            vcr_btn.label = "▶"
+            vcr_btn.remove_class("vcr-btn--running")
+            vcr_btn.add_class("vcr-btn--paused")
+            self.write_agent_log("[bold yellow]⏸ Flow paused.[/bold yellow]")
+            self._enter_paused_state()
+
+        elif self._vcr_state == "paused":
+            # RESUME the flow
+            self._vcr_state = "running"
+            if self._flow_pause_event:
+                self._flow_pause_event.set()  # Unblock the flow worker
+            vcr_btn = self.query_one("#btn-vcr", Button)
+            vcr_btn.label = "⏸"
+            vcr_btn.remove_class("vcr-btn--paused")
+            vcr_btn.add_class("vcr-btn--running")
+            self.write_agent_log("[bold cyan]▶ Flow resumed.[/bold cyan]")
+            self._exit_paused_state()
+
+    def _set_vcr_state(self, state: str) -> None:
+        """Set VCR button visual state: 'idle' | 'running' | 'paused'."""
+        self._vcr_state = state
+        vcr_btn = self.query_one("#btn-vcr", Button)
+        vcr_btn.remove_class("vcr-btn--idle", "vcr-btn--running", "vcr-btn--paused")
+        if state == "idle":
+            vcr_btn.label = "⏸"
+            vcr_btn.add_class("vcr-btn--idle")
+            vcr_btn.disabled = True
+        elif state == "running":
+            vcr_btn.label = "⏸"
+            vcr_btn.add_class("vcr-btn--running")
+            vcr_btn.disabled = False
+        elif state == "paused":
+            vcr_btn.label = "▶"
+            vcr_btn.add_class("vcr-btn--paused")
+            vcr_btn.disabled = False
+
+    def _enter_paused_state(self) -> None:
+        """Transform the flow line into interactive paused-state controls."""
+        self._paused_selected_node = None
+        self._paused_radio_side = ""
+        self._injected_context = ""
+        # Rebuild flow line with clickable nodes (Phase C will add radio dots + orange arrows)
+        self._refresh_paused_flow_line()
+
+    def _exit_paused_state(self) -> None:
+        """Restore flow line to normal non-interactive state."""
+        self._paused_selected_node = None
+        self._paused_radio_side = ""
+        self._injected_context = ""
+
+    def _refresh_paused_flow_line(self) -> None:
+        """Rebuild flow line for paused state — nodes are clickable, arrows can turn orange."""
+        container = self.query_one("#active-flow-sequence", Horizontal)
+        # Clear everything except the static fallback
+        for w in list(container.children):
+            w.remove()
+
+        if not self.active_flow_steps:
+            container.mount(Static("[dim italic]  ── empty flow line ──  [/dim italic]"))
+            return
+
+        from maccre_core.orchestration.flow_engine import FlowStep  # noqa: PLC0415
+
+        container.mount(Static("[yellow]⏸ PAUSED[/yellow] ", classes="flow-arrow-dim"))
+
+        for i, step in enumerate(self.active_flow_steps):
+            name = step.macronode_name if isinstance(step, FlowStep) else str(step)
+
+            if i > 0:
+                # Arrow between nodes — dim by default, illuminates orange when a radio selects it
+                arrow_cls = "flow-arrow-dim"
+                if self._paused_selected_node is not None:
+                    if self._paused_radio_side == "right" and i == self._paused_selected_node + 1:
+                        arrow_cls = "flow-arrow-paused"
+                    elif self._paused_radio_side == "left" and i == self._paused_selected_node:
+                        arrow_cls = "flow-arrow-paused"
+                container.mount(
+                    Button("→", id=f"paused-arrow-{i}", classes=arrow_cls,
+                           disabled=(arrow_cls == "flow-arrow-dim"))
+                )
+
+            # Node button
+            node_cls = "flow-node-clickable"
+            if self._paused_selected_node == i:
+                node_cls = "flow-node-clickable flow-node-selected"
+
+            node_wrapper = Horizontal(classes="flow-node-wrapper")
+            container.mount(node_wrapper)
+
+            # Left radio dot (visible only when this node is selected)
+            if self._paused_selected_node == i:
+                left_cls = "radio-dot" + (" radio-dot-active" if self._paused_radio_side == "left" else "")
+                node_wrapper.mount(Button("○", id=f"radio-left-{i}", classes=left_cls))
+
+            node_wrapper.mount(Button(f" {name} ", id=f"paused-node-{i}", classes=node_cls))
+
+            # Right radio dot
+            if self._paused_selected_node == i:
+                right_cls = "radio-dot" + (" radio-dot-active" if self._paused_radio_side == "right" else "")
+                node_wrapper.mount(Button("○", id=f"radio-right-{i}", classes=right_cls))
+
+        # If left radio is selected, show Live Chat button
+        if self._paused_selected_node is not None and self._paused_radio_side == "left":
+            container.mount(
+                Button("💬 Live Chat", id="btn-open-live-chat",
+                       variant="primary", classes="btn-live-chat")
+            )
+
+        container.mount(Static(" [dim](click a node)[/dim]", classes="flow-arrow-dim"))
+
+    @on(Button.Pressed)
+    def _handle_paused_flow_clicks(self, event: Button.Pressed) -> None:
+        """Route clicks on paused-state flow line elements."""
+        btn_id = str(event.button.id or "")
+
+        # ── Node clicked — select it, show radio dots ──
+        if btn_id.startswith("paused-node-"):
+            if self._vcr_state != "paused":
+                return
+            try:
+                idx = int(btn_id.replace("paused-node-", ""))
+            except ValueError:
+                return
+            self._paused_selected_node = idx
+            self._paused_radio_side = ""
+            self._refresh_paused_flow_line()
+            name = self.active_flow_steps[idx].macronode_name
+            self.write_agent_log(
+                f"[cyan]Selected node: {name}[/cyan] — click ○ left (inject before) or ○ right (inject after/fork)"
+            )
+
+        # ── Radio dot clicked — set side, illuminate arrow ──
+        elif btn_id.startswith("radio-left-"):
+            try:
+                idx = int(btn_id.replace("radio-left-", ""))
+            except ValueError:
+                return
+            self._paused_radio_side = "left"
+            self._refresh_paused_flow_line()
+            self.write_agent_log(
+                "[yellow]◀ Left radio:[/yellow] inject context BEFORE this node. "
+                "Click the orange arrow to inject, or 💬 Live Chat for interactive prep."
+            )
+
+        elif btn_id.startswith("radio-right-"):
+            try:
+                idx = int(btn_id.replace("radio-right-", ""))
+            except ValueError:
+                return
+            self._paused_radio_side = "right"
+            self._refresh_paused_flow_line()
+            self.write_agent_log(
+                "[yellow]▶ Right radio:[/yellow] inject context AFTER this node's output (fork). "
+                "Click the orange arrow to inject."
+            )
+
+        # ── Orange arrow clicked — open context injection modal ──
+        elif btn_id.startswith("paused-arrow-"):
+            if self._paused_selected_node is None or not self._paused_radio_side:
+                return
+            self._open_paused_injection_modal()
+
+    def _open_paused_injection_modal(self) -> None:
+        """Open context injection for the selected arrow in paused state."""
+        def handle_injection(text: str | None) -> None:
+            if text:
+                self._injected_context = text
+                side = self._paused_radio_side
+                node_idx = self._paused_selected_node
+                if node_idx is not None:
+                    name = self.active_flow_steps[node_idx].macronode_name
+                    self.write_agent_log(
+                        f"[green]Context injected ({len(text)} chars) "
+                        f"{'before' if side == 'left' else 'after'} '{name}'.[/green]\n"
+                        f"Click ▶ to resume flow from this point."
+                    )
+        self.push_screen(ContextInjectModalScreen(), handle_injection)
+
+    @on(Button.Pressed, "#btn-open-live-chat")
+    def _open_live_chat(self) -> None:
+        """Open Live Chat modal for the selected node."""
+        if self._paused_selected_node is None:
+            return
+        node_idx = self._paused_selected_node
+        step = self.active_flow_steps[node_idx]
+
+        # Determine the staged payload for this node
+        if node_idx == 0:
+            staged = self._pending_payload_path
+        elif node_idx - 1 < len(self._node_payloads):
+            staged = self._node_payloads[node_idx - 1]
         else:
-            self.write_agent_log("[yellow]No paused flow to resume.[/yellow]")
+            staged = "(no captured payload for this step)"
+
+        # Try to read staged payload content
+        staged_content = staged
+        try:
+            from pathlib import Path  # noqa: PLC0415
+            p = Path(staged)
+            if p.exists():
+                staged_content = p.read_text(encoding="utf-8")[:2000]
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Get agent name and system prompt from topology
+        agent_name = "Agent"
+        system_prompt = ""
+        try:
+            from maccre_core.orchestration.roster_loader import load_agent_roster  # noqa: PLC0415
+            roster = load_agent_roster()
+            # First mapped agent name, or node name as fallback
+            if step.agent_mapping:
+                agent_name = next(iter(step.agent_mapping.values()), step.macronode_name)
+            else:
+                agent_name = step.macronode_name
+            profile = roster.get(agent_name, {})
+            system_prompt = profile.get("System_Prompt", "")
+        except Exception:  # noqa: BLE001
+            pass
+
+        def handle_live_chat_result(result: dict[str, str] | None) -> None:
+            if result and result.get("action") == "continue":
+                payload = result.get("payload", "")
+                self.write_agent_log(
+                    f"[green]Live Chat complete — {len(payload)} chars payload ready.[/green]\n"
+                    f"Click ▶ to resume flow from node '{step.macronode_name}'."
+                )
+                self._injected_context = payload
+            else:
+                self.write_agent_log("[dim]Live Chat closed. Flow remains paused.[/dim]")
+
+        self.push_screen(
+            NodeLiveChatModal(
+                agent_name=agent_name,
+                node_name=step.macronode_name,
+                staged_payload=staged_content,
+                system_prompt=system_prompt,
+            ),
+            handle_live_chat_result,
+        )
 
     @on(Button.Pressed, "#btn-launch-flow")
     def action_launch_flow(self) -> None:
@@ -1662,6 +2050,39 @@ class NexusPlex(App[None]):
                 "or launching with empty payload.[/yellow]"
             )
 
+        # ── Pre-Flight Validation Gate ────────────────────────────────────────
+        self.write_agent_log("\n[bold cyan]Running pre-flight checks...[/bold cyan]")
+        try:
+            from maccre_core.orchestration.flow_engine import FlowRunner  # noqa: PLC0415
+            runner = FlowRunner(self.active_project)
+            report = runner.preflight_check(self.active_flow_steps)
+            self.write_agent_log(report.render())
+
+            if not report.is_ok:
+                # Hard-block — show Proceed Anyway button
+                self.write_agent_log(
+                    "\n[bold red]Pre-flight validation failed. "
+                    "Review errors above, then click [Proceed Anyway] to override.[/bold red]"
+                )
+                self._preflight_override_pending = True
+                self.query_one("#btn-proceed-anyway", Button).remove_class("hidden")
+                return
+        except Exception as e:  # noqa: BLE001
+            self.write_agent_log(f"[yellow]Pre-flight check skipped: {e}[/yellow]")
+
+        self._do_launch_flow()
+
+    @on(Button.Pressed, "#btn-proceed-anyway")
+    def action_proceed_anyway(self) -> None:
+        """Override pre-flight hard-block and launch anyway."""
+        if getattr(self, "_preflight_override_pending", False):
+            self._preflight_override_pending = False
+            self.query_one("#btn-proceed-anyway", Button).add_class("hidden")
+            self.write_agent_log("[yellow]⚠ Proceeding despite pre-flight errors.[/yellow]")
+            self._do_launch_flow()
+
+    def _do_launch_flow(self) -> None:
+        """Internal launch — called after pre-flight passes or is overridden."""
         self.is_session_active = True
         self.query_one("#btn-launch-flow", Button).disabled = True
         self.query_one("#btn-stop-flow", Button).disabled = False
@@ -1674,18 +2095,29 @@ class NexusPlex(App[None]):
         )
         self._flow_cancel_event = threading.Event()
         self._flow_pause_event = threading.Event()
+        self._flow_pause_event.set()  # Start unblocked
+        self._node_payloads = []
+        self._set_vcr_state("running")
         self.run_linear_flow_background()
 
     @work(thread=True)
     def run_linear_flow_background(self) -> None:
-        from maccre_core.orchestration.flow_engine import FlowRunner
+        from maccre_core.orchestration.flow_engine import FlowRunner  # noqa: PLC0415
         runner = FlowRunner(self.active_project)
         
+        def _on_step_complete(step_index: int, output_path: str) -> None:
+            """Capture per-step output for time travel."""
+            while len(self._node_payloads) <= step_index:
+                self._node_payloads.append("")
+            self._node_payloads[step_index] = output_path
+
         try:
             final_artifact = runner.execute_flow(
                 self.active_flow_steps,
                 initial_payload_path=self._pending_payload_path,
                 cancel_event=self._flow_cancel_event,
+                pause_event=self._flow_pause_event,
+                step_callback=_on_step_complete,
             )
             if self._flow_cancel_event and self._flow_cancel_event.is_set():
                 self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
@@ -1698,15 +2130,12 @@ class NexusPlex(App[None]):
             
     def _finish_flow(self) -> None:
         self.is_session_active = False
-        btn_launch = self.query_one("#btn-launch-flow", Button)
-        btn_stop = self.query_one("#btn-stop-flow", Button)
-        btn_editor = self.query_one("#btn-flow-editor", Button)
-        
-        btn_launch.disabled = False
-        btn_stop.disabled = True
-        btn_editor.disabled = False
+        self.query_one("#btn-launch-flow", Button).disabled = False
+        self.query_one("#btn-stop-flow", Button).disabled = True
+        self.query_one("#btn-flow-editor", Button).disabled = False
         self.query_one("#btn-create-payload", Button).disabled = False
-        self.query_one("#btn-resume-flow", Button).disabled = True
+        self._set_vcr_state("idle")
+        self._exit_paused_state()
 
     @on(Button.Pressed, "#btn-stop-flow")
     def action_stop_flow(self) -> None:
@@ -1723,7 +2152,7 @@ class NexusPlex(App[None]):
         
         popped = self.active_flow_steps.pop()
         seq_str = " -> ".join([s.macronode_name for s in self.active_flow_steps]) or "No flow loaded."
-        self.query_one("#active-flow-sequence", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
+        self.query_one("#flow-seq-text", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
         self.write_agent_log(f"[yellow]Rewound Flow Line: Removed {popped.macronode_name}.[/yellow]")
 
     @on(Button.Pressed, "#btn-file-cabinet")

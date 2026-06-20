@@ -609,3 +609,156 @@ FlowExecutionPanel {
 #payload-modal-buttons Button {
     margin: 0 0 0 1;
 }
+
+/* ── VCR Transport Controls ─────────────────────────────────────────────── */
+
+#vcr-transport-row {
+    height: auto;
+    padding: 1 0 0 0;
+    align: left middle;
+}
+
+.vcr-btn {
+    min-width: 8;
+    height: 3;
+    margin: 0 1 0 0;
+    text-style: bold;
+    content-align: center middle;
+}
+
+.vcr-btn--idle {
+    background: #21262d;
+    color: #484f58;
+    border: solid #30363d;
+}
+
+.vcr-btn--running {
+    background: #0d4a6b;
+    color: #58d1ff;
+    border: solid #58d1ff;
+    text-style: bold;
+}
+
+.vcr-btn--paused {
+    background: #0d4a2b;
+    color: #3fb950;
+    border: solid #3fb950;
+    text-style: bold;
+}
+
+.vcr-instructions {
+    color: #8b949e;
+    padding: 0 0 0 1;
+    width: 1fr;
+    height: auto;
+}
+
+/* ── Pre-Flight Override ────────────────────────────────────────────────── */
+
+.btn-proceed-anyway {
+    margin: 1 0 0 0;
+    width: auto;
+}
+
+.hidden {
+    display: none;
+}
+
+/* ── Paused-State Flow Line ─────────────────────────────────────────────── */
+
+.flow-node-clickable {
+    background: #161b22;
+    color: #c9d1d9;
+    border: solid #484f58;
+    padding: 0 1;
+    min-width: 12;
+    height: auto;
+    content-align: center middle;
+}
+
+.flow-node-clickable:hover {
+    background: #21262d;
+    border: solid #58a6ff;
+    color: #58a6ff;
+}
+
+.flow-node-selected {
+    background: #0d4a6b;
+    border: solid #58d1ff;
+    color: #58d1ff;
+    text-style: bold;
+}
+
+.flow-arrow-paused {
+    color: #f0883e;
+    text-style: bold;
+    padding: 0 1;
+    content-align: center middle;
+}
+
+.flow-arrow-paused:hover {
+    color: #ffa657;
+    text-style: bold underline;
+}
+
+.flow-arrow-dim {
+    color: #30363d;
+    padding: 0 1;
+}
+
+.radio-dot {
+    color: #484f58;
+    padding: 0;
+    min-width: 1;
+}
+
+.radio-dot-active {
+    color: #3fb950;
+    text-style: bold;
+}
+
+.btn-live-chat {
+    margin: 0 0 0 1;
+    min-width: 16;
+}
+
+/* ── Live Chat Modal ────────────────────────────────────────────────────── */
+
+#live-chat-modal {
+    width: 80%;
+    height: 85%;
+    background: #0d1117;
+    border: thick #30363d;
+    padding: 1 2;
+}
+
+#staged-payload-display {
+    background: #161b22;
+    border: solid #21262d;
+    padding: 1;
+    height: 6;
+    overflow-y: auto;
+    margin: 0 0 1 0;
+}
+
+#live-chat-log {
+    height: 1fr;
+    border: solid #30363d;
+    background: #0d1117;
+    margin: 0 0 1 0;
+}
+
+#live-chat-input {
+    height: 4;
+    border: solid #30363d;
+}
+
+#live-chat-buttons {
+    height: auto;
+    padding: 1 0 0 0;
+    align: right middle;
+}
+
+#live-chat-buttons Button {
+    margin: 0 0 0 1;
+}
