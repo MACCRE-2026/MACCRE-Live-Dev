@@ -941,13 +941,11 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 elif _candidate.upper() not in {"STOP", "DONE", "TERMINATE", "FAILED"}:
                     # Check main topology first, then ephemeral macros
                     _topology_map = self.topology.get_topology() if self.topology else {}
-                    _ephemeral_path = get_datacenter_path("02_Dynamic_Context", "ephemeral_macros.json")
-                    _ephemeral_map: dict[str, Any] = {}
-                    if _ephemeral_path.exists():
-                        try:
-                            _ephemeral_map = json.loads(_ephemeral_path.read_text(encoding="utf-8"))
-                        except Exception:  # noqa: BLE001
-                            pass
+                    try:
+                        from maccre_core.macronode_registry import get_macronode_store  # noqa: PLC0415
+                        _ephemeral_map = get_macronode_store().load_ephemeral_graph()
+                    except Exception:  # noqa: BLE001
+                        _ephemeral_map = {}
 
                     if _candidate in _topology_map or _candidate in _ephemeral_map:
                         logger.info(

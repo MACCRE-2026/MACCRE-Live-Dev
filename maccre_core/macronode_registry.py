@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import abc
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +92,15 @@ CREATE TABLE IF NOT EXISTS macronode_registry (
 );
 """
 
+_CREATE_EPHEMERAL_SQL = """
+CREATE TABLE IF NOT EXISTS ephemeral_nodes (
+    node_id     TEXT PRIMARY KEY,
+    config_json TEXT NOT NULL,
+    job_id      TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+"""
+
 _MIGRATE_TEMPLATE_COLS: list[str] = [
     "ALTER TABLE macronode_registry ADD COLUMN template_type TEXT DEFAULT NULL",
     "ALTER TABLE macronode_registry ADD COLUMN template_config TEXT DEFAULT NULL",
@@ -109,14 +119,40 @@ class SQLiteMacroNodeStore(MacroNodeStore):
         conn = sqlite3.connect(str(self._path), check_same_thread=False)
         try:
             conn.execute(_CREATE_SQL)
+            conn.execute(_CREATE_EPHEMERAL_SQL)
             for stmt in _MIGRATE_TEMPLATE_COLS:
                 try:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
                     pass  # column already exists — safe to ignore
             conn.commit()
+            # Auto-import legacy ephemeral_macros.json if it exists
+            self._import_legacy_json(conn)
         finally:
             conn.close()
+
+    def _import_legacy_json(self, conn: sqlite3.Connection) -> None:
+        """One-time import from ephemeral_macros.json into the ephemeral_nodes table."""
+        from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: PLC0415
+        legacy_path = get_datacenter_path("02_Dynamic_Context", "ephemeral_macros.json")
+        if not legacy_path.exists():
+            return
+        # Only import if ephemeral_nodes table is empty
+        row = conn.execute("SELECT COUNT(*) FROM ephemeral_nodes").fetchone()
+        if row and row[0] > 0:
+            return
+        try:
+            data = json.loads(legacy_path.read_text(encoding="utf-8"))
+            now = datetime.now(timezone.utc).isoformat()
+            for node_id, config in data.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO ephemeral_nodes (node_id, config_json, created_at) VALUES (?, ?, ?)",
+                    (node_id, json.dumps(config), now),
+                )
+            conn.commit()
+            logger.info(f"[MacroNodeStore] Imported {len(data)} nodes from legacy ephemeral_macros.json")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[MacroNodeStore] Failed to import legacy JSON: {e}")
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(str(self._path), check_same_thread=False)
@@ -240,6 +276,56 @@ class SQLiteMacroNodeStore(MacroNodeStore):
         finally:
             conn.close()
 
+    # ── Ephemeral Node Methods ────────────────────────────────────────────────
+
+    def save_ephemeral_nodes(self, nodes: dict[str, dict[str, Any]], job_id: str = "") -> None:
+        """Upsert runtime-generated node configs into ephemeral_nodes table."""
+        conn = self._conn()
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            for node_id, config in nodes.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO ephemeral_nodes (node_id, config_json, job_id, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (node_id, json.dumps(config), job_id, now),
+                )
+            conn.commit()
+            logger.info(f"[MacroNodeStore] Saved {len(nodes)} ephemeral node(s)")
+        finally:
+            conn.close()
+
+    def load_ephemeral_graph(self) -> dict[str, dict[str, Any]]:
+        """Load all ephemeral nodes as a flat {node_id: config} dict for topology merging."""
+        conn = self._conn()
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT node_id, config_json FROM ephemeral_nodes").fetchall()
+            graph: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                try:
+                    graph[row["node_id"]] = json.loads(row["config_json"])
+                except (json.JSONDecodeError, KeyError):
+                    continue
+            return graph
+        finally:
+            conn.close()
+
+    def clear_ephemeral(self, job_id: str = "") -> int:
+        """Remove ephemeral nodes. If job_id given, only those; else all."""
+        conn = self._conn()
+        try:
+            if job_id:
+                cur = conn.execute("DELETE FROM ephemeral_nodes WHERE job_id = ?", (job_id,))
+            else:
+                cur = conn.execute("DELETE FROM ephemeral_nodes")
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+
+# ── Module-level logger ───────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
 
 # ── Public Factory ────────────────────────────────────────────────────────────
 

@@ -555,3 +555,57 @@ FlowExecutionPanel {
 #flow-editor-buttons Button {
     margin: 0 0 0 1;
 }
+
+/* ── Create Payload Modal ────────────────────────────────────────────────── */
+
+#payload-modal-outer {
+    width: 70%;
+    height: 70%;
+    background: #0d1117;
+    border: thick #30363d;
+    padding: 1 2;
+}
+
+#payload-modal-title {
+    color: #58a6ff;
+    text-style: bold;
+    content-align: center middle;
+    width: 100%;
+    padding: 0 0 1 0;
+}
+
+.payload-toggle-row {
+    height: auto;
+    padding: 1 0 0 0;
+    align: left middle;
+}
+
+.payload-toggle-label {
+    padding: 0 0 0 1;
+    color: #c9d1d9;
+}
+
+#payload-text-area {
+    height: 10;
+    border: solid #30363d;
+}
+
+#payload-file-input {
+    margin: 0 0 0 0;
+}
+
+.payload-btn-row {
+    height: auto;
+    padding: 0 0 1 0;
+}
+
+#payload-modal-buttons {
+    height: auto;
+    padding: 1 0 0 0;
+    align: right middle;
+    dock: bottom;
+}
+
+#payload-modal-buttons Button {
+    margin: 0 0 0 1;
+}

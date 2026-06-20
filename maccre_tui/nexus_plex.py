@@ -1120,6 +1120,76 @@ class AgentBuilderPanel(Vertical):
         yield Button("Save to Roster", variant="success", id="btn-save-agent")
 
 
+class CreatePayloadModal(ModalScreen[dict]):
+    """Modal for creating a payload (text + files) before launching a flow."""
+
+    def compose(self) -> ComposeResult:
+        with Container(id="payload-modal-outer"):
+            yield Label("━━━ Create Payload ━━━", id="payload-modal-title")
+
+            # Text Payload Section
+            with Horizontal(classes="payload-toggle-row"):
+                yield Switch(value=True, id="sw-text-payload")
+                yield Label("Text Payload", classes="payload-toggle-label")
+            yield TextArea(id="payload-text-area", language=None)
+            with Horizontal(classes="payload-btn-row"):
+                yield Button("Paste from Clipboard", variant="default", id="btn-paste-text")
+
+            # File Payload Section
+            with Horizontal(classes="payload-toggle-row"):
+                yield Switch(value=False, id="sw-file-payload")
+                yield Label("File Payload (comma-separated paths)", classes="payload-toggle-label")
+            yield Input(placeholder="path/to/file1.md, path/to/file2.txt", id="payload-file-input")
+            with Horizontal(classes="payload-btn-row"):
+                yield Button("Paste from Clipboard", variant="default", id="btn-paste-files")
+
+            # Bottom Buttons
+            with Horizontal(id="payload-modal-buttons"):
+                yield Button("Cancel", variant="error", id="btn-payload-cancel")
+                yield Button("Set Payload", variant="success", id="btn-payload-set")
+
+    @on(Button.Pressed, "#btn-paste-text")
+    def paste_text(self) -> None:
+        try:
+            import pyperclip  # noqa: PLC0415
+            text = pyperclip.paste()
+            if text:
+                ta = self.query_one("#payload-text-area", TextArea)
+                ta.text = ta.text + "\n" + text if ta.text else text
+        except Exception:
+            pass
+
+    @on(Button.Pressed, "#btn-paste-files")
+    def paste_files(self) -> None:
+        try:
+            import pyperclip  # noqa: PLC0415
+            text = pyperclip.paste()
+            if text:
+                inp = self.query_one("#payload-file-input", Input)
+                inp.value = inp.value + ", " + text if inp.value else text
+        except Exception:
+            pass
+
+    @on(Button.Pressed, "#btn-payload-cancel")
+    def cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#btn-payload-set")
+    def set_payload(self) -> None:
+        text_enabled = self.query_one("#sw-text-payload", Switch).value
+        file_enabled = self.query_one("#sw-file-payload", Switch).value
+        text_content = self.query_one("#payload-text-area", TextArea).text.strip() if text_enabled else ""
+        file_paths = self.query_one("#payload-file-input", Input).value.strip() if file_enabled else ""
+
+        result = {
+            "text_enabled": text_enabled,
+            "file_enabled": file_enabled,
+            "text": text_content,
+            "files": file_paths,
+        }
+        self.dismiss(result)
+
+
 class FlowExecutionPanel(Vertical):
     def compose(self) -> ComposeResult:
         # Flow Execution Top Panel
@@ -1128,7 +1198,8 @@ class FlowExecutionPanel(Vertical):
             with Horizontal(classes="flow-controls"):
                 yield Button("Launch Flow", variant="success", id="btn-launch-flow")
                 yield Button("Stop Flow", variant="error", id="btn-stop-flow", disabled=True)
-                yield Button("Flow History", variant="default", id="btn-flow-history")
+                yield Button("Resume", variant="primary", id="btn-resume-flow", disabled=True)
+                yield Button("Create Payload", variant="primary", id="btn-create-payload")
                 yield Button("Linear Flow Editor", variant="warning", id="btn-flow-editor")
                 
             yield Label("Active Flow Sequence")
@@ -1174,6 +1245,8 @@ class NexusPlex(App[None]):
         self.shared_transcript: list[dict[str, str]] = []
         self.active_flow_steps: list = []
         self._flow_cancel_event: threading.Event | None = None
+        self._flow_pause_event: threading.Event | None = None
+        self._pending_payload_path: str = "none"
         
         self.nexus = NexusAgent(
             print_callback=self.write_nexus_log,
@@ -1530,19 +1603,77 @@ class NexusPlex(App[None]):
 
         self.push_screen(LinearFlowEditorModal(full_templates, roster), handle_add_to_flow)
 
+    @on(Button.Pressed, "#btn-create-payload")
+    def action_create_payload(self) -> None:
+        """Open the Create Payload modal to set text/file input for the next flow run."""
+        def handle_payload(result: dict | None) -> None:
+            if result is None:
+                return
+
+            text = result.get("text", "")
+            files = result.get("files", "")
+
+            if not text and not files:
+                self.write_agent_log("[yellow]Payload is empty — no text or files provided.[/yellow]")
+                self._pending_payload_path = "none"
+                return
+
+            # Write the payload to a file in 04_Code_Artifacts
+            from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: PLC0415
+            import uuid  # noqa: PLC0415
+            payload_dir = get_datacenter_path("04_Code_Artifacts", self.active_project)
+            payload_dir.mkdir(parents=True, exist_ok=True)
+            payload_file = payload_dir / f"payload_{uuid.uuid4().hex[:8]}.md"
+
+            content_parts: list[str] = []
+            if text:
+                content_parts.append(text)
+            if files:
+                content_parts.append(f"\n## Attached Files\n{files}")
+
+            payload_file.write_text("\n".join(content_parts), encoding="utf-8")
+            self._pending_payload_path = str(payload_file)
+            self.write_agent_log(
+                f"[green]Payload set:[/green] {payload_file.name}\n"
+                f"  Text: {'✓' if text else '✗'} | Files: {'✓' if files else '✗'}"
+            )
+
+        self.push_screen(CreatePayloadModal(), handle_payload)
+
+    @on(Button.Pressed, "#btn-resume-flow")
+    def action_resume_flow(self) -> None:
+        """Resume a paused flow (DET_PAUSE)."""
+        if self._flow_pause_event:
+            self._flow_pause_event.set()
+            self.query_one("#btn-resume-flow", Button).disabled = True
+            self.write_agent_log("[bold cyan]Flow resumed.[/bold cyan]")
+        else:
+            self.write_agent_log("[yellow]No paused flow to resume.[/yellow]")
+
     @on(Button.Pressed, "#btn-launch-flow")
     def action_launch_flow(self) -> None:
         if not self.active_flow_steps:
             self.write_agent_log("[red]Flow Line is empty. Use Linear Flow Editor to add MacroNodes.[/red]")
             return
-            
+
+        if self._pending_payload_path == "none":
+            self.write_agent_log(
+                "[yellow]No payload set. Use 'Create Payload' to set input data, "
+                "or launching with empty payload.[/yellow]"
+            )
+
         self.is_session_active = True
         self.query_one("#btn-launch-flow", Button).disabled = True
         self.query_one("#btn-stop-flow", Button).disabled = False
         self.query_one("#btn-flow-editor", Button).disabled = True
+        self.query_one("#btn-create-payload", Button).disabled = True
         
-        self.write_agent_log("\n[bold cyan]--- Started Linear Flow Execution ---[/bold cyan]")
+        self.write_agent_log(
+            f"\n[bold cyan]--- Started Linear Flow Execution ---[/bold cyan]\n"
+            f"Payload: {self._pending_payload_path}"
+        )
         self._flow_cancel_event = threading.Event()
+        self._flow_pause_event = threading.Event()
         self.run_linear_flow_background()
 
     @work(thread=True)
@@ -1553,7 +1684,7 @@ class NexusPlex(App[None]):
         try:
             final_artifact = runner.execute_flow(
                 self.active_flow_steps,
-                initial_payload_path="none",
+                initial_payload_path=self._pending_payload_path,
                 cancel_event=self._flow_cancel_event,
             )
             if self._flow_cancel_event and self._flow_cancel_event.is_set():
@@ -1574,6 +1705,8 @@ class NexusPlex(App[None]):
         btn_launch.disabled = False
         btn_stop.disabled = True
         btn_editor.disabled = False
+        self.query_one("#btn-create-payload", Button).disabled = False
+        self.query_one("#btn-resume-flow", Button).disabled = True
 
     @on(Button.Pressed, "#btn-stop-flow")
     def action_stop_flow(self) -> None:

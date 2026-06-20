@@ -27,12 +27,9 @@ from __future__ import annotations
 
 import logging
 
-import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
-
-from maccre_core.utils.path_resolver import get_datacenter_path
 
 logger = logging.getLogger(__name__)
 
@@ -671,21 +668,10 @@ def build_from_template(
 
 
 def _register_ephemeral_nodes(nodes: dict[str, dict[str, Any]]) -> None:
-    """Writes generated macro nodes to 02_Dynamic_Context/ephemeral_macros.json."""
-    ephemeral_path = get_datacenter_path("02_Dynamic_Context", "ephemeral_macros.json")
-    try:
-        if ephemeral_path.exists():
-            with open(ephemeral_path, encoding="utf-8") as f:
-                data = json.load(f)
-        else:
-            data = {}
-    except Exception:  # noqa: BLE001
-        data = {}
-
-    data.update(nodes)
-
-    with open(ephemeral_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    """Writes generated macro nodes to macronode_registry.db (ephemeral_nodes table)."""
+    from maccre_core.macronode_registry import get_macronode_store  # noqa: PLC0415
+    store = get_macronode_store()
+    store.save_ephemeral_nodes(nodes)
 
 
 def expand_macro(

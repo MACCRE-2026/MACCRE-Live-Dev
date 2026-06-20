@@ -1,0 +1,2 @@
+Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds
+CASCADE_52f0a152,CounterPartner,gemini-2.5-flash,END,1.0,,None,FAILED,3,,FALSE,Regular_Joe,3
