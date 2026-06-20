@@ -29,6 +29,7 @@ The Gather Gate concurrency lock is offloaded entirely to the SQLite C-engine:
 """
 from __future__ import annotations
 
+import atexit
 import os
 import json
 import sqlite3
@@ -44,6 +45,7 @@ class LocalMessageBroker(MessageBroker):
     def __init__(self, db_path: str | None = None) -> None:
         self.db_path = db_path or str(get_datacenter_path("swarm_queue.db"))
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._conn: sqlite3.Connection | None = None
         self._init_db()
 
         # Phase 22 ZMQ IPC Setup — optional (paused per EXO-GANS handover §1)
@@ -62,62 +64,92 @@ class LocalMessageBroker(MessageBroker):
         except ModuleNotFoundError:
             pass  # ZMQ dormant — text pipeline operates on SQLite only
 
-    def __del__(self) -> None:
-        """OmniBuilder Compliance: Teardown ZMQ resources to prevent zombie ports."""
+        atexit.register(self.close)
+
+    def close(self) -> None:
+        """Tear down SQLite + ZMQ resources. Registered via atexit for reliable cleanup."""
         try:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
             if self.pub_socket:
                 self.pub_socket.close()
+                self.pub_socket = None
             if self.sub_socket:
                 self.sub_socket.close()
+                self.sub_socket = None
+            if hasattr(self, "zmq_ctx") and self.zmq_ctx:
+                self.zmq_ctx.term()
+                self.zmq_ctx = None
+        except Exception:
+            pass
+        # Unregister to avoid holding a reference to self after explicit close
+        try:
+            atexit.unregister(self.close)
         except Exception:
             pass
 
-    # ── Schema Bootstrap ──────────────────────────────────────────────────────
+    # ── Schema Bootstrap ──────────────────────────────────────────────────────────
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """Return the persistent SQLite connection, creating it if needed.
+
+        Uses WAL journal mode for better concurrent read performance and
+        check_same_thread=False for cross-thread safety (the broker is
+        accessed from both the TUI main thread and worker threads).
+        """
+        if self._conn is None:
+            self._conn = sqlite3.connect(
+                self.db_path, check_same_thread=False, timeout=30.0
+            )
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS task_queue (
-                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id               TEXT NOT NULL,
-                    payload_path         TEXT NOT NULL,
-                    source_payload_path  TEXT DEFAULT '',
-                    current_node         TEXT NOT NULL,
-                    lock_status          TEXT DEFAULT 'open',
-                    locked_by            TEXT,
-                    actual_cost          REAL DEFAULT 0.0,
-                    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(job_id, current_node)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS interrupt_queue (
-                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id         TEXT NOT NULL,
-                    override_text  TEXT NOT NULL,
-                    status         TEXT DEFAULT 'pending',
-                    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            # Graceful schema upgrades for pre-existing databases
-            for _col_sql in (
-                "ALTER TABLE task_queue ADD COLUMN actual_cost REAL DEFAULT 0.0",
-                "ALTER TABLE task_queue ADD COLUMN source_payload_path TEXT DEFAULT ''",
-                "ALTER TABLE task_queue ADD COLUMN loop_iteration_count INTEGER DEFAULT 0",
-            ):
-                try:
-                    conn.execute(_col_sql)
-                except sqlite3.OperationalError:
-                    pass
-            # Ensure the UNIQUE index exists on upgraded DBs whose schema predates it
+        conn = self._get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_queue (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id               TEXT NOT NULL,
+                payload_path         TEXT NOT NULL,
+                source_payload_path  TEXT DEFAULT '',
+                current_node         TEXT NOT NULL,
+                lock_status          TEXT DEFAULT 'open',
+                locked_by            TEXT,
+                actual_cost          REAL DEFAULT 0.0,
+                created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(job_id, current_node)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS interrupt_queue (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id         TEXT NOT NULL,
+                override_text  TEXT NOT NULL,
+                status         TEXT DEFAULT 'pending',
+                created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Graceful schema upgrades for pre-existing databases
+        for _col_sql in (
+            "ALTER TABLE task_queue ADD COLUMN actual_cost REAL DEFAULT 0.0",
+            "ALTER TABLE task_queue ADD COLUMN source_payload_path TEXT DEFAULT ''",
+            "ALTER TABLE task_queue ADD COLUMN loop_iteration_count INTEGER DEFAULT 0",
+        ):
             try:
-                conn.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_node "
-                    "ON task_queue (job_id, current_node)"
-                )
+                conn.execute(_col_sql)
             except sqlite3.OperationalError:
                 pass
-            conn.commit()
+        # Ensure the UNIQUE index exists on upgraded DBs whose schema predates it
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_node "
+                "ON task_queue (job_id, current_node)"
+            )
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
 
     # ── Worker Interface ──────────────────────────────────────────────────────
 
@@ -131,60 +163,60 @@ class LocalMessageBroker(MessageBroker):
         are satisfied.  Uses BEGIN EXCLUSIVE so only one worker process can
         enter this block at a time, eliminating the TOCTOU race condition.
         """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("BEGIN EXCLUSIVE")
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("BEGIN EXCLUSIVE")
 
-            cursor.execute(
-                "SELECT * FROM task_queue WHERE lock_status = 'open' ORDER BY created_at ASC"
-            )
-            open_tasks = cursor.fetchall()
+        cursor.execute(
+            "SELECT * FROM task_queue WHERE lock_status = 'open' ORDER BY created_at ASC"
+        )
+        open_tasks = cursor.fetchall()
 
-            for row in open_tasks:
-                task = dict(row)
-                node_id: str = task["current_node"]
+        for row in open_tasks:
+            task = dict(row)
+            node_id: str = task["current_node"]
 
-                # Resolve wait_for from topology — unknown nodes default to 'none'
-                try:
-                    config: dict[str, Any] = topology_engine.get_node_config(node_id)
-                    wait_for_str: str = config.get("wait_for", "none")
-                except Exception:
-                    wait_for_str = "none"
+            # Resolve wait_for from topology — unknown nodes default to 'none'
+            try:
+                config: dict[str, Any] = topology_engine.get_node_config(node_id)
+                wait_for_str: str = config.get("wait_for", "none")
+            except Exception:
+                wait_for_str = "none"
 
-                # Gather Gate: skip if any upstream prerequisite is not yet completed
-                if wait_for_str.lower() not in ("none", ""):
-                    required_nodes = [
-                        n.strip()
-                        for n in wait_for_str.replace("|", ",").split(",")
-                        if n.strip()
-                    ]
-                    placeholders = ",".join(["?"] * len(required_nodes))
-                    cursor.execute(
-                        f"""
-                        SELECT COUNT(DISTINCT current_node)
-                        FROM task_queue
-                        WHERE job_id = ?
-                          AND lock_status = 'completed'
-                          AND current_node IN ({placeholders})
-                        """,
-                        [task["job_id"]] + required_nodes,
-                    )
-                    result = cursor.fetchone()
-                    completed_count = int(result[0] if result else 0)
-                    if completed_count < len(required_nodes):
-                        continue
-
-                # Claim the task atomically within the same EXCLUSIVE transaction
+            # Gather Gate: skip if any upstream prerequisite is not yet completed
+            if wait_for_str.lower() not in ("none", ""):
+                required_nodes = [
+                    n.strip()
+                    for n in wait_for_str.replace("|", ",").split(",")
+                    if n.strip()
+                ]
+                placeholders = ",".join(["?"] * len(required_nodes))
                 cursor.execute(
-                    "UPDATE task_queue SET lock_status = 'locked', locked_by = ? WHERE id = ?",
-                    (agent_id, task["id"]),
+                    f"""
+                    SELECT COUNT(DISTINCT current_node)
+                    FROM task_queue
+                    WHERE job_id = ?
+                      AND lock_status = 'completed'
+                      AND current_node IN ({placeholders})
+                    """,
+                    [task["job_id"]] + required_nodes,
                 )
-                conn.commit()
-                return task
+                result = cursor.fetchone()
+                completed_count = int(result[0] if result else 0)
+                if completed_count < len(required_nodes):
+                    continue
 
+            # Claim the task atomically within the same EXCLUSIVE transaction
+            cursor.execute(
+                "UPDATE task_queue SET lock_status = 'locked', locked_by = ? WHERE id = ?",
+                (agent_id, task["id"]),
+            )
             conn.commit()
-            return None
+            return task
+
+        conn.commit()
+        return None
 
     def route_task(
         self,
@@ -214,14 +246,14 @@ class LocalMessageBroker(MessageBroker):
         """
         # ── LIVE SWARM INTERCEPT ──────────────────────────────────────────────
         if next_node_str.strip().upper() == "MANUAL":
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute(
-                    "UPDATE task_queue "
-                    "SET lock_status = 'awaiting_orders', payload_path = ?, actual_cost = ? "
-                    "WHERE id = ?",
-                    (new_payload_path, actual_cost, row_id),
-                )
-                conn.commit()
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE task_queue "
+                "SET lock_status = 'awaiting_orders', payload_path = ?, actual_cost = ? "
+                "WHERE id = ?",
+                (new_payload_path, actual_cost, row_id),
+            )
+            conn.commit()
             return
 
         # ── STANDARD DAG ROUTING ──────────────────────────────────────────────
@@ -230,69 +262,69 @@ class LocalMessageBroker(MessageBroker):
             for n in next_node_str.replace("|", ",").split(",")
             if n.strip()
         ]
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE task_queue "
-                "SET lock_status = 'completed', payload_path = ?, actual_cost = ? "
-                "WHERE id = ?",
-                (new_payload_path, actual_cost, row_id),
-            )
-            for node in next_nodes:
-                    if node not in ("DONE", "FAILED", "STOP", "TERMINATE"):
-                        cursor = conn.execute(
-                            "SELECT loop_iteration_count, lock_status FROM task_queue "
-                            "WHERE job_id=? AND current_node=?",
-                            (job_id, node),
-                        )
-                        existing = cursor.fetchone()
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE task_queue "
+            "SET lock_status = 'completed', payload_path = ?, actual_cost = ? "
+            "WHERE id = ?",
+            (new_payload_path, actual_cost, row_id),
+        )
+        for node in next_nodes:
+                if node not in ("DONE", "FAILED", "STOP", "TERMINATE"):
+                    cursor = conn.execute(
+                        "SELECT loop_iteration_count, lock_status FROM task_queue "
+                        "WHERE job_id=? AND current_node=?",
+                        (job_id, node),
+                    )
+                    existing = cursor.fetchone()
 
-                        if existing:
-                            existing_count: int = existing[0]
-                            existing_lock: str = existing[1]
+                    if existing:
+                        existing_count: int = existing[0]
+                        existing_lock: str = existing[1]
 
-                            # ── Fan-in detection ──────────────────────────────────────────
-                            # If the node is currently 'open' (never executed yet this cycle),
-                            # this arrival is a convergent fan-in from a parallel upstream node,
-                            # NOT a recursive self-call. Update payload only — do not increment
-                            # loop_iteration_count so the recursion limit is not falsely tripped.
-                            if existing_lock == "open":
-                                conn.execute(
-                                    "UPDATE task_queue SET payload_path=?, source_payload_path=? "
-                                    "WHERE job_id=? AND current_node=?",
-                                    (new_payload_path, source_payload_path, job_id, node),
-                                )
-                                continue
+                        # ── Fan-in detection ──────────────────────────────────────────
+                        # If the node is currently 'open' (never executed yet this cycle),
+                        # this arrival is a convergent fan-in from a parallel upstream node,
+                        # NOT a recursive self-call. Update payload only — do not increment
+                        # loop_iteration_count so the recursion limit is not falsely tripped.
+                        if existing_lock == "open":
+                            conn.execute(
+                                "UPDATE task_queue SET payload_path=?, source_payload_path=? "
+                                "WHERE job_id=? AND current_node=?",
+                                (new_payload_path, source_payload_path, job_id, node),
+                            )
+                            continue
 
-                            # ── True recursion guard ──────────────────────────────────────
-                            # Node has already executed (lock_status='completed') and is being
-                            # re-queued. This is genuine recursion — check the limit.
-                            if existing_count >= max_recursion:
-                                import logging  # noqa: PLC0415
-                                logging.getLogger("maccre_core").warning(
-                                    "[BROKER] Epistemic recursion limit reached for %s (count=%d). "
-                                    "Rerouting to FAILED.",
-                                    node, existing_count,
-                                )
-                                conn.execute(
-                                    "INSERT OR IGNORE INTO task_queue "
-                                    "(job_id, payload_path, source_payload_path, current_node) "
-                                    "VALUES (?, ?, ?, ?)",
-                                    (job_id, new_payload_path, source_payload_path, "FAILED"),
-                                )
-                                continue
+                        # ── True recursion guard ──────────────────────────────────────
+                        # Node has already executed (lock_status='completed') and is being
+                        # re-queued. This is genuine recursion — check the limit.
+                        if existing_count >= max_recursion:
+                            import logging  # noqa: PLC0415
+                            logging.getLogger("maccre_core").warning(
+                                "[BROKER] Epistemic recursion limit reached for %s (count=%d). "
+                                "Rerouting to FAILED.",
+                                node, existing_count,
+                            )
+                            conn.execute(
+                                "INSERT OR IGNORE INTO task_queue "
+                                "(job_id, payload_path, source_payload_path, current_node) "
+                                "VALUES (?, ?, ?, ?)",
+                                (job_id, new_payload_path, source_payload_path, "FAILED"),
+                            )
+                            continue
 
-                        # ── First arrival or re-queue after completion ────────────────────
-                        conn.execute(
-                            "INSERT INTO task_queue "
-                            "(job_id, payload_path, source_payload_path, current_node, loop_iteration_count) "
-                            "VALUES (?, ?, ?, ?, 0) "
-                            "ON CONFLICT(job_id, current_node) DO UPDATE SET "
-                            "lock_status='open', "
-                            "payload_path=excluded.payload_path, "
-                            "loop_iteration_count=task_queue.loop_iteration_count + 1",
-                            (job_id, new_payload_path, source_payload_path, node),
-                        )
-            conn.commit()
+                    # ── First arrival or re-queue after completion ────────────────────
+                    conn.execute(
+                        "INSERT INTO task_queue "
+                        "(job_id, payload_path, source_payload_path, current_node, loop_iteration_count) "
+                        "VALUES (?, ?, ?, ?, 0) "
+                        "ON CONFLICT(job_id, current_node) DO UPDATE SET "
+                        "lock_status='open', "
+                        "payload_path=excluded.payload_path, "
+                        "loop_iteration_count=task_queue.loop_iteration_count + 1",
+                        (job_id, new_payload_path, source_payload_path, node),
+                    )
+        conn.commit()
 
         # ── Radar Heartbeat: ZMQ PubSub ────────────────────────────────────────
         # Broadcast the routing decision instantly to the Live Session Manager.
@@ -305,24 +337,24 @@ class LocalMessageBroker(MessageBroker):
 
     def release_task(self, row_id: int) -> None:
         """Return a locked task to 'open' state (used in worker finally blocks)."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE task_queue SET lock_status = 'open', locked_by = NULL WHERE id = ?",
-                (row_id,),
-            )
-            conn.commit()
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE task_queue SET lock_status = 'open', locked_by = NULL WHERE id = ?",
+            (row_id,),
+        )
+        conn.commit()
 
 
     # ── Hot-Mic Priority Override Mechanics ───────────────────────────────────
 
     def inject_interrupt(self, job_id: str, override_text: str) -> None:
         """User or System pushes an urgent intercept directive into the swarm mid-flight."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO interrupt_queue (job_id, override_text) VALUES (?, ?)",
-                (job_id, override_text)
-            )
-            conn.commit()
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT INTO interrupt_queue (job_id, override_text) VALUES (?, ?)",
+            (job_id, override_text)
+        )
+        conn.commit()
             
     def consume_pending_interrupts(self, job_id: str) -> list[str]:
         """Worker checks right before inference to yank pending priorities.
@@ -340,21 +372,21 @@ class LocalMessageBroker(MessageBroker):
                 pass  # zmq.Again or socket unavailable — fall through to SQLite
             
         # Fallback to legacy SQLite interrupt queue to maintain backwards compatibility
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                "SELECT id, override_text FROM interrupt_queue WHERE job_id=? AND status='pending'", 
-                (job_id,)
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "SELECT id, override_text FROM interrupt_queue WHERE job_id=? AND status='pending'", 
+            (job_id,)
+        )
+        rows = cursor.fetchall()
+        if rows:
+            ids = [r[0] for r in rows]
+            texts.extend([r[1] for r in rows])
+            placeholders = ",".join("?" * len(ids))
+            conn.execute(
+                f"UPDATE interrupt_queue SET status='processed' WHERE id IN ({placeholders})",
+                ids
             )
-            rows = cursor.fetchall()
-            if rows:
-                ids = [r[0] for r in rows]
-                texts.extend([r[1] for r in rows])
-                placeholders = ",".join("?" * len(ids))
-                conn.execute(
-                    f"UPDATE interrupt_queue SET status='processed' WHERE id IN ({placeholders})",
-                    ids
-                )
-                conn.commit()
+            conn.commit()
         return texts
 
     def inject_task(
@@ -373,15 +405,15 @@ class LocalMessageBroker(MessageBroker):
         if not starting_nodes:
             starting_nodes = ["ANCHOR"]
             
-        with sqlite3.connect(self.db_path) as conn:
-            for node in starting_nodes:
-                conn.execute(
-                    "INSERT INTO task_queue "
-                    "(job_id, payload_path, source_payload_path, current_node) "
-                    "VALUES (?, ?, ?, ?)",
-                    (job_id, payload_path, payload_path, node),
-                )
-            conn.commit()
+        conn = self._get_conn()
+        for node in starting_nodes:
+            conn.execute(
+                "INSERT INTO task_queue "
+                "(job_id, payload_path, source_payload_path, current_node) "
+                "VALUES (?, ?, ?, ?)",
+                (job_id, payload_path, payload_path, node),
+            )
+        conn.commit()
 
     # ── Stream 4: ZMQ PUB/SUB Live Event Bus ──────────────────────────────────
     def broadcast_topology_event(self, event_type: str, payload: dict[str, str]) -> None:

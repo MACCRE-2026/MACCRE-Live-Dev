@@ -25,6 +25,7 @@ Columns: Agent_Name, Model, Tools_Allowed, System_Prompt, Description
 from __future__ import annotations
 
 import csv
+import os
 from typing import Any
 
 from maccre_core.logger import logger
@@ -36,19 +37,31 @@ def _roster_path() -> str:
     return str(get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv")
 
 
+_roster_cache: list[dict[str, str]] = []
+_roster_mtime: float = 0.0
+
+
 def _read_roster() -> list[dict[str, str]]:
     """Read all rows from the agent_roster.csv via DictReader.
+
+    Uses mtime-based caching to avoid redundant disk I/O during
+    swarm cycles and flow execution. Cache auto-invalidates when
+    admin_tools.py writes to the roster file.
 
     Returns:
         List of row dicts keyed by CSV column headers.
     """
+    global _roster_cache, _roster_mtime  # noqa: PLW0603
     path = _roster_path()
-    fh = open(path, newline="", encoding="utf-8")  # noqa: SIM115
     try:
-        reader = csv.DictReader(fh)
-        return list(reader)
-    finally:
-        fh.close()
+        current_mtime = os.path.getmtime(path)
+    except FileNotFoundError:
+        return []
+    if current_mtime != _roster_mtime:
+        with open(path, newline="", encoding="utf-8") as fh:
+            _roster_cache = list(csv.DictReader(fh))
+        _roster_mtime = current_mtime
+    return _roster_cache
 
 
 def load_agent_from_roster(agent_name: str) -> dict[str, Any]:

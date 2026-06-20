@@ -377,3 +377,52 @@ Button.-default {
 Button.-default:hover {
     background: #30363d;
 }
+
+/* ── FlowExecutionPanel ──────────────────────────────────────────────────── */
+
+FlowExecutionPanel {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 1;
+}
+
+#flow-execution-top {
+    height: auto;
+    max-height: 12;
+    padding: 0;
+}
+
+#flow-execution-top .flow-controls {
+    height: auto;
+    padding: 0 1;
+}
+
+#flow-execution-top .flow-controls Button {
+    margin: 0 1 0 0;
+}
+
+#active-flow-sequence {
+    width: 1fr;
+    min-height: 1;
+    padding: 0 1;
+    color: #58a6ff;
+}
+
+#flow-monitor-section {
+    height: 1fr;
+    padding: 0;
+}
+
+#flow-execution-log {
+    height: 1fr;
+    background: #0d1117;
+    border: solid #30363d;
+    scrollbar-color: #30363d;
+    scrollbar-color-hover: #58a6ff;
+    padding: 0 1;
+}
+
+#fe-input {
+    width: 1fr;
+    margin: 0;
+}

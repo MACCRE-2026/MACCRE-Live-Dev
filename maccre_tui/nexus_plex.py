@@ -9,6 +9,7 @@ Nexus Copilot while manipulating and tracking MACCREv2 topologies.
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 
 # Ensure MACCREv2 root is in sys.path
@@ -569,9 +570,14 @@ class ContextInjectModalScreen(ModalScreen[str]):
 
     @on(Button.Pressed, "#paste-btn")
     def paste_clipboard(self):
-        # Cross platform clipboard read in terminal can be tricky. We will leave this stubbed for future GUI/pyperclip use.
-        ta = self.query_one("#context-text-area", TextArea)
-        ta.text += "\n[Clipboard content here]"
+        try:
+            import pyperclip  # noqa: PLC0415
+            text = pyperclip.paste()
+            if text:
+                ta = self.query_one("#context-text-area", TextArea)
+                ta.text = ta.text + "\n" + text if ta.text else text
+        except Exception:
+            pass
 
     @on(Button.Pressed, "#send-btn")
     def send(self):
@@ -1138,6 +1144,8 @@ class NexusPlex(App[None]):
         self.physics_task = None
         self.is_agent_generating = False
         self.shared_transcript: list[dict[str, str]] = []
+        self.active_flow_steps: list = []
+        self._flow_cancel_event: threading.Event | None = None
         
         self.nexus = NexusAgent(
             print_callback=self.write_nexus_log,
@@ -1477,7 +1485,7 @@ class NexusPlex(App[None]):
         
         def handle_add_to_flow(result: list | None) -> None:
             if result:
-                if not hasattr(self, "active_flow_steps"):
+                if not self.active_flow_steps:
                     self.active_flow_steps = []
 
                 from maccre_core.orchestration.flow_engine import FlowStep  # noqa: PLC0415
@@ -1496,7 +1504,7 @@ class NexusPlex(App[None]):
 
     @on(Button.Pressed, "#btn-launch-flow")
     def action_launch_flow(self) -> None:
-        if not hasattr(self, "active_flow_steps") or not self.active_flow_steps:
+        if not self.active_flow_steps:
             self.write_agent_log("[red]Flow Line is empty. Use Linear Flow Editor to add MacroNodes.[/red]")
             return
             
@@ -1506,6 +1514,7 @@ class NexusPlex(App[None]):
         self.query_one("#btn-flow-editor", Button).disabled = True
         
         self.write_agent_log("\n[bold cyan]--- Started Linear Flow Execution ---[/bold cyan]")
+        self._flow_cancel_event = threading.Event()
         self.run_linear_flow_background()
 
     @work(thread=True)
@@ -1514,8 +1523,15 @@ class NexusPlex(App[None]):
         runner = FlowRunner(self.active_project)
         
         try:
-            final_artifact = runner.execute_flow(self.active_flow_steps, initial_payload_path="none")
-            self.write_agent_log(f"\n[green]Flow completed successfully![/green]\nFinal Artifact: {final_artifact}")
+            final_artifact = runner.execute_flow(
+                self.active_flow_steps,
+                initial_payload_path="none",
+                cancel_event=self._flow_cancel_event,
+            )
+            if self._flow_cancel_event and self._flow_cancel_event.is_set():
+                self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
+            else:
+                self.write_agent_log(f"\n[green]Flow completed successfully![/green]\nFinal Artifact: {final_artifact}")
         except Exception as e:
             self.write_agent_log(f"\n[red]Flow Error:[/red] {e}")
         finally:
@@ -1533,12 +1549,14 @@ class NexusPlex(App[None]):
 
     @on(Button.Pressed, "#btn-stop-flow")
     def action_stop_flow(self) -> None:
-        self.write_agent_log("\n[bold yellow]--- Flow Stop Requested (Will halt after current node) ---[/bold yellow]")
+        self.write_agent_log("\n[bold yellow]--- Flow Stop Requested (cancelling after current node) ---[/bold yellow]")
+        if self._flow_cancel_event:
+            self._flow_cancel_event.set()
         self._finish_flow()
 
     @on(Button.Pressed, "#btn-rewind-flow")
     def action_rewind_flow(self) -> None:
-        if not hasattr(self, "active_flow_steps") or not self.active_flow_steps:
+        if not self.active_flow_steps:
             self.write_agent_log("[yellow]Flow Line is empty, nothing to rewind.[/yellow]")
             return
         

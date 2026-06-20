@@ -49,6 +49,34 @@ AGENT_ID = f"universal_node_{os.getpid()}"
 logger = logging.getLogger("maccre_core.swarm_worker")
 
 
+class _FileTee:
+    """Lightweight file tee: mirrors writes to orig stream AND a per-job log file.
+
+    fileno() and isatty() stubs prevent crashes when Python's logging,
+    subprocess, or Windows console APIs probe the redirected stream.
+    """
+    def __init__(self, filepath: str, orig_stream: Any) -> None:
+        self.orig_stream = orig_stream
+        self.log = open(filepath, "w", buffering=1, encoding="utf-8")  # noqa: SIM115
+
+    def write(self, msg: str) -> None:
+        self.orig_stream.write(msg)
+        self.log.write(msg)
+
+    def flush(self) -> None:
+        self.orig_stream.flush()
+        self.log.flush()
+
+    def close(self) -> None:
+        self.log.close()
+
+    def fileno(self) -> int:  # Windows console API compatibility
+        return self.orig_stream.fileno()
+
+    def isatty(self) -> bool:
+        return False
+
+
 class UniversalSwarmWorker:
     def __init__(self) -> None:
         logger.info(f"[{AGENT_ID}] Initializing Universal Swarm Node...")
@@ -346,33 +374,6 @@ class UniversalSwarmWorker:
 
         # ── Dual-Stream File Logger ───────────────────────────────────────────
         import sys
-
-        class _FileTee:
-            """Lightweight file tee: mirrors writes to orig stream AND a per-job log file.
-
-            fileno() and isatty() stubs prevent crashes when Python's logging,
-            subprocess, or Windows console APIs probe the redirected stream.
-            """
-            def __init__(self, filepath: str, orig_stream: Any) -> None:
-                self.orig_stream = orig_stream
-                self.log = open(filepath, "w", buffering=1, encoding="utf-8")  # noqa: SIM115
-
-            def write(self, msg: str) -> None:
-                self.orig_stream.write(msg)
-                self.log.write(msg)
-
-            def flush(self) -> None:
-                self.orig_stream.flush()
-                self.log.flush()
-
-            def close(self) -> None:
-                self.log.close()
-
-            def fileno(self) -> int:  # Windows console API compatibility
-                return self.orig_stream.fileno()
-
-            def isatty(self) -> bool:
-                return False
 
         orig_stdout = sys.stdout
         orig_stderr = sys.stderr

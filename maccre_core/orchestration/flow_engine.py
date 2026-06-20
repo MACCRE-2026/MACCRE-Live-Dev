@@ -23,6 +23,7 @@ import logging
 
 import os
 import sqlite3
+import threading
 import time
 from typing import Any
 
@@ -110,13 +111,19 @@ class FlowRunner:
             return str(md_files[0])
         return None
 
-    def execute_flow(self, steps: list[FlowStep], initial_payload_path: str = "none") -> str:
+    def execute_flow(
+        self,
+        steps: list[FlowStep],
+        initial_payload_path: str = "none",
+        cancel_event: threading.Event | None = None,
+    ) -> str:
         """
         Execute a sequential linear flow of MacroNodes.
         
         Args:
             steps: List of FlowStep objects.
             initial_payload_path: Starting context.
+            cancel_event: Optional threading.Event — checked between nodes for graceful cancellation.
 
         Returns:
             The path to the final output file from the last step in the flow.
@@ -131,6 +138,11 @@ class FlowRunner:
         broker = LocalMessageBroker()
         
         for idx, step in enumerate(steps):
+            # Check for cancellation between steps
+            if cancel_event and cancel_event.is_set():
+                logger.info("[FLOW_ENGINE] Cancellation requested — halting flow.")
+                break
+
             logger.info(f"\n[FLOW_ENGINE] === STEP {idx+1}/{len(steps)}: Loading MacroNode '{step.macronode_name}' ===")
             
             # 1. Load the MacroNode
@@ -165,6 +177,10 @@ class FlowRunner:
             timeout_seconds = 3600
             
             for _ in range(500):
+                if cancel_event and cancel_event.is_set():
+                    logger.info("[FLOW_ENGINE] Cancellation requested — aborting current MacroNode.")
+                    break
+
                 if time.time() - start_time > timeout_seconds:
                     logger.info("[FLOW_ENGINE] Swarm Worker Timeout reached.")
                     break
