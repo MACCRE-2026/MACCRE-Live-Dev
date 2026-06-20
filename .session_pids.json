@@ -1,8 +1,26 @@
 [
   {
-    "pid": 4804,
+    "pid": 8500,
     "project": "GLOBAL",
-    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
-    "started": "2026-06-20T17:33:14.478837"
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-06-20T17:54:32.682522"
+  },
+  {
+    "pid": 14980,
+    "project": "GLOBAL",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\session_live_session_agent_thoughts.db",
+    "started": "2026-06-20T17:54:34.370356"
+  },
+  {
+    "pid": 8500,
+    "project": "GLOBAL",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\session_live_session_agent_thoughts.db",
+    "started": "2026-06-20T17:54:34.487795"
+  },
+  {
+    "pid": 14980,
+    "project": "GLOBAL",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-06-20T17:54:34.752519"
   }
 ]

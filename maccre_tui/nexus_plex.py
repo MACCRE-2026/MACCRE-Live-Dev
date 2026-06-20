@@ -1928,10 +1928,46 @@ class NexusPlex(App[None]):
         self._refresh_paused_flow_line()
 
     def _exit_paused_state(self) -> None:
-        """Restore flow line to normal non-interactive state."""
+        """Restore flow line to normal non-interactive state and process injections."""
+        if self._injected_context and self._paused_selected_node is not None:
+            # Determine which payload file to append to
+            idx = self._paused_selected_node
+            
+            if self._paused_radio_side == "left":
+                target_idx = idx - 1
+            else:
+                target_idx = idx
+                
+            payload_to_modify = None
+            if target_idx == -1:
+                payload_to_modify = self._pending_payload_path
+            elif target_idx >= 0 and target_idx < len(self._node_payloads):
+                payload_to_modify = self._node_payloads[target_idx]
+
+            if payload_to_modify and Path(payload_to_modify).exists():
+                try:
+                    with open(payload_to_modify, "a", encoding="utf-8") as f:
+                        f.write(f"\n\n--- INJECTED CONTEXT ---\n{self._injected_context}\n")
+                    self.write_agent_log(f"[bold green]✓ Injected context appended to:[/bold green] {payload_to_modify}")
+                except Exception as e:
+                    self.write_agent_log(f"[red]Failed to inject context:[/red] {e}")
+
         self._paused_selected_node = None
         self._paused_radio_side = ""
         self._injected_context = ""
+        
+        # Redraw the flow line normally
+        seq_str = " → ".join([
+            s.macronode_name if hasattr(s, "macronode_name") else str(s[0] if isinstance(s, tuple) else s) 
+            for s in self.active_flow_steps
+        ])
+        self.query_one("#flow-seq-text", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
+        
+        # We need to clear the container and put the flow-seq-text back if it was replaced
+        container = self.query_one("#active-flow-sequence", Horizontal)
+        for w in list(container.children):
+            w.remove()
+        container.mount(Static(f"[bold cyan]{seq_str}[/bold cyan]", id="flow-seq-text"))
 
     def _refresh_paused_flow_line(self) -> None:
         """Rebuild flow line for paused state — nodes are clickable, arrows can turn orange."""
