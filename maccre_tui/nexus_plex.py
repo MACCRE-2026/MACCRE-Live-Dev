@@ -500,10 +500,11 @@ class LinearFlowEditorModal(ModalScreen[list]):
         if template:
             slots = template.get("agent_slots", [])
             agent_sel = self.query_one("#agent-select", Select)
-            if slots and agent_sel.value and agent_sel.value != Select.BLANK:
+            if slots and agent_sel.value:
                 selected_agent = str(agent_sel.value)
-                for slot in slots:
-                    mapping[slot] = selected_agent
+                if selected_agent not in ("", "Select.BLANK", "Select.NULL"):
+                    for slot in slots:
+                        mapping[slot] = selected_agent
 
         self.flow_steps.append((name, mapping, "macro"))
         self._refresh_flow_line()
@@ -512,10 +513,13 @@ class LinearFlowEditorModal(ModalScreen[list]):
     def add_agent_to_flow(self) -> None:
         """Add the selected Agent as a single-node step to the flow line."""
         sel = self.query_one("#agent-select", Select)
-        if not sel.value or sel.value == Select.BLANK:
+        if not sel.value:
             return
 
         name = str(sel.value)
+        if name in ("", "Select.BLANK", "Select.NULL"):
+            return
+
         self.flow_steps.append((name, {}, "agent"))
         self._refresh_flow_line()
 

@@ -260,30 +260,29 @@ class TopologyEngine(TopologyProvider):
 
 
         # 5. Wait_For targets must exist in topology
-        _wait_for_raw: str = str(cfg.get("wait_for", "") or "").strip()
-        if _wait_for_raw and _wait_for_raw.lower() != "none":
-            _wait_targets = [w.strip() for w in _wait_for_raw.replace("|", ",").split(",") if w.strip()]
-            for _wt in _wait_targets:
-                if _wt not in topology:
+            _wait_for_raw: str = str(cfg.get("wait_for", "") or "").strip()
+            if _wait_for_raw and _wait_for_raw.lower() != "none":
+                _wait_targets = [w.strip() for w in _wait_for_raw.replace("|", ",").split(",") if w.strip()]
+                for _wt in _wait_targets:
+                    if _wt not in topology:
+                        issues.append({
+                            "node": node_id,
+                            "field": "wait_for",
+                            "severity": "ERROR",
+                            "detail": f"Wait_For target '{_wt}' does not exist in topology.",
+                        })
+
+                # 5b. Fan-in size warning — large wait_for lists risk context overflow
+                if len(_wait_targets) > 5:
                     issues.append({
                         "node": node_id,
                         "field": "wait_for",
-                        "severity": "ERROR",
-                        "detail": f"Wait_For target '{_wt}' does not exist in topology.",
+                        "severity": "WARN",
+                        "detail": (
+                            f"Fan-in has {len(_wait_targets)} gathered artifacts — "
+                            "exceeding 5 may saturate the context window."
+                        ),
                     })
-
-            # 5b. Fan-in size warning — large wait_for lists risk context overflow
-            if len(_wait_targets) > 5:
-                issues.append({
-                    "node": node_id,
-                    "field": "wait_for",
-                    "severity": "WARN",
-                    "detail": (
-                        f"Fan-in has {len(_wait_targets)} gathered artifacts — "
-                        "exceeding 5 may saturate the context window."
-                    ),
-                })
-
 
         # 6. Circular wait_for dependency detection (post-loop, graph-level)
         # Build an adjacency map: node -> set of nodes it must wait for
