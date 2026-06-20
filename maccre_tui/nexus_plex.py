@@ -486,13 +486,25 @@ class LinearFlowEditorModal(ModalScreen[list]):
 
     @on(Button.Pressed, "#btn-add-macro")
     def add_macro_to_flow(self) -> None:
-        """Add the selected MacroNode to the flow line."""
+        """Add the selected MacroNode to the flow line with agent mapping."""
         sel = self.query_one("#macro-select", Select)
         if not sel.value or sel.value == Select.BLANK:
             return
 
         name = str(sel.value)
-        self.flow_steps.append((name, {}, "macro"))
+        template = next((t for t in self.templates if t["name"] == name), None)
+
+        # Auto-populate agent mapping from the selected agent + template slots
+        mapping: dict[str, str] = {}
+        if template:
+            slots = template.get("agent_slots", [])
+            agent_sel = self.query_one("#agent-select", Select)
+            if slots and agent_sel.value and agent_sel.value != Select.BLANK:
+                selected_agent = str(agent_sel.value)
+                for slot in slots:
+                    mapping[slot] = selected_agent
+
+        self.flow_steps.append((name, mapping, "macro"))
         self._refresh_flow_line()
 
     @on(Button.Pressed, "#btn-add-agent")
@@ -518,6 +530,19 @@ class LinearFlowEditorModal(ModalScreen[list]):
         """Clear all steps from the flow line."""
         self.flow_steps.clear()
         self._refresh_flow_line()
+
+    @on(Button.Pressed)
+    def handle_flow_removal(self, event: Button.Pressed) -> None:
+        """Handle per-node ✕ removal buttons (flow-rm-{index})."""
+        btn_id = str(event.button.id or "")
+        if btn_id.startswith("flow-rm-"):
+            try:
+                idx = int(btn_id.replace("flow-rm-", ""))
+                if 0 <= idx < len(self.flow_steps):
+                    self.flow_steps.pop(idx)
+                    self._refresh_flow_line()
+            except ValueError:
+                pass
 
     @on(Button.Pressed, "#btn-done-flow")
     def done_flow(self) -> None:
@@ -550,7 +575,11 @@ class LinearFlowEditorModal(ModalScreen[list]):
                 container.mount(Static(" → ", classes="flow-arrow"))
 
             css_class = "flow-node-box" if step_type == "macro" else "flow-node-box-agent"
-            container.mount(Static(f" {name} ", classes=css_class))
+            with Vertical(classes="flow-node-wrapper"):
+                node_box = Static(f" {name} ", classes=css_class)
+                container.mount(node_box)
+                remove_btn = Button("✕", variant="error", id=f"flow-rm-{i}", classes="flow-node-rm")
+                container.mount(remove_btn)
 
 
 

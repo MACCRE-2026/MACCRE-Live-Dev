@@ -426,3 +426,132 @@ FlowExecutionPanel {
     width: 1fr;
     margin: 0;
 }
+
+/* ── Flow Line Visualization ─────────────────────────────────────────────── */
+
+#flow-line-section {
+    height: auto;
+    min-height: 5;
+    max-height: 10;
+    padding: 1;
+    border: solid #30363d;
+    overflow-x: auto;
+}
+
+#flow-line-content {
+    height: auto;
+    width: auto;
+    align: center middle;
+}
+
+.flow-node-box {
+    border: round #58a6ff;
+    color: #58a6ff;
+    padding: 0 1;
+    min-width: 12;
+    content-align: center middle;
+    text-style: bold;
+}
+
+.flow-node-box-agent {
+    border: round #3fb950;
+    color: #3fb950;
+    padding: 0 1;
+    min-width: 12;
+    content-align: center middle;
+    text-style: bold;
+}
+
+.flow-arrow {
+    color: #8b949e;
+    width: auto;
+    content-align: center middle;
+}
+
+.flow-node-wrapper {
+    width: auto;
+    height: auto;
+    align: center middle;
+}
+
+.flow-node-rm {
+    width: 3;
+    min-width: 3;
+    height: 1;
+    background: transparent;
+    color: #da3633;
+    border: none;
+    content-align: center middle;
+}
+
+.flow-node-rm:hover {
+    background: #da3633;
+    color: #ffffff;
+}
+
+/* ── Flow Editor Modal ───────────────────────────────────────────────────── */
+
+#flow-editor-outer {
+    width: 90%;
+    height: 85%;
+    background: #0d1117;
+    border: thick #30363d;
+    padding: 1 2;
+}
+
+#flow-editor-title {
+    color: #58a6ff;
+    text-style: bold;
+    content-align: center middle;
+    width: 100%;
+    padding: 0 0 1 0;
+}
+
+#flow-select-row {
+    height: auto;
+    max-height: 8;
+}
+
+.flow-select-group {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+}
+
+.flow-add-btn {
+    margin: 1 0 0 0;
+}
+
+#flow-info-row {
+    height: 1fr;
+    padding: 1 0;
+}
+
+#flow-macro-info, #flow-agent-info {
+    width: 1fr;
+    height: 1fr;
+    border: solid #30363d;
+    padding: 0 1;
+    overflow-y: auto;
+}
+
+.info-panel-title {
+    color: #58a6ff;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+.info-panel-body {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+#flow-editor-buttons {
+    height: auto;
+    padding: 1 0 0 0;
+    align: right middle;
+}
+
+#flow-editor-buttons Button {
+    margin: 0 0 0 1;
+}
