@@ -575,11 +575,10 @@ class LinearFlowEditorModal(ModalScreen[list]):
                 container.mount(Static(" → ", classes="flow-arrow"))
 
             css_class = "flow-node-box" if step_type == "macro" else "flow-node-box-agent"
-            with Vertical(classes="flow-node-wrapper"):
-                node_box = Static(f" {name} ", classes=css_class)
-                container.mount(node_box)
-                remove_btn = Button("✕", variant="error", id=f"flow-rm-{i}", classes="flow-node-rm")
-                container.mount(remove_btn)
+            wrapper = Vertical(classes="flow-node-wrapper")
+            container.mount(wrapper)
+            wrapper.mount(Static(f" {name} ", classes=css_class))
+            wrapper.mount(Button("✕", variant="error", id=f"flow-rm-{i}", classes="flow-node-rm"))
 
 
 
