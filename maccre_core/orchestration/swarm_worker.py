@@ -409,8 +409,8 @@ class UniversalSwarmWorker:
                 )
 
                 if det_result.should_pause:
-                    # Set task to paused — manual resume needed
-                    self.broker.release_task(row_id)
+                    # Set task to 'paused' — worker will skip it until manual resume
+                    self.broker.pause_task(row_id)
                     sys.stdout = orig_stdout
                     sys.stderr = orig_stderr
                     dual_out.close()
@@ -707,7 +707,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     _rel = _raw_artifact_path
                     if not _rel:
                         # Auto-persist dialogue artifact if explicit path is omitted
-                        _rel = f"{_ART_PFX}{job_id}/dialogue_transcript_{current_node}.md"
+                        _rel = f"{_ART_PFX}{job_id}/dialogue_transcript_{current_node}_{row_id}.md"
                         
                     if _rel.startswith(_ART_PFX) and job_id not in _rel:
                         _rel = f"{_ART_PFX}{job_id}/{_rel[len(_ART_PFX):]}"

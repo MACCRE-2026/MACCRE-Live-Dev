@@ -66,6 +66,10 @@ class MessageBroker(abc.ABC):
     def release_task(self, row_id: int) -> None:
         """Return a locked task to 'open' state (used in worker finally blocks)."""
 
+    @abc.abstractmethod
+    def pause_task(self, row_id: int) -> None:
+        """Set a task to 'paused' state — worker will skip it until manual resume."""
+
     # ── Interrupt / Injection ─────────────────────────────────────────────────
 
     @abc.abstractmethod

@@ -25,6 +25,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from maccre_core.macronode_registry import get_macronode_store
@@ -90,11 +91,61 @@ class FlowRunner:
         self.global_store = get_macronode_store("GLOBAL")
 
     def _get_macronode(self, name: str) -> dict[str, Any]:
-        """Fetch MacroNode definition from Project, fallback to GLOBAL."""
+        """Fetch MacroNode definition from Project, fallback to GLOBAL, fallback to agent auto-wrap."""
         try:
             return self.macronode_store.load(name)
         except KeyError:
-            return self.global_store.load(name)
+            try:
+                return self.global_store.load(name)
+            except KeyError:
+                pass
+
+        # ── Single-Agent Auto-Wrap ────────────────────────────────────────────
+        # If the name isn't a registered MacroNode, check if it's an agent name
+        # in the roster. If so, generate a synthetic single-node topology on the fly.
+        try:
+            from maccre_core.orchestration.roster_loader import (  # noqa: PLC0415
+                list_roster_agents,
+                load_agent_from_roster,
+            )
+            roster_names = list_roster_agents()
+            if name in roster_names:
+                agent_profile = load_agent_from_roster(name)
+                model = agent_profile.get("Model_Override", "gemini-2.5-flash")
+                system_prompt = agent_profile.get("System_Prompt", "")
+                tools = agent_profile.get("Tools_Allowed", "")
+                node_id = f"AGENT_{name[:20]}_{id(name) % 9999:04d}"
+                logger.info(
+                    "[FLOW_ENGINE] Auto-wrapping agent '%s' as single-node MacroNode (node=%s).",
+                    name, node_id,
+                )
+                return {
+                    "name": name,
+                    "description": f"Auto-wrapped single agent: {name}",
+                    "is_template": False,
+                    "agent_slots": [name],
+                    "topology_rows": [{
+                        "Node_ID": node_id,
+                        "Agent_Name": name,
+                        "System_Instruction": system_prompt,
+                        "Next_Node": "END",
+                        "Temperature": "1.0",
+                        "Model_Override": model,
+                        "Tools_Allowed": tools,
+                        "Fallback_Node": "FAILED",
+                        "Max_Retries": 3,
+                        "Is_End_Node": "TRUE",
+                        "Dialogue_Partner": "",
+                        "Dialogue_Rounds": 0,
+                    }],
+                    "roster_rows": [],
+                    "template_type": "",
+                    "template_config": None,
+                }
+        except Exception:  # noqa: BLE001
+            pass
+
+        raise KeyError(f"MacroNode '{name}' not found in project, GLOBAL, or agent roster.")
 
     # ── Phase B: Pre-Flight Validation Gate ────────────────────────────────────
 
@@ -269,6 +320,7 @@ class FlowRunner:
         cancel_event: threading.Event | None = None,
         pause_event: threading.Event | None = None,
         step_callback: Any = None,
+        hitl_callback: Any = None,
     ) -> str:
         """
         Execute a sequential linear flow of MacroNodes.
@@ -280,6 +332,7 @@ class FlowRunner:
             pause_event: Optional threading.Event — when cleared, blocks worker loop (VCR pause).
                          Must be set (unblocked) to allow execution.
             step_callback: Optional callable(step_index: int, output_path: str) — called after each step.
+            hitl_callback: Optional callable(step_index: int, job_id: str, payload: str) — called on HITL pause.
 
         Returns:
             The path to the final output file from the last step in the flow.
@@ -356,7 +409,27 @@ class FlowRunner:
                         "SELECT COUNT(*) FROM task_queue WHERE lock_status = 'open' AND job_id = ?",
                         (job_id,)
                     ).fetchone()[0]
-                    
+                    still_paused: int = _q.execute(
+                        "SELECT COUNT(*) FROM task_queue WHERE lock_status = 'paused' AND job_id = ?",
+                        (job_id,)
+                    ).fetchone()[0]
+
+                if still_open == 0 and still_paused > 0:
+                    # ── HITL Pause Gate ────────────────────────────────────────
+                    # All tasks done except paused ones — surface to TUI for user input
+                    logger.info("[FLOW_ENGINE] HITL pause detected — awaiting user input.")
+                    if hitl_callback is not None:
+                        try:
+                            hitl_callback(idx, job_id, current_payload)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    # Block until the TUI resumes (sets pause_event after injecting context)
+                    if pause_event is not None:
+                        pause_event.clear()
+                        pause_event.wait()
+                    # After resume, the paused task should now be 'open' again
+                    continue
+
                 if still_open == 0:
                     break
 
@@ -378,4 +451,170 @@ class FlowRunner:
                     pass
 
         logger.info(f"\n[FLOW_ENGINE] Linear Flow Complete. Final artifact: {current_payload}")
+
+        # ── 8. Generate Unified Session Ledger ────────────────────────────────
+        try:
+            unified_path = self._generate_unified_ledger(job_id, steps)
+            logger.info(f"[FLOW_ENGINE] Unified Session Ledger → {unified_path}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[FLOW_ENGINE] Could not generate unified ledger: {e}")
+
         return current_payload
+
+    def _generate_unified_ledger(self, job_id: str, steps: list[FlowStep]) -> str:
+        """Assemble a unified session ledger from all agent turns in the flow.
+
+        Output: ``04_Code_Artifacts/<job_id>/unified_session_ledger.md``
+
+        Contents:
+        - Session metadata (job_id, flow steps, total cost, timestamps)
+        - Chronological agent turns with content, node_id, cost, timing
+        - Tool call audits (if any)
+        - Memory pin summaries
+        """
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+        artifact_dir = get_datacenter_path("04_Code_Artifacts", job_id)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        output_path = artifact_dir / "unified_session_ledger.md"
+
+        # ── Collect per-node metadata from task_queue ─────────────────────────
+        node_meta: list[dict[str, Any]] = []
+        try:
+            import sqlite3  # noqa: PLC0415
+            db_path = str(get_datacenter_path("swarm_queue.db"))
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT id, current_node, lock_status, actual_cost, created_at, "
+                    "completed_at, locked_by, payload_path "
+                    "FROM task_queue WHERE job_id = ? ORDER BY id",
+                    (job_id,),
+                ).fetchall()
+                for r in rows:
+                    node_meta.append(dict(r))
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── Collect ledger files sorted by modification time ──────────────────
+        ledger_entries: list[tuple[Path, float]] = []
+        tool_audits: list[tuple[Path, float]] = []
+        if ledger_dir.exists():
+            for f in ledger_dir.iterdir():
+                if f.suffix == ".md" and "tool_audit" not in f.name:
+                    ledger_entries.append((f, f.stat().st_mtime))
+                elif f.suffix == ".md" and "tool_audit" in f.name:
+                    tool_audits.append((f, f.stat().st_mtime))
+        ledger_entries.sort(key=lambda x: x[1])
+        tool_audits.sort(key=lambda x: x[1])
+
+        # ── Collect memory pins ───────────────────────────────────────────────
+        memory_pins: list[dict[str, Any]] = []
+        pins_dir = get_datacenter_path("02_Dynamic_Context", "memory_pins")
+        if pins_dir.exists():
+            import json  # noqa: PLC0415
+            for pin_file in sorted(pins_dir.glob(f"pin_*_{job_id}*.json")):
+                try:
+                    pin_data = json.loads(pin_file.read_text(encoding="utf-8"))
+                    memory_pins.extend(pin_data if isinstance(pin_data, list) else [pin_data])
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # ── Calculate totals ──────────────────────────────────────────────────
+        total_cost = sum(m.get("actual_cost", 0.0) for m in node_meta)
+        flow_names = " → ".join(s.macronode_name for s in steps)
+        gen_ts = datetime.now(tz=timezone.utc).isoformat()
+
+        # ── Assemble document ─────────────────────────────────────────────────
+        parts: list[str] = []
+        parts.append("# Unified Session Ledger\n")
+        parts.append(f"**Job ID:** `{job_id}`  ")
+        parts.append(f"**Generated:** {gen_ts}  ")
+        parts.append(f"**Flow:** {flow_names}  ")
+        parts.append(f"**Total Cost:** ${total_cost:.6f}  ")
+        parts.append(f"**Nodes Executed:** {len(node_meta)}  \n")
+
+        # ── Session Timeline ──────────────────────────────────────────────────
+        parts.append("## Session Timeline\n")
+        parts.append("| # | Node | Status | Cost | Started | Completed |")
+        parts.append("|---|------|--------|------|---------|-----------|")
+        for i, m in enumerate(node_meta):
+            parts.append(
+                f"| {i + 1} | `{m.get('current_node', '?')}` | {m.get('lock_status', '?')} "
+                f"| ${m.get('actual_cost', 0.0):.6f} "
+                f"| {m.get('created_at', '-')} | {m.get('completed_at', '-')} |"
+            )
+        parts.append("")
+
+        # ── Agent Turns ───────────────────────────────────────────────────────
+        parts.append("## Agent Turns (Chronological)\n")
+        for ledger_path, _mtime in ledger_entries:
+            node_name = ledger_path.stem
+            ts_str = datetime.fromtimestamp(_mtime, tz=timezone.utc).isoformat()
+            content = ledger_path.read_text(encoding="utf-8")
+
+            # Find matching metadata
+            cost = 0.0
+            for m in node_meta:
+                if m.get("current_node", "") in node_name:
+                    cost = m.get("actual_cost", 0.0)
+                    break
+
+            parts.append(f"### {node_name}")
+            parts.append(f"*Written: {ts_str} | Cost: ${cost:.6f}*\n")
+            # Truncate very long outputs for the unified ledger
+            if len(content) > 8000:
+                parts.append(content[:8000])
+                parts.append(f"\n\n*... ({len(content) - 8000} chars truncated)*\n")
+            else:
+                parts.append(content)
+            parts.append("\n---\n")
+
+        # ── Tool Call Audits ──────────────────────────────────────────────────
+        if tool_audits:
+            parts.append("## Tool Call Audits\n")
+            for audit_path, _ in tool_audits:
+                audit_content = audit_path.read_text(encoding="utf-8")
+                parts.append(f"### {audit_path.stem}\n")
+                if len(audit_content) > 4000:
+                    parts.append(audit_content[:4000])
+                    parts.append(f"\n*... ({len(audit_content) - 4000} chars truncated)*\n")
+                else:
+                    parts.append(audit_content)
+                parts.append("\n---\n")
+
+        # ── Memory Pins (Knowledge Triplets) ──────────────────────────────────
+        if memory_pins:
+            parts.append("## Extracted Knowledge Triplets\n")
+            parts.append("| Subject | Predicate | Object | Significance |")
+            parts.append("|---------|-----------|--------|-------------|")
+            for pin in memory_pins[:50]:  # Cap at 50 for readability
+                parts.append(
+                    f"| {pin.get('subject', '?')} | {pin.get('predicate', '?')} "
+                    f"| {pin.get('object', '?')} | {pin.get('significance', '-')} |"
+                )
+            if len(memory_pins) > 50:
+                parts.append(f"\n*... and {len(memory_pins) - 50} more triplets*\n")
+            parts.append("")
+
+        # ── Canonization Status ───────────────────────────────────────────────
+        parts.append("## Canonization Status\n")
+        parts.append("**Status:** `CANDIDATE` — awaiting selection for project-level canonization.  ")
+        parts.append(
+            "**To canonize:** `python maccre.py canonize --project <project> --session "
+            f"{job_id}`  "
+        )
+        parts.append(
+            "Canonization will elevate memory pins → `thought_pins.db` vectors, "
+            "ledger vectors → project canon, and topology → `topology_library`.\n"
+        )
+
+        # ── Write ─────────────────────────────────────────────────────────────
+        unified_text = "\n".join(parts)
+        output_path.write_text(unified_text, encoding="utf-8")
+        logger.info(
+            "[FLOW_ENGINE] Unified Session Ledger: %d chars, %d turns, %d pins, $%.6f total.",
+            len(unified_text), len(ledger_entries), len(memory_pins), total_cost,
+        )
+        return str(output_path)

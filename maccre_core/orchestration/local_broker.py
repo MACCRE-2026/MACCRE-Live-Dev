@@ -136,6 +136,7 @@ class LocalMessageBroker(MessageBroker):
             "ALTER TABLE task_queue ADD COLUMN actual_cost REAL DEFAULT 0.0",
             "ALTER TABLE task_queue ADD COLUMN source_payload_path TEXT DEFAULT ''",
             "ALTER TABLE task_queue ADD COLUMN loop_iteration_count INTEGER DEFAULT 0",
+            "ALTER TABLE task_queue ADD COLUMN completed_at TIMESTAMP",
         ):
             try:
                 conn.execute(_col_sql)
@@ -265,12 +266,12 @@ class LocalMessageBroker(MessageBroker):
         conn = self._get_conn()
         conn.execute(
             "UPDATE task_queue "
-            "SET lock_status = 'completed', payload_path = ?, actual_cost = ? "
+            "SET lock_status = 'completed', payload_path = ?, actual_cost = ?, completed_at = CURRENT_TIMESTAMP "
             "WHERE id = ?",
             (new_payload_path, actual_cost, row_id),
         )
         for node in next_nodes:
-                if node not in ("DONE", "FAILED", "STOP", "TERMINATE"):
+                if node.upper() not in ("DONE", "FAILED", "STOP", "TERMINATE", "END"):
                     cursor = conn.execute(
                         "SELECT loop_iteration_count, lock_status FROM task_queue "
                         "WHERE job_id=? AND current_node=?",
@@ -343,6 +344,47 @@ class LocalMessageBroker(MessageBroker):
             (row_id,),
         )
         conn.commit()
+
+    def pause_task(self, row_id: int) -> None:
+        """Set a task to 'paused' state — worker will skip it until manual resume."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE task_queue SET lock_status = 'paused', locked_by = NULL WHERE id = ?",
+            (row_id,),
+        )
+        conn.commit()
+
+    def resume_paused_task(self, job_id: str, new_payload_path: str = "") -> bool:
+        """Resume the first paused task for a job, optionally with injected context.
+
+        Returns True if a paused task was found and resumed.
+        """
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "SELECT id, payload_path FROM task_queue "
+            "WHERE job_id = ? AND lock_status = 'paused' LIMIT 1",
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        row_id = row[0]
+        payload = new_payload_path or row[1]
+        conn.execute(
+            "UPDATE task_queue SET lock_status = 'open', payload_path = ? WHERE id = ?",
+            (payload, row_id),
+        )
+        conn.commit()
+        return True
+
+    def has_paused_tasks(self, job_id: str) -> bool:
+        """Check if any tasks are in 'paused' state for a job."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM task_queue WHERE job_id = ? AND lock_status = 'paused'",
+            (job_id,),
+        )
+        return cursor.fetchone()[0] > 0
 
 
     # ── Hot-Mic Priority Override Mechanics ───────────────────────────────────

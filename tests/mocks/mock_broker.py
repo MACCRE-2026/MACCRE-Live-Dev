@@ -98,6 +98,13 @@ class MockMessageBroker(MessageBroker):
                 task["locked_by"] = None
                 break
 
+    def pause_task(self, row_id: int) -> None:
+        for task in self._tasks:
+            if task["id"] == row_id:
+                task["lock_status"] = "paused"
+                task["locked_by"] = None
+                break
+
     def inject_interrupt(self, job_id: str, override_text: str) -> None:
         self._interrupts.append({
             "job_id": job_id,

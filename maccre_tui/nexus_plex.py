@@ -1395,6 +1395,7 @@ class NexusPlex(App[None]):
         self._paused_radio_side: str = ""  # "left" | "right" | ""
         self._node_payloads: list[str] = []  # captured output path per completed step
         self._injected_context: str = ""  # text from context injection modal
+        self._hitl_job_id: str = ""  # job_id for HITL pause resume
         
         self.nexus = NexusAgent(
             print_callback=self.write_nexus_log,
@@ -2111,6 +2112,11 @@ class NexusPlex(App[None]):
                 self._node_payloads.append("")
             self._node_payloads[step_index] = output_path
 
+        def _on_hitl_pause(step_index: int, job_id: str, payload: str) -> None:
+            """Called from flow engine thread when DET_PAUSE fires."""
+            self._hitl_job_id = job_id
+            self.call_from_thread(self._surface_hitl_pause, step_index, job_id, payload)
+
         try:
             final_artifact = runner.execute_flow(
                 self.active_flow_steps,
@@ -2118,6 +2124,7 @@ class NexusPlex(App[None]):
                 cancel_event=self._flow_cancel_event,
                 pause_event=self._flow_pause_event,
                 step_callback=_on_step_complete,
+                hitl_callback=_on_hitl_pause,
             )
             if self._flow_cancel_event and self._flow_cancel_event.is_set():
                 self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
@@ -2136,6 +2143,54 @@ class NexusPlex(App[None]):
         self.query_one("#btn-create-payload", Button).disabled = False
         self._set_vcr_state("idle")
         self._exit_paused_state()
+
+    def _surface_hitl_pause(self, step_index: int, job_id: str, payload: str) -> None:
+        """Surface HITL pause to the TUI — show injection modal."""
+        step_name = "unknown"
+        if 0 <= step_index < len(self.active_flow_steps):
+            step_name = self.active_flow_steps[step_index].macronode_name
+
+        self._set_vcr_state("paused")
+        self._enter_paused_state()
+        self.write_agent_log(
+            f"\n[bold yellow]⏸ HITL PAUSE at node '{step_name}'[/bold yellow]\n"
+            f"[dim]The flow has paused for human input. Inject context to continue.[/dim]"
+        )
+
+        def _on_hitl_inject(text: str | None) -> None:
+            if text:
+                self._hitl_resume_with_context(job_id, text)
+            else:
+                self.write_agent_log("[dim]HITL modal dismissed — flow remains paused. Use ▶ to resume.[/dim]")
+
+        self.push_screen(ContextInjectModalScreen(), _on_hitl_inject)
+
+    def _hitl_resume_with_context(self, job_id: str, context: str) -> None:
+        """Write injected context to a payload file and resume the paused broker task."""
+        from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: PLC0415
+
+        # Write context to a payload file
+        payload_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        hitl_payload_path = payload_dir / "HITL_injection.md"
+        hitl_payload_path.write_text(context, encoding="utf-8")
+
+        # Resume the paused task with the new payload
+        from maccre_core.orchestration.local_broker import LocalBroker  # noqa: PLC0415
+        broker = LocalBroker()
+        resumed = broker.resume_paused_task(job_id, str(hitl_payload_path))
+
+        if resumed:
+            self.write_agent_log(
+                f"[green]HITL context injected ({len(context)} chars) → paused task resumed.[/green]"
+            )
+            # Unblock the flow engine
+            if self._flow_pause_event is not None:
+                self._flow_pause_event.set()
+            self._set_vcr_state("running")
+            self._exit_paused_state()
+        else:
+            self.write_agent_log("[red]No paused task found to resume.[/red]")
 
     @on(Button.Pressed, "#btn-stop-flow")
     def action_stop_flow(self) -> None:
