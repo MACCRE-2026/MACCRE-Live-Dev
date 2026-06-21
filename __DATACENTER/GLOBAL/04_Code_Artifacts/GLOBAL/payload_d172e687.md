@@ -1,0 +1,1 @@
+Please analyze how LangGraph, CrewAI, Microsoft, and other major agentic frameworks handle their datacenters. Estimate the total costs that a user would spend per MB of data managed by each framework.

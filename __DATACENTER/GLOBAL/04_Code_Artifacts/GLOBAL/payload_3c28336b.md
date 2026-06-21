@@ -1,0 +1,1 @@
+Please research and establish an absolute development timeline of granular milestones to LLM AI model development starting with conglomerated advancements up to 1983, and then granular advancement from 1983 to 2026.

@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 from typing import Callable, Any
 
+# SOVEREIGNTY EXCEPTION: Live API WebSocket protocol has no REST equivalent
 from google import genai
+# SOVEREIGNTY EXCEPTION: Live API WebSocket protocol has no REST equivalent
 from google.genai import types
 
 _log = logging.getLogger(__name__)

@@ -1,0 +1,1 @@
+Please examine the public reception of generative question and answer content on the social media q/a network, Quora. How has it afected the trust and public image of Quora?

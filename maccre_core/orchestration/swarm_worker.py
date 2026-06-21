@@ -150,7 +150,9 @@ class UniversalSwarmWorker:
 
     async def _run_live_session(self, model_id: str, system_prompt: str, current_payload: str, job_id: str, current_node: str) -> str:
         """Stream 4a Alternative: High-speed REST streaming with manual barge-in."""
+        # SOVEREIGNTY EXCEPTION: Live API WebSocket protocol has no REST equivalent
         from google import genai
+        # SOVEREIGNTY EXCEPTION: Live API WebSocket protocol has no REST equivalent
         from google.genai import types
         from maccre_core.orchestration.windows_vault import get_native_credential
         from maccre_core.orchestration.queues import JsonFileQueue
@@ -645,6 +647,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     DialogueRunner,
                     GroupDialogueRunner,
                     ParticipantConfig,
+                    ManualInputRequired,
                 )
 
                 def _load_agent_cfg(
@@ -653,6 +656,9 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     default_temp: float,
                 ) -> tuple[str, str, float, str]:
                     """Return (system_prompt, model_id, temperature, tools_str) for *name*."""
+                    if name.strip().upper() == "MANUAL":
+                        return "You are the Human user. Provide your input.", "manual", 0.0, "none"
+
                     _sys = ""
                     _mdl = default_model
                     _tmp = default_temp
@@ -670,14 +676,20 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     if _roster.exists():
                         with _roster.open(encoding="utf-8") as _rf:
                             for _row in _csv.DictReader(_rf):
-                                if _row.get("AGENT_NAME", "").strip() == name:
+                                # CSV headers: Agent_Name, Model, Tools_Allowed, System_Prompt, Description
+                                _agent_name_val = _row.get("Agent_Name", "") or _row.get("AGENT_NAME", "")
+                                if _agent_name_val.strip() == name:
                                     _sys = str(
-                                        _row.get("PERSONA", "")
+                                        _row.get("System_Prompt", "")
+                                        or _row.get("PERSONA", "")
                                         or _row.get("instructions", "")
                                         or ""
                                     )
-                                    _mdl = str(_row.get("MODEL", _mdl) or _mdl)
-                                    _tmp = float(_row.get("TEMPERATURE", _tmp) or _tmp)
+                                    _mdl = str(_row.get("Model", "") or _row.get("MODEL", "") or _mdl)
+                                    _tmp = float(_row.get("Temperature", "") or _row.get("TEMPERATURE", "") or _tmp)
+                                    _tls_val = str(_row.get("Tools_Allowed", "") or _row.get("TOOLS_ALLOWED", ""))
+                                    if _tls_val:
+                                        _tls = _tls_val
                                     break
                     if not _sys:
                         _card = get_datacenter_path("02_Dynamic_Context", f"{name}.json")
@@ -742,7 +754,18 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         agent_a_tools=_host_tls,
                         agent_b_tools=_p_tls,
                     )
-                    transcript, final_turn, total_cost = _pair_runner.run(current_payload)
+                    try:
+                        transcript, final_turn, total_cost = _pair_runner.run(current_payload)
+                    except ManualInputRequired as e:
+                        _sp = get_datacenter_path("02_Dynamic_Context", f"{job_id}_dialogue_state.json")
+                        _sp.write_text(_json.dumps(e.checkpoint), encoding="utf-8")
+                        logger.warning(f"[{AGENT_ID}] MANUAL INTERCEPT: {e.participant_label} requires input. Pausing task {row_id}.")
+                        self.broker.pause_task(row_id)
+                        sys.stdout = orig_stdout
+                        sys.stderr = orig_stderr
+                        dual_out.close()
+                        dual_err.close()
+                        return True
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
 
@@ -778,7 +801,18 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         num_rounds=_dialogue_rounds,
                         host_tools=_host_tls,
                     )
-                    transcript, final_turn, total_cost = _grp_runner.run(current_payload)
+                    try:
+                        transcript, final_turn, total_cost = _grp_runner.run(current_payload)
+                    except ManualInputRequired as e:
+                        _sp = get_datacenter_path("02_Dynamic_Context", f"{job_id}_dialogue_state.json")
+                        _sp.write_text(_json.dumps(e.checkpoint), encoding="utf-8")
+                        logger.warning(f"[{AGENT_ID}] MANUAL INTERCEPT: {e.participant_label} requires input. Pausing task {row_id}.")
+                        self.broker.pause_task(row_id)
+                        sys.stdout = orig_stdout
+                        sys.stderr = orig_stderr
+                        dual_out.close()
+                        dual_err.close()
+                        return True
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
 
@@ -799,7 +833,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         payload=current_payload,
                         system_prompt=system_prompt,
                         tools_str=tools_str,
-                        temperature=float(node_config["temperature"]),
+                        temperature=float(node_config.get("temperature", 0.7)),
                         expect_multiple_reads=True,
                     )
                     total_cost += turn_cost
@@ -861,8 +895,15 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         for _t in _TERMINAL_TOOLS
                     )
                     if _fired_terminal:
-                        final_output_text = output_text
-                        logger.info(f"[{AGENT_ID}] Terminal tool fired — closing loop after turn {turn_idx + 1}.")
+                        t_name, t_args = self.tool_executor._parse(output_text)
+                        if t_args and "data" in t_args:
+                            final_output_text = str(t_args["data"])
+                        elif t_args and "content" in t_args:
+                            final_output_text = str(t_args["content"])
+                        else:
+                            final_output_text = output_text
+                            
+                        logger.info(f"[{AGENT_ID}] Terminal tool fired — extracting prose payload and closing loop.")
                         break
                     # ─────────────────────────────────────────────────────────────
 

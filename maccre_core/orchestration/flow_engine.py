@@ -26,7 +26,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from maccre_core.macronode_registry import get_macronode_store
 from maccre_core.orchestration.local_broker import LocalMessageBroker
@@ -306,12 +306,22 @@ class FlowRunner:
             hydrated.append(row_list)
         return hydrated
 
-    def _find_starting_node(self, topology_rows: list[dict[str, Any]]) -> str:
-        """Heuristically find the starting Node_ID of a MacroNode DAG."""
+    def _find_starting_nodes(self, topology_rows: list[dict[str, Any]]) -> list[str]:
+        """Heuristically find all starting Node_IDs of a MacroNode DAG."""
         if not topology_rows:
-            return "OSINT"
-        # First node in the list is almost always the entrypoint in MACCREv2.
-        return str(topology_rows[0].get("Node_ID", "OSINT"))
+            return ["OSINT"]
+        
+        start_nodes = []
+        for row in topology_rows:
+            wait_for = str(row.get("Wait_For", "none")).strip().lower()
+            if wait_for in ("none", "", "null"):
+                start_nodes.append(str(row.get("Node_ID", "OSINT")))
+        
+        if not start_nodes:
+            # Fallback if somehow there's a circular Wait_For loop with no entry
+            start_nodes.append(str(topology_rows[0].get("Node_ID", "OSINT")))
+            
+        return start_nodes
 
     def _find_final_ledger_path(self, job_id: str, topology_rows: list[dict[str, Any]]) -> str | None:
         """Find the final expected artifact path for the DAG to pass it sequentially to the next step."""
@@ -328,11 +338,12 @@ class FlowRunner:
     def execute_flow(
         self,
         steps: list[FlowStep],
-        initial_payload_path: str = "none",
+        initial_payload_path: str,
         cancel_event: threading.Event | None = None,
         pause_event: threading.Event | None = None,
-        step_callback: Any = None,
-        hitl_callback: Any = None,
+        step_callback: Callable[[int, str], None] | None = None,
+        hitl_callback: Callable[[int, str, str], None] | None = None,
+        job_started_callback: Callable[[str], None] | None = None,
     ) -> str:
         """
         Execute a sequential linear flow of MacroNodes.
@@ -353,6 +364,11 @@ class FlowRunner:
         ensure_project_workbook(self.project_name)
 
         job_id = f"job_{generate_session_id()}"
+        if job_started_callback:
+            try:
+                job_started_callback(job_id)
+            except Exception:
+                pass
         logger.info(f"[FLOW_ENGINE] Booting Linear Flow (Job: {job_id}) across {len(steps)} MacroNode(s).")
 
         current_payload = initial_payload_path
@@ -385,10 +401,11 @@ class FlowRunner:
             build_res = build_topology(hydrated_lists)
             logger.info(f"[FLOW_ENGINE] {build_res}")
             
-            # 4. Inject Initial Task
-            start_node = self._find_starting_node(topo_rows)
-            broker.inject_task(job_id=job_id, payload_path=current_payload, starting_node=start_node)
-            logger.info(f"[FLOW_ENGINE] Queued entrypoint: {start_node} with payload '{current_payload}'")
+            # 4. Inject Initial Tasks
+            start_nodes = self._find_starting_nodes(topo_rows)
+            for start_node in start_nodes:
+                broker.inject_task(job_id=job_id, payload_path=current_payload, starting_node=start_node)
+                logger.info(f"[FLOW_ENGINE] Queued entrypoint: {start_node} with payload '{current_payload}'")
 
             # 5. Ignite the Swarm Worker for this DAG
             db_path = str(get_datacenter_path("swarm_queue.db"))
@@ -606,26 +623,11 @@ class FlowRunner:
 
             parts.append(f"### {node_name}")
             parts.append(f"*Written: {ts_str} | Cost: ${cost:.6f}*\n")
-            # Truncate very long outputs for the unified ledger
-            if len(content) > 8000:
-                parts.append(content[:8000])
-                parts.append(f"\n\n*... ({len(content) - 8000} chars truncated)*\n")
-            else:
-                parts.append(content)
+            parts.append(content)
             parts.append("\n---\n")
 
-        # ── Tool Call Audits ──────────────────────────────────────────────────
-        if tool_audits:
-            parts.append("## Tool Call Audits\n")
-            for audit_path, _ in tool_audits:
-                audit_content = audit_path.read_text(encoding="utf-8")
-                parts.append(f"### {audit_path.stem}\n")
-                if len(audit_content) > 4000:
-                    parts.append(audit_content[:4000])
-                    parts.append(f"\n*... ({len(audit_content) - 4000} chars truncated)*\n")
-                else:
-                    parts.append(audit_content)
-                parts.append("\n---\n")
+        # Tool Call Audits are intentionally excluded from the unified session ledger
+        # to ensure the final payload is clean and primarily prose-based.
 
         # ── Memory Pins (Knowledge Triplets) ──────────────────────────────────
         if memory_pins:

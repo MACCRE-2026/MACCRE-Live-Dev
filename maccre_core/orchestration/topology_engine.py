@@ -65,10 +65,10 @@ class TopologyEngine(TopologyProvider):
     def _pull_from_csv(self) -> Dict[str, Any]:
         """Loads and parses the CSV into the engine dictionary."""
         from maccre_core.utils.secret_auth import is_topology_approved
+        from maccre_core.utils.path_resolver import get_maccre_root
 
         if not os.path.exists(self.csv_path):
             # Attempt GLOBAL fallback constraint
-            from maccre_core.utils.path_resolver import get_maccre_root
             fallback_path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "02_Dynamic_Context" / "topology.csv"
             if not fallback_path.exists():
                 raise FileNotFoundError(f"Topology missing at {self.csv_path} and GLOBAL fallback.")
@@ -201,7 +201,7 @@ class TopologyEngine(TopologyProvider):
 
         topology = self.get_topology()
         # Terminal sentinels — valid Next_Node targets that don't need to exist as nodes
-        _TERMINALS = {"STOP", "DONE", "TERMINATE", "FAILED", "HUMAN_GATE", ""}
+        _TERMINALS = {"STOP", "DONE", "TERMINATE", "FAILED", "HUMAN_GATE", "END", ""}
 
         issues: list[dict[str, str]] = []
 

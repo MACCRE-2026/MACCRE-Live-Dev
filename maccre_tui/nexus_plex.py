@@ -15,6 +15,7 @@ from pathlib import Path
 # Ensure MACCREv2 root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from maccre_tui.macro_editor_modal import MacroNodeEditorModal
 from textual import work, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -264,6 +265,16 @@ class LinearFlowEditorModal(ModalScreen[list]):
         color: #3fb950;
     }
 
+    .flow-node-box-special {
+        min-width: 22;
+        height: 3;
+        border: round #d29922;
+        content-align: center middle;
+        padding: 0 1;
+        margin: 0 1;
+        color: #d29922;
+    }
+
     .flow-arrow {
         height: 3;
         width: 3;
@@ -288,6 +299,15 @@ class LinearFlowEditorModal(ModalScreen[list]):
     }
 
     #flow-agent-info {
+        width: 1fr;
+        height: 100%;
+        border: round #30363d;
+        padding: 1;
+        overflow-y: auto;
+        margin-right: 1;
+    }
+
+    #flow-special-info {
         width: 1fr;
         height: 100%;
         border: round #30363d;
@@ -322,7 +342,18 @@ class LinearFlowEditorModal(ModalScreen[list]):
         super().__init__()
         self.templates = templates
         self.roster = sorted(roster)
-        self.flow_steps: list[tuple[str, dict, str]] = []  # (name, mapping, type: "macro"|"agent")
+        self.flow_steps: list[tuple[str, dict, str]] = []  # (name, mapping, type: "macro"|"agent"|"special")
+        
+        self.special_nodes = [
+            ("MANUAL", "Live swarm intercept — pauses the task in awaiting_orders for manual resume."),
+            ("DET_ANCHOR", "Entry marker — passes payload through unchanged."),
+            ("DET_RECURSION", "Loop-back control with counter tracking."),
+            ("DET_PAUSE", "Halts execution, sets task to paused for manual resume."),
+            ("DET_GATE", "Conditional gate — blocks unless prerequisite nodes complete."),
+            ("DET_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
+            ("DET_DELAY", "Sleeps for a configurable number of seconds."),
+            ("DET_TRANSFORM", "Applies a static text wrapper/template to the payload."),
+        ]
 
     def compose(self) -> ComposeResult:
         with Container(id="flow-editor-outer"):
@@ -357,6 +388,20 @@ class LinearFlowEditorModal(ModalScreen[list]):
                         id="btn-add-agent",
                         classes="flow-add-btn",
                     )
+                
+                with Vertical(classes="flow-select-group"):
+                    yield Label("Special Node")
+                    yield Select(
+                        [(sn[0], sn[0]) for sn in self.special_nodes],
+                        prompt="Select Special Node…",
+                        id="special-select",
+                    )
+                    yield Button(
+                        "Add Special Node to Flow",
+                        variant="warning",
+                        id="btn-add-special",
+                        classes="flow-add-btn",
+                    )
 
             # ── Flow Line Visualization ───────────────────────────────────
             with Vertical(id="flow-line-section"):
@@ -377,6 +422,14 @@ class LinearFlowEditorModal(ModalScreen[list]):
                     yield Static(
                         "[dim]Select an Agent above to see its profile.[/dim]",
                         id="agent-info-body",
+                        classes="info-panel-body",
+                    )
+
+                with Vertical(id="flow-special-info"):
+                    yield Label("Special Node Details", classes="info-panel-title")
+                    yield Static(
+                        "[dim]Select a Special Node above to see its description.[/dim]",
+                        id="special-info-body",
                         classes="info-panel-body",
                     )
 
@@ -485,6 +538,25 @@ class LinearFlowEditorModal(ModalScreen[list]):
         info_parts.append(instr_display)
         body.update("\n".join(info_parts))
 
+    @on(Select.Changed, "#special-select")
+    def special_selection_changed(self, event: Select.Changed) -> None:
+        """Show selected Special Node's description in the info panel."""
+        body = self.query_one("#special-info-body", Static)
+        if not event.value or event.value == Select.BLANK:
+            body.update("[dim]Select a Special Node above to see its description.[/dim]")
+            return
+
+        name = str(event.value)
+        desc = next((sn[1] for sn in getattr(self, "special_nodes", []) if sn[0] == name), "No description available.")
+
+        info = [
+            f"[bold warning]{name}[/bold warning]",
+            "",
+            "[bold]Description[/bold]",
+            str(desc),
+        ]
+        body.update("\n".join(info))
+
     @on(Button.Pressed, "#btn-add-macro")
     def add_macro_to_flow(self) -> None:
         """Add the selected MacroNode to the flow line with agent mapping."""
@@ -521,6 +593,15 @@ class LinearFlowEditorModal(ModalScreen[list]):
             return
 
         self.flow_steps.append((name, {}, "agent"))
+        self._refresh_flow_line()
+
+    @on(Button.Pressed, "#btn-add-special")
+    def add_special_to_flow(self) -> None:
+        sel = self.query_one("#special-select", Select)
+        if not sel.value or sel.value == Select.BLANK:
+            return
+        name = str(sel.value)
+        self.flow_steps.append((name, {}, "special"))
         self._refresh_flow_line()
 
     @on(Button.Pressed, "#btn-remove-last")
@@ -579,7 +660,13 @@ class LinearFlowEditorModal(ModalScreen[list]):
             if i > 0:
                 container.mount(Static(" → ", classes="flow-arrow"))
 
-            css_class = "flow-node-box" if step_type == "macro" else "flow-node-box-agent"
+            if step_type == "macro":
+                css_class = "flow-node-box"
+            elif step_type == "special":
+                css_class = "flow-node-box-special"
+            else:
+                css_class = "flow-node-box-agent"
+                
             wrapper = Vertical(classes="flow-node-wrapper")
             container.mount(wrapper)
             wrapper.mount(Static(f" {name} ", classes=css_class))
@@ -1271,6 +1358,7 @@ class AgentBuilderPanel(Vertical):
     def compose(self) -> ComposeResult:
         yield Label("Build an Agent", classes="pane-title")
         yield Button("Edit Agent", variant="warning", id="btn-open-edit-agent", classes="top-edit-btn")
+        yield Button("Edit MacroNode", variant="warning", id="btn-open-edit-macro", classes="top-edit-btn")
         yield Label("Agent Name")
         yield Input(placeholder="e.g., OSINT_Researcher", id="ab-name")
         
@@ -1329,6 +1417,11 @@ class AgentBuilderPanel(Vertical):
 class CreatePayloadModal(ModalScreen[dict]):
     """Modal for creating a payload (text + files) before launching a flow."""
 
+    def __init__(self, existing_text: str = "", existing_files: str = "", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.existing_text = existing_text
+        self.existing_files = existing_files
+
     def compose(self) -> ComposeResult:
         with Container(id="payload-modal-outer"):
             yield Label("━━━ Create Payload ━━━", id="payload-modal-title")
@@ -1337,7 +1430,7 @@ class CreatePayloadModal(ModalScreen[dict]):
             with Horizontal(classes="payload-toggle-row"):
                 yield Switch(value=True, id="sw-text-payload")
                 yield Label("Text Payload", classes="payload-toggle-label")
-            yield TextArea(id="payload-text-area", language=None)
+            yield TextArea(self.existing_text, id="payload-text-area", language=None)
             with Horizontal(classes="payload-btn-row"):
                 yield Button("Paste from Clipboard", variant="default", id="btn-paste-text")
 
@@ -1345,7 +1438,7 @@ class CreatePayloadModal(ModalScreen[dict]):
             with Horizontal(classes="payload-toggle-row"):
                 yield Switch(value=False, id="sw-file-payload")
                 yield Label("File Payload (comma-separated paths)", classes="payload-toggle-label")
-            yield Input(placeholder="path/to/file1.md, path/to/file2.txt", id="payload-file-input")
+            yield Input(value=self.existing_files, placeholder="path/to/file1.md, path/to/file2.txt", id="payload-file-input")
             with Horizontal(classes="payload-btn-row"):
                 yield Button("Paste from Clipboard", variant="default", id="btn-paste-files")
 
@@ -1409,11 +1502,12 @@ class FlowExecutionPanel(Vertical):
 
             yield Label("Active Flow Sequence")
             with Horizontal(id="active-flow-sequence", classes="flow-controls"):
-                yield Static("No flow loaded.", id="flow-seq-text")
+                yield Static("No flow loaded.", classes="flow-seq-text")
 
         # Flow Monitor Panel
         with Vertical(classes="panel-section", id="flow-monitor-section"):
             yield Label("Flow Monitor", classes="pane-title")
+            yield Label("Stage: [dim]Idle[/dim]", id="flow-stage-readout", classes="flow-stage-readout")
             yield RichLog(id="flow-execution-log", wrap=True, highlight=True, markup=True)
 
             # VCR Transport + Instruction Panel
@@ -1623,6 +1717,84 @@ class NexusPlex(App[None]):
                 self._load_agent_into_builder(name)
         self.push_screen(EditAgentModal(agents), handle_edit_agent)
 
+    @on(Button.Pressed, "#btn-open-edit-macro")
+    def action_open_edit_macro(self) -> None:
+        from maccre_core.macronode_registry import SQLiteMacroNodeStore, _db_path
+        store = SQLiteMacroNodeStore(_db_path(self.active_project))
+        templates = store.list_all()
+        full_templates = []
+        for t in templates:
+            try:
+                full_templates.append(store.load(t["name"]))
+            except Exception:
+                pass
+
+        agents = load_agent_names_from_library(self.active_project)
+        
+        special_nodes = [
+            ("MANUAL", "Live swarm intercept — pauses the task in awaiting_orders for manual resume."),
+            ("DET_ANCHOR", "Entry marker — passes payload through unchanged."),
+            ("DET_RECURSION", "Loop-back control with counter tracking."),
+            ("DET_PAUSE", "Halts execution, sets task to paused for manual resume."),
+            ("DET_GATE", "Conditional gate — blocks unless prerequisite nodes complete."),
+            ("DET_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
+            ("DET_DELAY", "Sleeps for a configurable number of seconds."),
+            ("DET_TRANSFORM", "Applies a static text wrapper/template to the payload."),
+        ]
+
+        def handle_edit_macro(result: dict | None):
+            if not result:
+                return
+            
+            name = result["name"]
+            desc = result["description"]
+            tpl_type = result["template_type"]
+            agent_mapping = result["agent_mapping"]
+            config = result["config"]
+            
+            existing = next((t for t in templates if t["name"] == name), None)
+            
+            def do_save():
+                from maccre_core.orchestration.macro_factory import build_from_template
+                from maccre_core.workbook_data import load_agent_roster_csv
+                
+                roster_rows = load_agent_roster_csv(self.active_project)
+                roster_dict = {str(r.get("Agent_Name", r.get("agent_name"))): dict(r) for r in roster_rows}
+                for sn in special_nodes:
+                    roster_dict[sn[0]] = {"agent_name": sn[0], "system_prompt": "", "tools_allowed": "none"}
+                
+                try:
+                    topology_rows = build_from_template(tpl_type, agent_mapping, config, roster_dict)
+                except Exception as e:
+                    self.app.notify(f"Error building topology: {e}", severity="error")
+                    return
+                
+                slots = []
+                for v in agent_mapping.values():
+                    slots.extend(v)
+                    
+                store.save(
+                    name=name,
+                    topology_rows=topology_rows,
+                    roster_rows=[],
+                    description=desc,
+                    is_template=True,
+                    agent_slots=slots,
+                    template_type=tpl_type,
+                    template_config=config,
+                )
+                self.write_nexus_log(f"[bold green]System:[/bold green] MacroNode '{name}' saved successfully.")
+
+            if existing:
+                def handle_overwrite(confirm: bool):
+                    if confirm:
+                        do_save()
+                self.push_screen(OverwriteConfirmModal(), handle_overwrite)
+            else:
+                do_save()
+
+        self.push_screen(MacroNodeEditorModal(full_templates, agents, special_nodes), handle_edit_macro)
+
     def _load_agent_into_builder(self, name: str) -> None:
         from maccre_core.agent_library import get_agent_store
         store = get_agent_store(self.active_project)
@@ -1830,7 +2002,8 @@ class NexusPlex(App[None]):
                     self.active_flow_steps.append(FlowStep(macro_name, mapping))
 
                 seq_str = " → ".join([s.macronode_name for s in self.active_flow_steps])
-                self.query_one("#flow-seq-text", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
+                for w in self.query(".flow-seq-text"):
+                    w.update(f"[bold cyan]{seq_str}[/bold cyan]")
                 self.write_agent_log(
                     f"[green]Flow Line updated: {len(self.active_flow_steps)} step(s).[/green]"
                 )
@@ -1872,7 +2045,24 @@ class NexusPlex(App[None]):
                 f"  Text: {'✓' if text else '✗'} | Files: {'✓' if files else '✗'}"
             )
 
-        self.push_screen(CreatePayloadModal(), handle_payload)
+        ex_text = ""
+        ex_files = ""
+        if getattr(self, "_pending_payload_path", "none") != "none":
+            try:
+                from pathlib import Path
+                p = Path(self._pending_payload_path)
+                if p.exists():
+                    content = p.read_text(encoding="utf-8")
+                    if "\n## Attached Files\n" in content:
+                        parts = content.split("\n## Attached Files\n", 1)
+                        ex_text = parts[0].strip()
+                        ex_files = parts[1].strip()
+                    else:
+                        ex_text = content.strip()
+            except Exception:
+                pass
+
+        self.push_screen(CreatePayloadModal(existing_text=ex_text, existing_files=ex_files), handle_payload)
 
     @on(Button.Pressed, "#btn-vcr")
     def action_vcr_toggle(self) -> None:
@@ -1939,8 +2129,25 @@ class NexusPlex(App[None]):
                 target_idx = idx
                 
             payload_to_modify = None
+            job_id = getattr(self, "_current_job_id", None)
+            
             if target_idx == -1:
                 payload_to_modify = self._pending_payload_path
+            elif job_id:
+                try:
+                    import sqlite3
+                    from maccre_core.utils.path_resolver import get_datacenter_path
+                    db_path = str(get_datacenter_path("swarm_queue.db"))
+                    with sqlite3.connect(db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        rows = conn.execute(
+                            "SELECT payload_path FROM task_queue WHERE job_id = ? ORDER BY id",
+                            (job_id,)
+                        ).fetchall()
+                        if target_idx >= 0 and target_idx < len(rows):
+                            payload_to_modify = str(rows[target_idx]["payload_path"])
+                except Exception:
+                    pass
             elif target_idx >= 0 and target_idx < len(self._node_payloads):
                 payload_to_modify = self._node_payloads[target_idx]
 
@@ -1956,18 +2163,27 @@ class NexusPlex(App[None]):
         self._paused_radio_side = ""
         self._injected_context = ""
         
+        # We need to clear the container and put the flow-seq-text back if it was replaced
+        container = self.query_one("#active-flow-sequence", Horizontal)
+        
         # Redraw the flow line normally
         seq_str = " → ".join([
             s.macronode_name if hasattr(s, "macronode_name") else str(s[0] if isinstance(s, tuple) else s) 
             for s in self.active_flow_steps
         ])
-        self.query_one("#flow-seq-text", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
         
-        # We need to clear the container and put the flow-seq-text back if it was replaced
-        container = self.query_one("#active-flow-sequence", Horizontal)
+        # Check if flow-seq-text is already there
+        existing = None
         for w in list(container.children):
-            w.remove()
-        container.mount(Static(f"[bold cyan]{seq_str}[/bold cyan]", id="flow-seq-text"))
+            if w.has_class("flow-seq-text"):
+                existing = w
+            else:
+                w.remove()
+                
+        if existing:
+            existing.update(f"[bold cyan]{seq_str}[/bold cyan]")
+        else:
+            container.mount(Static(f"[bold cyan]{seq_str}[/bold cyan]", classes="flow-seq-text"))
 
     def _refresh_paused_flow_line(self) -> None:
         """Rebuild flow line for paused state — nodes are clickable, arrows can turn orange."""
@@ -1980,12 +2196,31 @@ class NexusPlex(App[None]):
             container.mount(Static("[dim italic]  ── empty flow line ──  [/dim italic]"))
             return
 
-        from maccre_core.orchestration.flow_engine import FlowStep  # noqa: PLC0415
+        display_names = []
+        job_id = getattr(self, "_current_job_id", None)
+        if job_id:
+            try:
+                import sqlite3
+                from maccre_core.utils.path_resolver import get_datacenter_path
+                db_path = str(get_datacenter_path("swarm_queue.db"))
+                with sqlite3.connect(db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        "SELECT current_node FROM task_queue WHERE job_id = ? ORDER BY id",
+                        (job_id,)
+                    ).fetchall()
+                    for r in rows:
+                        display_names.append(r["current_node"])
+            except Exception:
+                pass
+
+        if not display_names:
+            from maccre_core.orchestration.flow_engine import FlowStep  # noqa: PLC0415
+            display_names = [step.macronode_name if isinstance(step, FlowStep) else str(step) for step in self.active_flow_steps]
 
         container.mount(Static("[yellow]⏸ PAUSED[/yellow] ", classes="flow-arrow-dim"))
 
-        for i, step in enumerate(self.active_flow_steps):
-            name = step.macronode_name if isinstance(step, FlowStep) else str(step)
+        for i, name in enumerate(display_names):
 
             if i > 0:
                 # Arrow between nodes — dim by default, illuminates orange when a radio selects it
@@ -2220,6 +2455,39 @@ class NexusPlex(App[None]):
             self.write_agent_log("[yellow]⚠ Proceeding despite pre-flight errors.[/yellow]")
             self._do_launch_flow()
 
+    def _update_flow_stage_readout(self) -> None:
+        """Poll the SQLite task_queue to update the real-time stage readout label."""
+        if not getattr(self, "is_session_active", False) or self._vcr_state != "running":
+            return
+            
+        job_id = getattr(self, "_current_job_id", None)
+        if not job_id:
+            return
+            
+        try:
+            import sqlite3
+            from maccre_core.utils.path_resolver import get_datacenter_path
+            db_path = str(get_datacenter_path("swarm_queue.db"))
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                # Get total tasks and completed tasks
+                total = conn.execute("SELECT COUNT(*) FROM task_queue WHERE job_id = ?", (job_id,)).fetchone()[0]
+                completed = conn.execute("SELECT COUNT(*) FROM task_queue WHERE job_id = ? AND lock_status = 'completed'", (job_id,)).fetchone()[0]
+                
+                # Get currently active task (locked or open)
+                active = conn.execute("SELECT current_node, agent_name FROM task_queue WHERE job_id = ? AND lock_status IN ('locked', 'open') ORDER BY id LIMIT 1", (job_id,)).fetchone()
+                
+                if active:
+                    node_name = active["current_node"]
+                    agent_name = active["agent_name"]
+                    label_text = f"Stage: [bold cyan]{node_name}[/bold cyan] ([green]{agent_name}[/green]) | Flow Progress: {completed}/{total}"
+                else:
+                    label_text = f"Stage: [dim]Processing...[/dim] | Flow Progress: {completed}/{total}"
+                
+                self.query_one("#flow-stage-readout", Label).update(label_text)
+        except Exception:
+            pass
+
     def _do_launch_flow(self) -> None:
         """Internal launch — called after pre-flight passes or is overridden."""
         self.is_session_active = True
@@ -2237,10 +2505,36 @@ class NexusPlex(App[None]):
         self._flow_pause_event.set()  # Start unblocked
         self._node_payloads = []
         self._set_vcr_state("running")
+        
+        # Start readout poller
+        self._readout_timer = self.set_interval(1.0, self._update_flow_stage_readout)
+        
         self.run_linear_flow_background()
 
     @work(thread=True)
     def run_linear_flow_background(self) -> None:
+        import logging
+        
+        class RichLogHandler(logging.Handler):
+            def __init__(self, tui_app):
+                super().__init__()
+                self.tui_app = tui_app
+
+            def emit(self, record):
+                try:
+                    msg = record.getMessage()
+                    self.tui_app.write_agent_log(msg)
+                except Exception:
+                    pass
+
+        tui_handler = RichLogHandler(self)
+        root_logger = logging.getLogger()
+        
+        # Save original level to restore later
+        original_level = root_logger.level
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(tui_handler)
+        
         from maccre_core.orchestration.flow_engine import FlowRunner  # noqa: PLC0415
         runner = FlowRunner(self.active_project)
         
@@ -2255,6 +2549,10 @@ class NexusPlex(App[None]):
             self._hitl_job_id = job_id
             self.call_from_thread(self._surface_hitl_pause, step_index, job_id, payload)
 
+        def _on_job_started(job_id: str) -> None:
+            """Capture the active job ID for SQLite unrolling queries."""
+            self._current_job_id = job_id
+
         try:
             final_artifact = runner.execute_flow(
                 self.active_flow_steps,
@@ -2263,6 +2561,7 @@ class NexusPlex(App[None]):
                 pause_event=self._flow_pause_event,
                 step_callback=_on_step_complete,
                 hitl_callback=_on_hitl_pause,
+                job_started_callback=_on_job_started,
             )
             if self._flow_cancel_event and self._flow_cancel_event.is_set():
                 self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
@@ -2271,10 +2570,17 @@ class NexusPlex(App[None]):
         except Exception as e:
             self.write_agent_log(f"\n[red]Flow Error:[/red] {e}")
         finally:
+            root_logger.removeHandler(tui_handler)
+            root_logger.setLevel(original_level)
             self.call_from_thread(self._finish_flow)
             
     def _finish_flow(self) -> None:
         self.is_session_active = False
+        
+        if getattr(self, "_readout_timer", None):
+            self._readout_timer.stop()
+            self.query_one("#flow-stage-readout", Label).update("Stage: [dim]Idle[/dim]")
+            
         self.query_one("#btn-launch-flow", Button).disabled = False
         self.query_one("#btn-stop-flow", Button).disabled = True
         self.query_one("#btn-flow-editor", Button).disabled = False
@@ -2345,7 +2651,8 @@ class NexusPlex(App[None]):
         
         popped = self.active_flow_steps.pop()
         seq_str = " -> ".join([s.macronode_name for s in self.active_flow_steps]) or "No flow loaded."
-        self.query_one("#flow-seq-text", Static).update(f"[bold cyan]{seq_str}[/bold cyan]")
+        for w in self.query(".flow-seq-text"):
+            w.update(f"[bold cyan]{seq_str}[/bold cyan]")
         self.write_agent_log(f"[yellow]Rewound Flow Line: Removed {popped.macronode_name}.[/yellow]")
 
     @on(Button.Pressed, "#btn-file-cabinet")

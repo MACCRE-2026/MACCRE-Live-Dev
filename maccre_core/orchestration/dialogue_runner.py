@@ -36,6 +36,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+class ManualInputRequired(Exception):
+    """
+    Raised when a dialogue round hits a MANUAL participant.
+    The swarm worker catches this, saves the checkpoint state, and pauses the task
+    until the user provides input via the TUI intercept.
+    """
+    def __init__(self, participant_label: str, checkpoint: dict[str, Any] | None = None) -> None:
+        super().__init__(f"Manual input required for {participant_label}")
+        self.participant_label = participant_label
+        self.checkpoint = checkpoint
+
+
 @dataclass
 class _AgentSession:
     """Encapsulates one agent's persistent chat state."""
@@ -68,8 +80,11 @@ class _AgentSession:
         Returns:
             The model's raw reply text.
         """
+        if self.model == "manual":
+            raise ManualInputRequired(participant_label=self.label)
+
         response_text, cost = router.generate(
-            model_name=self.model,
+            model_id=self.model,
             payload=message,
             system_prompt=self.system_prompt,
             tools_str=self.tools_str,
@@ -236,7 +251,11 @@ class DialogueRunner:
             f"[DialogueRunner] ── Round 0 / {self._num_rounds}: "
             f"{self._agent_a.label} opening ──"
         )
-        a_reply = self._agent_a.send(self._router, initial_message)
+        try:
+            a_reply = self._agent_a.send(self._router, initial_message)
+        except ManualInputRequired as e:
+            e.checkpoint = self.to_checkpoint()
+            raise
         transcript_parts.append(
             f"[{self._agent_a.label} — Opening]\n{a_reply}"
         )
@@ -247,7 +266,11 @@ class DialogueRunner:
                 f"[DialogueRunner] ── Round {round_idx} / {self._num_rounds}: "
                 f"{self._agent_b.label} responding ──"
             )
-            b_reply = self._agent_b.send(self._router, a_reply)
+            try:
+                b_reply = self._agent_b.send(self._router, a_reply)
+            except ManualInputRequired as e:
+                e.checkpoint = self.to_checkpoint()
+                raise
             transcript_parts.append(
                 f"[{self._agent_b.label} — Round {round_idx}]\n{b_reply}"
             )
@@ -257,7 +280,11 @@ class DialogueRunner:
                     f"[DialogueRunner] ── Round {round_idx} / {self._num_rounds}: "
                     f"{self._agent_a.label} responding ──"
                 )
-                a_reply = self._agent_a.send(self._router, b_reply)
+                try:
+                    a_reply = self._agent_a.send(self._router, b_reply)
+                except ManualInputRequired as e:
+                    e.checkpoint = self.to_checkpoint()
+                    raise
                 transcript_parts.append(
                     f"[{self._agent_a.label} — Round {round_idx}]\n{a_reply}"
                 )
@@ -267,7 +294,11 @@ class DialogueRunner:
                     f"[DialogueRunner] ── Round {round_idx} FINAL: "
                     f"{self._agent_a.label} final reply ──"
                 )
-                a_reply = self._agent_a.send(self._router, b_reply)
+                try:
+                    a_reply = self._agent_a.send(self._router, b_reply)
+                except ManualInputRequired as e:
+                    e.checkpoint = self.to_checkpoint()
+                    raise
                 transcript_parts.append(
                     f"[{self._agent_a.label} — Final Reply]\n{a_reply}"
                 )
@@ -291,6 +322,31 @@ class DialogueRunner:
     def agent_b_history(self) -> list[dict[str, str]]:
         """Full conversation history for Agent B (read-only view)."""
         return list(self._agent_b.history)
+
+    # ── Time Travel API ───────────────────────────────────────────────────────
+
+    def to_checkpoint(self) -> dict[str, Any]:
+        """Serialise the full pair runner state to a JSON-safe dict."""
+        return {
+            "runner_type": "pair",
+            "num_rounds": self._num_rounds,
+            "agent_a": self._agent_a.to_checkpoint(),
+            "agent_b": self._agent_b.to_checkpoint(),
+        }
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        router: Any,
+        checkpoint: dict[str, Any],
+    ) -> "DialogueRunner":
+        """Reconstruct a DialogueRunner from a checkpoint dict."""
+        runner: DialogueRunner = cls.__new__(cls)
+        runner._router = router
+        runner._num_rounds = int(checkpoint.get("num_rounds", 3))
+        runner._agent_a = _AgentSession.from_checkpoint(checkpoint["agent_a"])
+        runner._agent_b = _AgentSession.from_checkpoint(checkpoint["agent_b"])
+        return runner
 
     @property
     def total_cost(self) -> float:
@@ -414,7 +470,11 @@ class GroupDialogueRunner:
 
         # ── Round 0: host opens ───────────────────────────────────────────────
         logger.info(f"[GroupDialogueRunner] ── Round 0: {self._host.label} opening ──")
-        host_reply = self._host.send(self._router, initial_message)
+        try:
+            host_reply = self._host.send(self._router, initial_message)
+        except ManualInputRequired as e:
+            e.checkpoint = self.to_checkpoint()
+            raise
         transcript_parts.append(f"[{self._host.label} — Opening]\n{host_reply}")
 
         # ── Rounds 1..N: participants respond, host synthesises ───────────────
@@ -426,7 +486,11 @@ class GroupDialogueRunner:
                     f"[GroupDialogueRunner] ── Round {round_idx}: "
                     f"{participant.label} responding ──"
                 )
-                p_reply = participant.send(self._router, host_reply)
+                try:
+                    p_reply = participant.send(self._router, host_reply)
+                except ManualInputRequired as e:
+                    e.checkpoint = self.to_checkpoint()
+                    raise
                 p_replies.append((participant.label, p_reply))
                 transcript_parts.append(
                     f"[{participant.label} — Round {round_idx}]\n{p_reply}"
@@ -441,7 +505,11 @@ class GroupDialogueRunner:
                 f"[GroupDialogueRunner] ── {round_label}: "
                 f"{self._host.label} responding ──"
             )
-            host_reply = self._host.send(self._router, combined)
+            try:
+                host_reply = self._host.send(self._router, combined)
+            except ManualInputRequired as e:
+                e.checkpoint = self.to_checkpoint()
+                raise
             transcript_parts.append(
                 f"[{self._host.label} — {round_label}]\n{host_reply}"
             )

@@ -1,3 +1,70 @@
+# EXO_GANS (Formerly MACCREv2)
+## Modular Autonomous Cognitive Computing and Routing Engine -- Human Exo-Cortex Project
+
+> [!IMPORTANT]
+> **Architectural Shift: The Textual TUI Era has Begun.**
+> The system has evolved beyond the pure, headless CLI era and the deprecated Flet GUI era. We are now operating a fluid, terminal-based Textual interface (The Nexus Plex). The system is strictly governed by the **Omni CI/CD Gatekeeper** and executed via rigorous Sovereign Physical Laws.
+
+---
+
+## 1. The Omni JIT Gatekeeper (Sovereign Prefix Mandate)
+
+You must **never** invoke bare Python scripts (e.g., `python maccre.py` or `python run.py`) when initiating a swarm. 
+
+The architecture is protected by **Omni**, a globally pathed CI/CD Tool-Daemon that intercepts execution to run Ruff/Pyright validation and eradicate hanging background zombie processes before the Python interpreter ever spins up.
+
+**The Canonical Launcher:**
+```bash
+omni run
+```
+*This command automatically resolves the local virtual environment, hunts for zombies, and boots the Nexus Plex TUI via `run.py`.*
+
+For the full operational doctrine on `omni build`, `omni qa`, and `omni clean`, refer to: [omni_system_state_doctrine.md](file:///B:/EXO_GANS/omni_system_state_doctrine.md).
+
+---
+
+## 2. Evolutionary Lineage: From 1stGen to Sovereign Edge
+
+The foundational architecture of this project was forged using the original system prompts located at `C:\Users\wilke\.gemini\1stGen-GEMINI.md.bak`. Those 1stGen instructions instilled the extreme structural discipline—the Strangler Fig ABCs, the 5-Tier Datacenter, and the absolute Type Hinting mandates—that allowed this project to survive its chaotic early growth phases.
+
+However, as the project evolved into the EXO_GANS framework and underwent the Omni Bifurcation, the Primary Antigravity Agent and the lead developer collaboratively rewrote the system instructions. We stripped out deprecated constraints (like Google Workspace API dependencies and the official `google-genai` SDK) and replaced them with our bespoke Sovereign REST clients and SQLite WAL telemetry matrices. We reinforced the absolute best parts of the old doctrine while demonstrating the flexibility to evolve relentlessly.
+
+---
+
+## 3. The 5-Tier Sovereign Datacenter
+
+Because EXO_GANS is a file-driven edge ecosystem, understanding **where** files belong is critical. All active work product, logic, memory, and telemetry for a given run is siloed inside `__DATACENTER/<Project_Name>/` across 5 strict tiers:
+
+1. **`01_Raw_Source/`**: Unstructured text, context dumps, and payload `.md` drops.
+2. **`02_Dynamic_Context/`**: Parsed knowledge, `memory_pins/`, and ephemeral state vectors.
+3. **`03_Agent_Ledgers/`**: Strict JSON files containing every thought, fetch, and API call.
+4. **`04_Code_Artifacts/`**: Synthesized Python logic outputs.
+5. **`05_Rendered_Media/`**: Compiled reports and visual media.
+
+**Portability Doctrine (Law VIII):** All filesystem paths are runtime-computed using `get_maccre_root()` in `maccre_core/utils/path_resolver.py`. **Never hardcode an absolute path.**
+
+---
+
+## 4. Project Momentum & Alphabet Oracle Hardening
+
+The current development trajectory is strictly defined by the Alphabet Oracle's 6-Phase Hardening Plan, located at: [Oracle_Hardening-Features-implementation_plan.md](file:///B:/EXO_GANS/Oracle_Hardening-Features-implementation_plan.md). 
+
+Future developers and agents must refer to this document to understand the immediate dependency graph (ABC Contracts → Doctrine Compliance → Deterministic Nodes → TUI UX).
+
+---
+
+## 5. Active Discoveries & Technical Notes
+
+- **Parallel Advocates & Auto-Wrapping:** The routing engine successfully supports dynamic Auto-Wrapped MacroNodes and Parallel Advocates (e.g., `CounterPartner` running alongside `Writer_Pipe`). The `GroupDialogueRunner` maintains conversational state isolation perfectly.
+- **CSS Fluidity Engine:** The Nexus Plex TUI has successfully migrated to fractional `1fr` widths. The layout dynamically scales during terminal resizes (`Ctrl +`/`Ctrl -`), permanently ending the era of "squashed" vertical text anomalies.
+- **The MANUAL Cascade Bug (PENDING PATCH):** There is currently a critical routing failure when assigning the user (`MANUAL`) to a cascade loop (e.g., `OSINTx3`). The failure occurs inside `maccre_core/orchestration/swarm_worker.py` at the `_load_agent_cfg` injection boundary. The engine attempts to pull a system prompt from the AI roster for `MANUAL`, triggering a `KeyError` because `MANUAL` is an organic user intercept, not a synthetic entity. This is prioritized for Phase 5/6 hardening.
+
+---
+---
+
+# ARCHIVED VERSION (Legacy README)
+*The following is the deprecated Phase 0 README, preserved for historical timeline analysis.*
+
 # MACCREv2 
 ## Modular Autonomous Cognitive Computing and Routing Engine -- Human Exo-Cortex Project 
 
