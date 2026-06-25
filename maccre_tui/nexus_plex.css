@@ -437,11 +437,18 @@ FlowExecutionPanel {
 
 #active-flow-sequence {
     width: 1fr;
-    min-height: 1;
-    padding: 0 1;
+    height: 5;
+    padding: 1 1;
     color: #58a6ff;
+    overflow-x: auto;
+    border: solid #30363d;
+    background: #0d1117;
 }
 
+.active-node-btn {
+    margin: 0 1;
+    min-width: 10;
+}
 #flow-monitor-section {
     height: 40;
     padding: 0;

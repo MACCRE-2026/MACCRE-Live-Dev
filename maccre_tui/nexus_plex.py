@@ -1990,6 +1990,7 @@ class NexusPlex(App[None]):
         step = FlowStep(macronode_name=name, agent_mapping=mapping)
         self.active_flow_steps.append(step)
         self.write_nexus_log(f"[dim]System:[/dim] Added MacroNode '{name}' to flow.")
+        self.write_agent_log(f"[dim]System:[/dim] Added MacroNode '{name}' to flow.")
         self._refresh_active_flow_sequence()
 
     @on(Button.Pressed, "#btn-add-agent")
@@ -2002,6 +2003,7 @@ class NexusPlex(App[None]):
         step = FlowStep(macronode_name=name)
         self.active_flow_steps.append(step)
         self.write_nexus_log(f"[dim]System:[/dim] Added Agent '{name}' to flow.")
+        self.write_agent_log(f"[dim]System:[/dim] Added Agent '{name}' to flow.")
         self._refresh_active_flow_sequence()
 
     @on(Button.Pressed, "#btn-add-special")
@@ -2014,6 +2016,7 @@ class NexusPlex(App[None]):
         step = FlowStep(macronode_name=name)
         self.active_flow_steps.append(step)
         self.write_nexus_log(f"[dim]System:[/dim] Added Special Node '{name}' to flow.")
+        self.write_agent_log(f"[dim]System:[/dim] Added Special Node '{name}' to flow.")
         self._refresh_active_flow_sequence()
 
     @on(Select.Changed, "#macro-select")
@@ -2037,9 +2040,12 @@ class NexusPlex(App[None]):
         store = get_agent_store("GLOBAL")
         try:
             p = store.get(str(event.value))
-            desc = p.get("description") or p.get("system_prompt", "No description available.")
-            if len(desc) > 250:
-                desc = desc[:247] + "..."
+            desc = (
+                f"[bold cyan]Name:[/bold cyan] {p.get('agent_name', 'Unknown')}\n"
+                f"[bold cyan]Model:[/bold cyan] {p.get('model', 'Unknown')}\n"
+                f"[bold cyan]Tools:[/bold cyan] {p.get('tools_allowed', 'None')}\n\n"
+                f"[bold cyan]System Prompt:[/bold cyan]\n{p.get('system_prompt', 'No description available.')}"
+            )
             self.query_one("#agent-info-body", Static).update(desc)
         except Exception as e:
             self.query_one("#agent-info-body", Static).update(f"[red]Error: {e}[/red]")
@@ -2089,7 +2095,7 @@ class NexusPlex(App[None]):
                 widgets_to_mount.append(Static(" → ", classes="flow-arrow-dim"))
             name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
             import uuid
-            btn = Button(name, variant="primary", id=f"anode-{i}-{uuid.uuid4().hex[:8]}", classes="active-node-btn")
+            btn = Button(name, variant="default", id=f"anode-{i}-{uuid.uuid4().hex[:8]}", classes="active-node-btn")
             widgets_to_mount.append(btn)
             
         # Batch mount the new widgets
