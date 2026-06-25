@@ -1037,7 +1037,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
         if self.agents_in_node and self.active_project:
             try:
                 from maccre_core.agent_library import get_agent_store
-                store = get_agent_store(self.active_project)
+                store = get_agent_store("GLOBAL")
                 for p in store.load_all():
                     aname = (p.get("agent_name") or p.get("AGENT_NAME", "")).strip()
                     if aname in self.agents_in_node:
@@ -1989,6 +1989,7 @@ class NexusPlex(App[None]):
         from maccre_core.orchestration.flow_engine import FlowStep
         step = FlowStep(macronode_name=name, agent_mapping=mapping)
         self.active_flow_steps.append(step)
+        self.write_nexus_log(f"[dim]System:[/dim] Added MacroNode '{name}' to flow.")
         self._refresh_active_flow_sequence()
 
     @on(Button.Pressed, "#btn-add-agent")
@@ -2000,6 +2001,7 @@ class NexusPlex(App[None]):
         from maccre_core.orchestration.flow_engine import FlowStep
         step = FlowStep(macronode_name=name)
         self.active_flow_steps.append(step)
+        self.write_nexus_log(f"[dim]System:[/dim] Added Agent '{name}' to flow.")
         self._refresh_active_flow_sequence()
 
     @on(Button.Pressed, "#btn-add-special")
@@ -2011,7 +2013,51 @@ class NexusPlex(App[None]):
         from maccre_core.orchestration.flow_engine import FlowStep
         step = FlowStep(macronode_name=name)
         self.active_flow_steps.append(step)
+        self.write_nexus_log(f"[dim]System:[/dim] Added Special Node '{name}' to flow.")
         self._refresh_active_flow_sequence()
+
+    @on(Select.Changed, "#macro-select")
+    def on_macro_selected(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        from maccre_core.macronode_registry import get_macronode_store
+        store = get_macronode_store()
+        try:
+            m = store.load(str(event.value))
+            desc = m.get("description", "No description available.")
+            self.query_one("#macro-info-body", Static).update(desc)
+        except Exception as e:
+            self.query_one("#macro-info-body", Static).update(f"[red]Error: {e}[/red]")
+
+    @on(Select.Changed, "#agent-select")
+    def on_main_agent_selected(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        from maccre_core.agent_library import get_agent_store
+        store = get_agent_store("GLOBAL")
+        try:
+            p = store.get(str(event.value))
+            desc = p.get("description", "No description available.")
+            self.query_one("#agent-info-body", Static).update(desc)
+        except Exception as e:
+            self.query_one("#agent-info-body", Static).update(f"[red]Error: {e}[/red]")
+
+    @on(Select.Changed, "#special-select")
+    def on_special_selected(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        desc_map = {
+            "MANUAL": "Pauses execution for manual user input. Acts as a strict human-in-the-loop gate.",
+            "DET_ANCHOR": "Anchors execution state, creating a reliable fallback point if downstream nodes fail.",
+            "DET_RECURSION": "Triggers a recursive loop, rerunning the previous node sequence until conditions are met.",
+            "DET_PAUSE": "Temporarily pauses execution for a predefined amount of time or until externally unpaused.",
+            "DET_GATE": "Evaluates conditions and gates execution flow based on logical rules.",
+            "DET_CHECKPOINT": "Saves state and artifacts mid-flow, ensuring work is not lost during long executions.",
+            "DET_DELAY": "Injects an explicit delay into the execution flow.",
+            "DET_TRANSFORM": "Transforms payload data format (e.g., Markdown to JSON) before passing to next node."
+        }
+        val = str(event.value)
+        self.query_one("#special-info-body", Static).update(desc_map.get(val, "Special node for logic control."))
 
     @on(Button.Pressed, "#btn-remove-last")
     def remove_last_node(self) -> None:
@@ -2027,8 +2073,7 @@ class NexusPlex(App[None]):
     def _refresh_active_flow_sequence(self) -> None:
         """Refresh the active flow sequence display with clickable nodes."""
         container = self.query_one("#active-flow-sequence", Horizontal)
-        for child in list(container.children):
-            child.remove()
+        container.remove_children()
         
         if not self.active_flow_steps:
             container.mount(Static("No flow loaded.", classes="flow-seq-text"))
