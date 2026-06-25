@@ -170,509 +170,6 @@ class OverwriteConfirmModal(ModalScreen[bool]):
     def yes_pressed(self):
         self.dismiss(True)
 
-class LinearFlowEditorModal(ModalScreen[list]):
-    """Modal to define a Flow using MacroNodes and Agents from the Registry."""
-
-    DEFAULT_CSS = """
-    LinearFlowEditorModal {
-        align: center middle;
-    }
-
-    #flow-editor-outer {
-        width: 90%;
-        height: 85%;
-        max-width: 140;
-        padding: 1 2;
-        background: #0d1117;
-        border: thick #30363d;
-    }
-
-    #flow-editor-title {
-        text-style: bold;
-        color: #58a6ff;
-        text-align: center;
-        margin-bottom: 1;
-    }
-
-    /* ── Selection Row ─────────────────────────────── */
-    #flow-select-row {
-        height: auto;
-        layout: horizontal;
-        margin-bottom: 1;
-    }
-
-    .flow-select-group {
-        width: 1fr;
-        height: auto;
-        padding: 0 1;
-    }
-
-    .flow-select-group Label {
-        margin-bottom: 0;
-        color: #8b949e;
-        text-style: bold;
-    }
-
-    .flow-select-group Select {
-        width: 100%;
-        margin-bottom: 0;
-    }
-
-    .flow-add-btn {
-        margin-top: 1;
-        width: 100%;
-    }
-
-    /* ── Flow Line Visualization ───────────────────── */
-    #flow-line-section {
-        height: 7;
-        margin: 1 0;
-        border: round #30363d;
-        padding: 0 1;
-        overflow-x: auto;
-        overflow-y: hidden;
-    }
-
-    #flow-line-section Label {
-        color: #484f58;
-        text-style: italic;
-    }
-
-    #flow-line-content {
-        height: 5;
-        layout: horizontal;
-        align: center middle;
-        min-width: 100%;
-    }
-
-    .flow-node-box {
-        min-width: 22;
-        height: 3;
-        border: round #58a6ff;
-        content-align: center middle;
-        padding: 0 1;
-        margin: 0 1;
-        color: #58a6ff;
-    }
-
-    .flow-node-box-agent {
-        min-width: 22;
-        height: 3;
-        border: round #3fb950;
-        content-align: center middle;
-        padding: 0 1;
-        margin: 0 1;
-        color: #3fb950;
-    }
-
-    .flow-node-box-special {
-        min-width: 22;
-        height: 3;
-        border: round #d29922;
-        content-align: center middle;
-        padding: 0 1;
-        margin: 0 1;
-        color: #d29922;
-    }
-
-    .flow-arrow {
-        height: 3;
-        width: 3;
-        content-align: center middle;
-        color: #484f58;
-    }
-
-    /* ── Info Panels ───────────────────────────────── */
-    #flow-info-row {
-        height: 1fr;
-        layout: horizontal;
-        margin-top: 1;
-    }
-
-    #flow-macro-info {
-        width: 1fr;
-        height: 100%;
-        border: round #30363d;
-        padding: 1;
-        overflow-y: auto;
-        margin-right: 1;
-    }
-
-    #flow-agent-info {
-        width: 1fr;
-        height: 100%;
-        border: round #30363d;
-        padding: 1;
-        overflow-y: auto;
-        margin-right: 1;
-    }
-
-    #flow-special-info {
-        width: 1fr;
-        height: 100%;
-        border: round #30363d;
-        padding: 1;
-        overflow-y: auto;
-    }
-
-    .info-panel-title {
-        color: #8b949e;
-        text-style: bold;
-        margin-bottom: 1;
-    }
-
-    .info-panel-body {
-        color: #c9d1d9;
-    }
-
-    /* ── Bottom Buttons ────────────────────────────── */
-    #flow-editor-buttons {
-        height: auto;
-        margin-top: 1;
-        layout: horizontal;
-        align: right middle;
-    }
-
-    #flow-editor-buttons Button {
-        margin-left: 1;
-    }
-    """
-
-    def __init__(self, templates: list[dict], roster: list[str]) -> None:
-        super().__init__()
-        self.templates = templates
-        self.roster = sorted(roster)
-        self.flow_steps: list[tuple[str, dict, str]] = []  # (name, mapping, type: "macro"|"agent"|"special")
-        
-        self.special_nodes = [
-            ("MANUAL", "Live swarm intercept — pauses the task in awaiting_orders for manual resume."),
-            ("DET_ANCHOR", "Entry marker — passes payload through unchanged."),
-            ("DET_RECURSION", "Loop-back control with counter tracking."),
-            ("DET_PAUSE", "Halts execution, sets task to paused for manual resume."),
-            ("DET_GATE", "Conditional gate — blocks unless prerequisite nodes complete."),
-            ("DET_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
-            ("DET_DELAY", "Sleeps for a configurable number of seconds."),
-            ("DET_TRANSFORM", "Applies a static text wrapper/template to the payload."),
-        ]
-
-    def compose(self) -> ComposeResult:
-        with Container(id="flow-editor-outer"):
-            yield Label("━━━ Linear Flow Editor ━━━", id="flow-editor-title")
-
-            # ── Selection Row: MacroNode + Agent side by side ─────────────
-            with Horizontal(id="flow-select-row"):
-                with Vertical(classes="flow-select-group"):
-                    yield Label("MacroNode")
-                    yield Select(
-                        [(t["name"], t["name"]) for t in self.templates],
-                        prompt="Select MacroNode…",
-                        id="macro-select",
-                    )
-                    yield Button(
-                        "Add MacroNode to Flow",
-                        variant="primary",
-                        id="btn-add-macro",
-                        classes="flow-add-btn",
-                    )
-
-                with Vertical(classes="flow-select-group"):
-                    yield Label("Agent")
-                    yield Select(
-                        [(a, a) for a in self.roster],
-                        prompt="Select Agent…",
-                        id="agent-select",
-                    )
-                    yield Button(
-                        "Add Agent to Flow",
-                        variant="success",
-                        id="btn-add-agent",
-                        classes="flow-add-btn",
-                    )
-                
-                with Vertical(classes="flow-select-group"):
-                    yield Label("Special Node")
-                    yield Select(
-                        [(sn[0], sn[0]) for sn in self.special_nodes],
-                        prompt="Select Special Node…",
-                        id="special-select",
-                    )
-                    yield Button(
-                        "Add Special Node to Flow",
-                        variant="warning",
-                        id="btn-add-special",
-                        classes="flow-add-btn",
-                    )
-
-            # ── Flow Line Visualization ───────────────────────────────────
-            with Vertical(id="flow-line-section"):
-                yield Horizontal(id="flow-line-content")
-
-            # ── Info Panels ───────────────────────────────────────────────
-            with Horizontal(id="flow-info-row"):
-                with Vertical(id="flow-macro-info"):
-                    yield Label("MacroNode Details", classes="info-panel-title")
-                    yield Static(
-                        "[dim]Select a MacroNode above to see its description.[/dim]",
-                        id="macro-info-body",
-                        classes="info-panel-body",
-                    )
-
-                with Vertical(id="flow-agent-info"):
-                    yield Label("Agent Details", classes="info-panel-title")
-                    yield Static(
-                        "[dim]Select an Agent above to see its profile.[/dim]",
-                        id="agent-info-body",
-                        classes="info-panel-body",
-                    )
-
-                with Vertical(id="flow-special-info"):
-                    yield Label("Special Node Details", classes="info-panel-title")
-                    yield Static(
-                        "[dim]Select a Special Node above to see its description.[/dim]",
-                        id="special-info-body",
-                        classes="info-panel-body",
-                    )
-
-            # ── Bottom Buttons ────────────────────────────────────────────
-            with Horizontal(id="flow-editor-buttons"):
-                yield Button("Remove Last", variant="warning", id="btn-remove-last")
-                yield Button("Clear Flow", variant="error", id="btn-clear-flow")
-                yield Button("Done", variant="success", id="btn-done-flow")
-
-    # ── Event Handlers ────────────────────────────────────────────────────────
-
-    @on(Select.Changed, "#macro-select")
-    def macro_selection_changed(self, event: Select.Changed) -> None:
-        """Show selected MacroNode's description in the info panel."""
-        body = self.query_one("#macro-info-body", Static)
-        if not event.value or event.value == Select.BLANK:
-            body.update("[dim]Select a MacroNode above to see its description.[/dim]")
-            return
-
-        name = str(event.value)
-        template = next((t for t in self.templates if t["name"] == name), None)
-        if not template:
-            body.update(f"[red]MacroNode '{name}' not found.[/red]")
-            return
-
-        # Build rich info display
-        desc = template.get("description", "No description available.")
-        tpl_type = template.get("template_type", "custom")
-        slots = template.get("agent_slots", [])
-        tpl_cfg = template.get("template_config", {})
-
-        info_parts = [
-            f"[bold cyan]{name}[/bold cyan]",
-            f"[dim]Template:[/dim] {tpl_type or 'freeform'}",
-            "",
-            "[bold]Description[/bold]",
-            str(desc),
-        ]
-
-        if slots:
-            info_parts.append("")
-            info_parts.append(f"[bold]Agents[/bold]: {', '.join(slots)}")
-
-        if tpl_cfg and isinstance(tpl_cfg, dict):
-            info_parts.append("")
-            info_parts.append("[bold]Configuration[/bold]")
-            for k, v in tpl_cfg.items():
-                info_parts.append(f"  {k}: {v}")
-
-        # Show topology nodes
-        topo_rows = template.get("topology_rows", [])
-        if topo_rows:
-            info_parts.append("")
-            info_parts.append(f"[bold]Topology Nodes[/bold] ({len(topo_rows)})")
-            for row in topo_rows:
-                node_id = row.get("Node_ID", "?")
-                agent = row.get("Agent_Name", "?")
-                dp = row.get("Dialogue_Partner")
-                dr = row.get("Dialogue_Rounds", 0)
-                dp_str = f" ↔ {dp} ({dr} rounds)" if dp else ""
-                info_parts.append(f"  • {node_id}: {agent}{dp_str}")
-
-        body.update("\n".join(info_parts))
-
-    @on(Select.Changed, "#agent-select")
-    def agent_selection_changed(self, event: Select.Changed) -> None:
-        """Show selected Agent's profile in the info panel."""
-        body = self.query_one("#agent-info-body", Static)
-        if not event.value or event.value == Select.BLANK:
-            body.update("[dim]Select an Agent above to see its profile.[/dim]")
-            return
-
-        name = str(event.value)
-        try:
-            from maccre_core.orchestration.roster_loader import load_agent_from_roster  # noqa: PLC0415
-            agent = load_agent_from_roster(name)
-        except (KeyError, FileNotFoundError):
-            body.update(f"[red]Agent '{name}' not found in roster.[/red]")
-            return
-        except Exception as exc:  # noqa: BLE001
-            body.update(f"[red]Error loading agent: {exc}[/red]")
-            return
-
-        model = agent.get("model", "unknown")
-        tools = agent.get("tools_allowed", "none")
-        desc = agent.get("description", "")
-        instructions = agent.get("system_prompt", "No instructions available.")
-
-        info_parts = [
-            f"[bold green]{name}[/bold green]",
-            f"[dim]Model:[/dim] {model}",
-            f"[dim]Tools:[/dim] {tools}",
-        ]
-
-        if desc:
-            info_parts.append(f"[dim]Description:[/dim] {desc}")
-
-        info_parts.append("")
-        info_parts.append("[bold]System Instructions[/bold]")
-
-        # Truncate very long instructions for display
-        instr_display = str(instructions)
-        if len(instr_display) > 2000:
-            instr_display = instr_display[:2000] + "\n\n[dim]…truncated (2000 chars shown)…[/dim]"
-
-        info_parts.append(instr_display)
-        body.update("\n".join(info_parts))
-
-    @on(Select.Changed, "#special-select")
-    def special_selection_changed(self, event: Select.Changed) -> None:
-        """Show selected Special Node's description in the info panel."""
-        body = self.query_one("#special-info-body", Static)
-        if not event.value or event.value == Select.BLANK:
-            body.update("[dim]Select a Special Node above to see its description.[/dim]")
-            return
-
-        name = str(event.value)
-        desc = next((sn[1] for sn in getattr(self, "special_nodes", []) if sn[0] == name), "No description available.")
-
-        info = [
-            f"[bold warning]{name}[/bold warning]",
-            "",
-            "[bold]Description[/bold]",
-            str(desc),
-        ]
-        body.update("\n".join(info))
-
-    @on(Button.Pressed, "#btn-add-macro")
-    def add_macro_to_flow(self) -> None:
-        """Add the selected MacroNode to the flow line with agent mapping."""
-        sel = self.query_one("#macro-select", Select)
-        if not sel.value or sel.value == Select.BLANK:
-            return
-
-        name = str(sel.value)
-        template = next((t for t in self.templates if t["name"] == name), None)
-
-        # Auto-populate agent mapping from the selected agent + template slots
-        mapping: dict[str, str] = {}
-        if template:
-            slots = template.get("agent_slots", [])
-            agent_sel = self.query_one("#agent-select", Select)
-            if slots and agent_sel.value:
-                selected_agent = str(agent_sel.value)
-                if selected_agent not in ("", "Select.BLANK", "Select.NULL"):
-                    for slot in slots:
-                        mapping[slot] = selected_agent
-
-        self.flow_steps.append((name, mapping, "macro"))
-        self._refresh_flow_line()
-
-    @on(Button.Pressed, "#btn-add-agent")
-    def add_agent_to_flow(self) -> None:
-        """Add the selected Agent as a single-node step to the flow line."""
-        sel = self.query_one("#agent-select", Select)
-        if not sel.value:
-            return
-
-        name = str(sel.value)
-        if name in ("", "Select.BLANK", "Select.NULL"):
-            return
-
-        self.flow_steps.append((name, {}, "agent"))
-        self._refresh_flow_line()
-
-    @on(Button.Pressed, "#btn-add-special")
-    def add_special_to_flow(self) -> None:
-        sel = self.query_one("#special-select", Select)
-        if not sel.value or sel.value == Select.BLANK:
-            return
-        name = str(sel.value)
-        self.flow_steps.append((name, {}, "special"))
-        self._refresh_flow_line()
-
-    @on(Button.Pressed, "#btn-remove-last")
-    def remove_last(self) -> None:
-        """Remove the last step from the flow line."""
-        if self.flow_steps:
-            self.flow_steps.pop()
-            self._refresh_flow_line()
-
-    @on(Button.Pressed, "#btn-clear-flow")
-    def clear_flow(self) -> None:
-        """Clear all steps from the flow line."""
-        self.flow_steps.clear()
-        self._refresh_flow_line()
-
-    @on(Button.Pressed)
-    def handle_flow_removal(self, event: Button.Pressed) -> None:
-        """Handle per-node ✕ removal buttons (flow-rm-{index})."""
-        btn_id = str(event.button.id or "")
-        if btn_id.startswith("flow-rm-"):
-            try:
-                idx = int(btn_id.replace("flow-rm-", ""))
-                if 0 <= idx < len(self.flow_steps):
-                    self.flow_steps.pop(idx)
-                    self._refresh_flow_line()
-            except ValueError:
-                pass
-
-    @on(Button.Pressed, "#btn-done-flow")
-    def done_flow(self) -> None:
-        """Dismiss the modal and return the flow steps."""
-        if not self.flow_steps:
-            self.dismiss(None)
-            return
-        # Return as list of [name, mapping] pairs for backward compatibility
-        result = [[name, mapping] for name, mapping, _ in self.flow_steps]
-        self.dismiss(result)
-
-    # ── Flow Line Visualization ───────────────────────────────────────────────
-
-    def _refresh_flow_line(self) -> None:
-        """Redraw the flow line visualization with hollow boxes."""
-        container = self.query_one("#flow-line-content", Horizontal)
-
-        # Clear existing widgets
-        for w in list(container.children):
-            w.remove()
-
-        if not self.flow_steps:
-            container.mount(
-                Static("[dim italic]  ── empty flow line ──  [/dim italic]")
-            )
-            return
-
-        for i, (name, _mapping, step_type) in enumerate(self.flow_steps):
-            if i > 0:
-                container.mount(Static(" → ", classes="flow-arrow"))
-
-            if step_type == "macro":
-                css_class = "flow-node-box"
-            elif step_type == "special":
-                css_class = "flow-node-box-special"
-            else:
-                css_class = "flow-node-box-agent"
-                
-            wrapper = Vertical(classes="flow-node-wrapper")
-            container.mount(wrapper)
-            wrapper.mount(Static(f" {name} ", classes=css_class))
-            wrapper.mount(Button("✕", variant="error", id=f"flow-rm-{i}", classes="flow-node-rm"))
-
-
 
 class ContextInjectModalScreen(ModalScreen[str]):
     def compose(self) -> ComposeResult:
@@ -1018,28 +515,6 @@ class AgentChatModalScreen(ModalScreen):
         self.roster = []
         try:
             from maccre_core.workbook_data import load_agent_names_from_library
-            # Populate inline flow editor selects
-            try:
-                from maccre_core.macronode_registry import get_macronode_store
-                from maccre_core.orchestration.roster_loader import load_agent_names_from_library as loader_func
-                store = get_macronode_store()
-                macros = store.list_all()
-                macro_sel = self.query_one("#macro-select", Select)
-                if macro_sel:
-                    macro_sel.set_options([(m, m) for m in macros])
-                
-                agents = loader_func(self.app.active_project)
-                agent_sel = self.query_one("#agent-select", Select)
-                if agent_sel:
-                    agent_sel.set_options([(a, a) for a in agents])
-                    
-                special = ["MANUAL", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
-                special_sel = self.query_one("#special-select", Select)
-                if special_sel:
-                    special_sel.set_options([(s, s) for s in special])
-            except Exception:
-                pass
-
             roster = load_agent_names_from_library(self.app.active_project)
             if self.app.active_project != "GLOBAL":
                 roster.extend(load_agent_names_from_library("GLOBAL"))
@@ -1593,21 +1068,29 @@ class NodeConfigModal(ModalScreen[dict | None]):
                     id="cfg-agent-select"
                 )
                 with Horizontal(id="cfg-agent-tools-container"):
-                    with Vertical():
+                    with Vertical(classes="flow-select-group"):
                         yield Label("[dim]Available Tools[/dim]")
-                        common_tools = ["read_file", "write_file", "list_dir", "google_search", "hybrid_search", "execute_sql", "execute_terminal"]
+                        common_tools = ["read_file", "write_file", "list_dir", "web_search", "hybrid_search", "execute_sql", "execute_terminal"]
                         yield Select(
                             [(t, t) for t in common_tools],
                             prompt="Select a tool to add...",
                             id="tool-select",
                             disabled=True
                         )
-                        yield Button("Add Tool", id="btn-add-tool", variant="primary", disabled=True)
+                        yield Button("Add Tool", id="btn-add-tool", variant="primary", disabled=True, classes="flow-add-btn")
+                    
+                    with Vertical(id="tool-info-panel", classes="info-panel-container"):
+                        yield Label("Tool Details", classes="info-panel-title")
+                        yield Static("[dim]Select a tool to view details.[/dim]", id="tool-info-body", classes="info-panel-body")
                 
                 yield Input(value="", id="node-tools-input", disabled=True)
 
             yield Label("Node-Specific Custom Instructions (Appended to System Prompt):", classes="node-cfg-row")
             yield TextArea(text=self.current_instructions, id="cfg-custom-instructions")
+            
+            yield Label("Node-Specific Payload Injection (Overrides Flow Payload):", classes="node-cfg-row")
+            yield TextArea(text="", id="cfg-payload-injection") # TODO: load from FlowStep if we add it
+
             
             with Horizontal(id="payload-modal-buttons"):
                 yield Button("Cancel", variant="error", id="btn-cfg-cancel")
@@ -1646,6 +1129,34 @@ class NodeConfigModal(ModalScreen[dict | None]):
                 current.append(str(sel.value))
                 inp.value = ",".join(current)
                 
+    
+    @on(Select.Changed, "#tool-select")
+    def tool_selection_changed(self, event: Select.Changed) -> None:
+        body = self.query_one("#tool-info-body", Static)
+        if not event.value or event.value == Select.BLANK:
+            body.update("[dim]Select a tool to view details.[/dim]")
+            return
+        name = str(event.value)
+        
+        tool_desc = {
+            "read_file": "Reads the contents of a specified file. Used for extracting exact file data.",
+            "write_file": "Overwrites or creates a new file. Used for saving generated code.",
+            "list_dir": "Lists the contents of a directory. Useful for exploring the workspace.",
+            "web_search": "Searches the live web for current information.\n\n[bold warning]Note:[/bold warning] Standard Google Search Grounding is configured globally in the Agent Builder. This tool is primarily for local agent Brave searches or combined Brave/Google dual-search.",
+            "hybrid_search": "Semantic vector search against the local Sovereign Memory Chroma DB, combined with lexical BM25.\n\n[bold warning]Note:[/bold warning] Standard Google Search Grounding is configured globally in the Agent Builder. This tool is primarily for local agent Brave searches or combined Brave/Google dual-search.",
+            "execute_sql": "Executes a raw SQL query against a specified database.",
+            "execute_terminal": "Runs an arbitrary shell command (e.g. git, npm, python). Use with caution."
+        }
+        
+        desc = tool_desc.get(name, "No description available.")
+        info = [
+            f"[bold cyan]{name}[/bold cyan]",
+            "",
+            "[bold]Description[/bold]",
+            str(desc)
+        ]
+        body.update("\n".join(info))
+
     @on(Button.Pressed, "#btn-cfg-cancel")
     def cancel(self):
         self.dismiss(None)
@@ -1690,14 +1201,23 @@ class FlowExecutionPanel(Vertical):
                 with Vertical(classes="flow-select-group"):
                     yield Label("MacroNode")
                     yield Select([], prompt="Select MacroNode…", id="macro-select")
+                    with Vertical(id="flow-macro-info", classes="info-panel-container"):
+                        yield Label("MacroNode Details", classes="info-panel-title")
+                        yield Static("[dim]Select a MacroNode above to see its description.[/dim]", id="macro-info-body", classes="info-panel-body")
                     yield Button("Add MacroNode", variant="primary", id="btn-add-macro", classes="flow-add-btn")
                 with Vertical(classes="flow-select-group"):
                     yield Label("Agent")
                     yield Select([], prompt="Select Agent…", id="agent-select")
+                    with Vertical(id="flow-agent-info", classes="info-panel-container"):
+                        yield Label("Agent Details", classes="info-panel-title")
+                        yield Static("[dim]Select an Agent above to see its profile.[/dim]", id="agent-info-body", classes="info-panel-body")
                     yield Button("Add Agent", variant="success", id="btn-add-agent", classes="flow-add-btn")
                 with Vertical(classes="flow-select-group"):
                     yield Label("Special Node")
                     yield Select([], prompt="Select Special Node…", id="special-select")
+                    with Vertical(id="flow-special-info", classes="info-panel-container"):
+                        yield Label("Special Details", classes="info-panel-title")
+                        yield Static("[dim]Select a Special Node above to see its description.[/dim]", id="special-info-body", classes="info-panel-body")
                     yield Button("Add Special", variant="warning", id="btn-add-special", classes="flow-add-btn")
 
             yield Label("Active Flow Sequence")
@@ -1828,6 +1348,29 @@ class NexusPlex(App[None]):
             self.write_nexus_log(f"[red]Error loading models: {e}[/red]")
 
         self.set_active_project("GLOBAL")
+
+        # Populate inline flow editor selects
+        try:
+            from maccre_core.macronode_registry import get_macronode_store
+            from maccre_core.orchestration.roster_loader import load_agent_names_from_library as loader_func
+            store = get_macronode_store()
+            macros = store.list_all()
+            macro_sel = self.query_one("#macro-select", Select)
+            if macro_sel:
+                macro_sel.set_options([(m, m) for m in macros])
+            
+            agents = loader_func(self.active_project)
+            agent_sel = self.query_one("#agent-select", Select)
+            if agent_sel:
+                agent_sel.set_options([(a, a) for a in agents])
+                
+            special = ["MANUAL", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
+            special_sel = self.query_one("#special-select", Select)
+            if special_sel:
+                special_sel.set_options([(s, s) for s in special])
+        except Exception:
+            pass
+
 
     def on_unmount(self) -> None:
         if hasattr(self, "nexus"):
@@ -2176,43 +1719,7 @@ class NexusPlex(App[None]):
 
     # ── Flow Execution Handlers ───────────────────────────────────────────────
     
-    @on(Button.Pressed, "#btn-flow-editor")
-    def action_flow_editor(self) -> None:
-        from maccre_core.macronode_registry import get_macronode_store
-        from maccre_core.workbook_data import load_agent_names_from_library
-        
-        store = get_macronode_store(self.active_project)
-        templates = store.list_all()
-        # Ensure we have full dictionary with agent_slots
-        full_templates = []
-        for t in templates:
-            try:
-                full_templates.append(store.load(t["name"]))
-            except Exception:
-                pass
-                
-        roster = load_agent_names_from_library(self.active_project)
-        if self.active_project != "GLOBAL":
-            roster.extend(load_agent_names_from_library("GLOBAL"))
-        roster = list(set(roster))
-        
-        def handle_add_to_flow(result: list | None) -> None:
-            if result:
-                if not self.active_flow_steps:
-                    self.active_flow_steps = []
 
-                from maccre_core.orchestration.flow_engine import FlowStep  # noqa: PLC0415
-                self.active_flow_steps.clear()
-                for step in result:
-                    macro_name, mapping = step[0], step[1]
-                    self.active_flow_steps.append(FlowStep(macro_name, mapping))
-
-                self._refresh_active_flow_sequence()
-                self.write_agent_log(
-                    f"[green]Flow Line updated: {len(self.active_flow_steps)} step(s).[/green]"
-                )
-
-        self.push_screen(LinearFlowEditorModal(full_templates, roster), handle_add_to_flow)
 
     @on(Button.Pressed, "#btn-create-payload")
     def action_create_payload(self) -> None:
