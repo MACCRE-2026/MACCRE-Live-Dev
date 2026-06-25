@@ -1337,7 +1337,9 @@ class NexusInputModalScreen(ModalScreen[str]):
 
 class NexusChat(Vertical):
     def compose(self) -> ComposeResult:
-        yield Label("Nexus Copilot", classes="pane-title")
+        with Horizontal(classes="header-row"):
+            yield Label("Nexus Copilot", classes="pane-title")
+            yield Button("Copy", id="btn-copy-nexus-log", classes="copy-btn")
         yield RichLog(id="nexus-log", wrap=True, highlight=True, markup=True)
         with Horizontal(id="nexus-input-container"):
             yield Button(">", id="btn-expand-nexus-input")
@@ -1497,6 +1499,8 @@ class FlowExecutionPanel(Vertical):
             with Horizontal(classes="flow-controls"):
                 yield Button("Launch Flow", variant="success", id="btn-launch-flow")
                 yield Button("Stop Flow", variant="error", id="btn-stop-flow", disabled=True)
+                yield Button("Resume Flow", variant="success", id="btn-resume-flow", disabled=True)
+                yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
                 yield Button("Create Payload", variant="primary", id="btn-create-payload")
                 yield Button("Linear Flow Editor", variant="warning", id="btn-flow-editor")
 
@@ -1506,7 +1510,9 @@ class FlowExecutionPanel(Vertical):
 
         # Flow Monitor Panel
         with Vertical(classes="panel-section", id="flow-monitor-section"):
-            yield Label("Flow Monitor", classes="pane-title")
+            with Horizontal(classes="header-row"):
+                yield Label("Flow Monitor", classes="pane-title")
+                yield Button("Copy", id="btn-copy-flow-log", classes="copy-btn")
             yield Label("Stage: [dim]Idle[/dim]", id="flow-stage-readout", classes="flow-stage-readout")
             yield RichLog(id="flow-execution-log", wrap=True, highlight=True, markup=True)
 
@@ -2114,11 +2120,20 @@ class NexusPlex(App[None]):
         self._paused_selected_node = None
         self._paused_radio_side = ""
         self._injected_context = ""
+        try:
+            self.query_one("#btn-resume-flow", Button).disabled = False
+        except Exception:
+            pass
         # Rebuild flow line with clickable nodes (Phase C will add radio dots + orange arrows)
         self._refresh_paused_flow_line()
 
     def _exit_paused_state(self) -> None:
         """Restore flow line to normal non-interactive state and process injections."""
+        try:
+            self.query_one("#btn-resume-flow", Button).disabled = True
+        except Exception:
+            pass
+            
         if self._injected_context and self._paused_selected_node is not None:
             # Determine which payload file to append to
             idx = self._paused_selected_node
@@ -2643,6 +2658,21 @@ class NexusPlex(App[None]):
             self._flow_cancel_event.set()
         self._finish_flow()
 
+    @on(Button.Pressed, "#btn-resume-flow")
+    def action_resume_flow(self) -> None:
+        """Resume a paused flow (DET_PAUSE)."""
+        if self._flow_pause_event:
+            self._flow_pause_event.set()
+            try:
+                self.query_one("#btn-resume-flow", Button).disabled = True
+            except Exception:
+                pass
+            self.write_agent_log("[bold cyan]▶ Flow resumed.[/bold cyan]")
+            self._set_vcr_state("running")
+            self._exit_paused_state()
+        else:
+            self.write_agent_log("[yellow]No paused flow to resume.[/yellow]")
+
     @on(Button.Pressed, "#btn-rewind-flow")
     def action_rewind_flow(self) -> None:
         if not self.active_flow_steps:
@@ -2654,6 +2684,24 @@ class NexusPlex(App[None]):
         for w in self.query(".flow-seq-text"):
             w.update(f"[bold cyan]{seq_str}[/bold cyan]")
         self.write_agent_log(f"[yellow]Rewound Flow Line: Removed {popped.macronode_name}.[/yellow]")
+
+    @on(Button.Pressed, "#btn-copy-nexus-log")
+    def copy_nexus_log(self) -> None:
+        self._copy_richlog_to_clipboard("#nexus-log")
+
+    @on(Button.Pressed, "#btn-copy-flow-log")
+    def copy_flow_log(self) -> None:
+        self._copy_richlog_to_clipboard("#flow-execution-log")
+
+    def _copy_richlog_to_clipboard(self, log_id: str) -> None:
+        try:
+            import pyperclip  # noqa: PLC0415
+            log_widget = self.query_one(log_id, RichLog)
+            text_lines = [line.plain for line in log_widget.lines]
+            pyperclip.copy("\n".join(text_lines))
+            self.notify(f"Copied {log_id.strip('#')} to clipboard!")
+        except Exception as e:
+            self.notify(f"Failed to copy to clipboard: {e}", severity="error")
 
     @on(Button.Pressed, "#btn-file-cabinet")
     def action_file_cabinet(self) -> None:
