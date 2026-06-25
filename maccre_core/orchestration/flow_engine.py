@@ -40,14 +40,15 @@ logger = logging.getLogger(__name__)
 
 class FlowStep:
     """A single step in a Linear Flow, pointing to a MacroNode."""
-    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger") -> None:
+    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger", custom_instructions: str = "") -> None:
         self.macronode_name = macronode_name
         self.agent_mapping = agent_mapping or {}
         self.payload_mode = payload_mode
+        self.custom_instructions = custom_instructions
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON persistence in flow_history."""
-        return {"macronode_name": self.macronode_name, "agent_mapping": self.agent_mapping, "payload_mode": self.payload_mode}
+        return {"macronode_name": self.macronode_name, "agent_mapping": self.agent_mapping, "payload_mode": self.payload_mode, "custom_instructions": self.custom_instructions}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FlowStep":
@@ -55,7 +56,8 @@ class FlowStep:
         return cls(
             macronode_name=d.get("macronode_name", ""),
             agent_mapping=d.get("agent_mapping", {}),
-            payload_mode=d.get("payload_mode", "Unified Ledger")
+            payload_mode=d.get("payload_mode", "Unified Ledger"),
+            custom_instructions=d.get("custom_instructions", "")
         )
 
 
@@ -280,7 +282,7 @@ class FlowRunner:
         )
         return report
 
-    def _hydrate_topology(self, topology_rows: list[dict[str, Any]], agent_mapping: dict[str, str], payload_mode: str = "Unified Ledger", step_index: int = 0) -> list[list[str]]:
+    def _hydrate_topology(self, topology_rows: list[dict[str, Any]], agent_mapping: dict[str, str], payload_mode: str = "Unified Ledger", custom_instructions: str = "", step_index: int = 0) -> list[list[str]]:
         """Convert a list of topology dictionaries into lists of strings (for CSV) and inject agent overrides."""
         hydrated: list[list[str]] = []
         for row_dict in topology_rows:
@@ -308,6 +310,10 @@ class FlowRunner:
                         parts.append(f"{p}_S{step_index}")
                 wait_for = "|".join(parts)
 
+            instr = str(row_dict.get("Instruction_Override", ""))
+            if custom_instructions:
+                instr = f"{instr}\n{custom_instructions}".strip()
+
             # Standard order: Node_ID, Agent_Name, Model_Override, Next_Node, Temp, Instr, Wait, Fail, MaxRec, Artifact, Live, Partner, Rounds
             row_list = [
                 node_id,
@@ -315,7 +321,7 @@ class FlowRunner:
                 str(row_dict.get("Model_Override", "none")),
                 next_node,
                 str(row_dict.get("Temperature", "0.7")),
-                str(row_dict.get("Instruction_Override", "")),
+                instr,
                 wait_for,
                 str(row_dict.get("Failure_Target", "FAILED")),
                 str(row_dict.get("Max_Recursion", "3")),
@@ -609,7 +615,7 @@ class FlowRunner:
                 
                 # 2. Hydrate Agent Slots
                 topo_rows = macro_def.get("topology_rows", [])
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, getattr(step, "payload_mode", "Unified Ledger"), step_index=idx)
+                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, getattr(step, "payload_mode", "Unified Ledger"), getattr(step, "custom_instructions", ""), step_index=idx)
             
                 # 3. Write to topology.csv
                 build_res = build_topology(hydrated_lists)

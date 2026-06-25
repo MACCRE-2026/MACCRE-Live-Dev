@@ -1337,9 +1337,9 @@ class NexusInputModalScreen(ModalScreen[str]):
 
 class NexusChat(Vertical):
     def compose(self) -> ComposeResult:
-        with Horizontal(classes="header-row"):
+        with Horizontal(id="nexus-header-row"):
             yield Label("Nexus Copilot", classes="pane-title")
-            yield Button("Copy", id="btn-copy-nexus-log", classes="copy-btn")
+            yield Button("Copy", id="btn-copy-nexus")
         yield RichLog(id="nexus-log", wrap=True, highlight=True, markup=True)
         with Horizontal(id="nexus-input-container"):
             yield Button(">", id="btn-expand-nexus-input")
@@ -1491,6 +1491,78 @@ class CreatePayloadModal(ModalScreen[dict]):
         self.dismiss(result)
 
 
+class NodeConfigModal(ModalScreen[dict | None]):
+    """Modal to edit a MacroNode's name or override parameters."""
+    CSS = """
+    NodeConfigModal {
+        align: center middle;
+        background: $background 80%;
+    }
+    #node-config-container {
+        width: 70%;
+        height: 80%;
+        border: solid $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    .node-cfg-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    .node-cfg-row {
+        height: auto;
+        align: left middle;
+        margin-bottom: 1;
+    }
+    #cfg-custom-instructions {
+        height: 1fr;
+        border: solid $panel;
+    }
+    """
+    
+    def __init__(self, node_name: str, current_payload_mode: str = "Unified Ledger", current_instructions: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self.node_name = node_name
+        self.current_payload_mode = current_payload_mode
+        self.current_instructions = current_instructions
+        
+    def compose(self) -> ComposeResult:
+        with Vertical(id="node-config-container"):
+            yield Label(f"Configure Node: {self.node_name}", classes="node-cfg-title")
+            with Horizontal(classes="node-cfg-row"):
+                yield Label("Custom Node Name: ")
+                yield Input(value=self.node_name, id="cfg-node-name")
+                
+            with Horizontal(classes="node-cfg-row"):
+                yield Label("Ledger Routing Mode: ")
+                yield Select(
+                    [("Unified Ledger", "Unified Ledger"), ("Isolated/Fresh Ledger", "Isolated/Fresh Ledger")],
+                    value=self.current_payload_mode,
+                    id="cfg-payload-mode"
+                )
+
+            yield Label("Node-Specific Custom Instructions (Appended to System Prompt):", classes="node-cfg-row")
+            yield TextArea(text=self.current_instructions, id="cfg-custom-instructions")
+            
+            with Horizontal(id="payload-modal-buttons"):
+                yield Button("Cancel", variant="error", id="btn-cfg-cancel")
+                yield Button("Save", variant="success", id="btn-cfg-save")
+                
+    @on(Button.Pressed, "#btn-cfg-cancel")
+    def cancel(self):
+        self.dismiss(None)
+        
+    @on(Button.Pressed, "#btn-cfg-save")
+    def save(self):
+        new_name = self.query_one("#cfg-node-name", Input).value.strip()
+        new_mode = self.query_one("#cfg-payload-mode", Select).value
+        new_instr = self.query_one("#cfg-custom-instructions", TextArea).text.strip()
+        self.dismiss({"name": new_name, "payload_mode": new_mode, "custom_instructions": new_instr})
+
+
+
 class FlowExecutionPanel(Vertical):
     def compose(self) -> ComposeResult:
         # Flow Execution Top Panel
@@ -1510,9 +1582,9 @@ class FlowExecutionPanel(Vertical):
 
         # Flow Monitor Panel
         with Vertical(classes="panel-section", id="flow-monitor-section"):
-            with Horizontal(classes="header-row"):
+            with Horizontal(id="flow-monitor-header-row"):
                 yield Label("Flow Monitor", classes="pane-title")
-                yield Button("Copy", id="btn-copy-flow-log", classes="copy-btn")
+                yield Button("Copy", id="btn-copy-monitor")
             yield Label("Stage: [dim]Idle[/dim]", id="flow-stage-readout", classes="flow-stage-readout")
             yield RichLog(id="flow-execution-log", wrap=True, highlight=True, markup=True)
 
@@ -2007,9 +2079,7 @@ class NexusPlex(App[None]):
                     macro_name, mapping = step[0], step[1]
                     self.active_flow_steps.append(FlowStep(macro_name, mapping))
 
-                seq_str = " → ".join([s.macronode_name for s in self.active_flow_steps])
-                for w in self.query(".flow-seq-text"):
-                    w.update(f"[bold cyan]{seq_str}[/bold cyan]")
+                self._refresh_active_flow_sequence()
                 self.write_agent_log(
                     f"[green]Flow Line updated: {len(self.active_flow_steps)} step(s).[/green]"
                 )
@@ -2177,28 +2247,7 @@ class NexusPlex(App[None]):
         self._paused_selected_node = None
         self._paused_radio_side = ""
         self._injected_context = ""
-        
-        # We need to clear the container and put the flow-seq-text back if it was replaced
-        container = self.query_one("#active-flow-sequence", Horizontal)
-        
-        # Redraw the flow line normally
-        seq_str = " → ".join([
-            s.macronode_name if hasattr(s, "macronode_name") else str(s[0] if isinstance(s, tuple) else s) 
-            for s in self.active_flow_steps
-        ])
-        
-        # Check if flow-seq-text is already there
-        existing = None
-        for w in list(container.children):
-            if w.has_class("flow-seq-text"):
-                existing = w
-            else:
-                w.remove()
-                
-        if existing:
-            existing.update(f"[bold cyan]{seq_str}[/bold cyan]")
-        else:
-            container.mount(Static(f"[bold cyan]{seq_str}[/bold cyan]", classes="flow-seq-text"))
+        self._refresh_active_flow_sequence()
 
     def _refresh_paused_flow_line(self) -> None:
         """Rebuild flow line for paused state — nodes are clickable, arrows can turn orange."""
@@ -2278,6 +2327,51 @@ class NexusPlex(App[None]):
             )
 
         container.mount(Static(" [dim](click a node)[/dim]", classes="flow-arrow-dim"))
+
+    def _refresh_active_flow_sequence(self) -> None:
+        """Refresh the active flow sequence display with clickable nodes."""
+        container = self.query_one("#active-flow-sequence", Horizontal)
+        for child in list(container.children):
+            child.remove()
+        
+        if not self.active_flow_steps:
+            container.mount(Static("No flow loaded.", classes="flow-seq-text"))
+            return
+            
+        for i, step in enumerate(self.active_flow_steps):
+            if i > 0:
+                container.mount(Static(" → ", classes="flow-arrow-dim"))
+            name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
+            btn = Button(name, id=f"anode-{i}", classes="active-node-btn")
+            container.mount(btn)
+
+    @on(Button.Pressed, ".active-node-btn")
+    def action_configure_node(self, event: Button.Pressed) -> None:
+        if self._vcr_state != "idle":
+            return
+            
+        try:
+            idx = int(event.button.id.replace("anode-", ""))
+            node = self.active_flow_steps[idx]
+        except (ValueError, AttributeError):
+            return
+            
+        def handle_config(result: dict | None):
+            if result:
+                if result.get("name"):
+                    node.macronode_name = result["name"]
+                if result.get("payload_mode"):
+                    node.payload_mode = str(result["payload_mode"])
+                if "custom_instructions" in result:
+                    node.custom_instructions = result["custom_instructions"]
+                self.write_agent_log(f"[green]Node {idx} updated.[/green]")
+                self._refresh_active_flow_sequence()
+                
+        self.push_screen(NodeConfigModal(
+            node_name=node.macronode_name,
+            current_payload_mode=getattr(node, "payload_mode", "Unified Ledger"),
+            current_instructions=getattr(node, "custom_instructions", "")
+        ), handle_config)
 
     @on(Button.Pressed)
     def _handle_paused_flow_clicks(self, event: Button.Pressed) -> None:
@@ -2685,11 +2779,11 @@ class NexusPlex(App[None]):
             w.update(f"[bold cyan]{seq_str}[/bold cyan]")
         self.write_agent_log(f"[yellow]Rewound Flow Line: Removed {popped.macronode_name}.[/yellow]")
 
-    @on(Button.Pressed, "#btn-copy-nexus-log")
+    @on(Button.Pressed, "#btn-copy-nexus")
     def copy_nexus_log(self) -> None:
         self._copy_richlog_to_clipboard("#nexus-log")
 
-    @on(Button.Pressed, "#btn-copy-flow-log")
+    @on(Button.Pressed, "#btn-copy-monitor")
     def copy_flow_log(self) -> None:
         self._copy_richlog_to_clipboard("#flow-execution-log")
 
