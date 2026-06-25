@@ -1018,6 +1018,28 @@ class AgentChatModalScreen(ModalScreen):
         self.roster = []
         try:
             from maccre_core.workbook_data import load_agent_names_from_library
+            # Populate inline flow editor selects
+            try:
+                from maccre_core.macronode_registry import get_macronode_store
+                from maccre_core.orchestration.roster_loader import load_agent_names_from_library as loader_func
+                store = get_macronode_store()
+                macros = store.list_all()
+                macro_sel = self.query_one("#macro-select", Select)
+                if macro_sel:
+                    macro_sel.set_options([(m, m) for m in macros])
+                
+                agents = loader_func(self.app.active_project)
+                agent_sel = self.query_one("#agent-select", Select)
+                if agent_sel:
+                    agent_sel.set_options([(a, a) for a in agents])
+                    
+                special = ["MANUAL", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
+                special_sel = self.query_one("#special-select", Select)
+                if special_sel:
+                    special_sel.set_options([(s, s) for s in special])
+            except Exception:
+                pass
+
             roster = load_agent_names_from_library(self.app.active_project)
             if self.app.active_project != "GLOBAL":
                 roster.extend(load_agent_names_from_library("GLOBAL"))
@@ -1663,11 +1685,28 @@ class FlowExecutionPanel(Vertical):
                 yield Button("Resume Flow", variant="success", id="btn-resume-flow", disabled=True)
                 yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
                 yield Button("Create Payload", variant="primary", id="btn-create-payload")
-                yield Button("Linear Flow Editor", variant="warning", id="btn-flow-editor")
+
+            with Horizontal(id="flow-select-row"):
+                with Vertical(classes="flow-select-group"):
+                    yield Label("MacroNode")
+                    yield Select([], prompt="Select MacroNode…", id="macro-select")
+                    yield Button("Add MacroNode", variant="primary", id="btn-add-macro", classes="flow-add-btn")
+                with Vertical(classes="flow-select-group"):
+                    yield Label("Agent")
+                    yield Select([], prompt="Select Agent…", id="agent-select")
+                    yield Button("Add Agent", variant="success", id="btn-add-agent", classes="flow-add-btn")
+                with Vertical(classes="flow-select-group"):
+                    yield Label("Special Node")
+                    yield Select([], prompt="Select Special Node…", id="special-select")
+                    yield Button("Add Special", variant="warning", id="btn-add-special", classes="flow-add-btn")
 
             yield Label("Active Flow Sequence")
             with Horizontal(id="active-flow-sequence", classes="flow-controls"):
                 yield Static("No flow loaded.", classes="flow-seq-text")
+                
+            with Horizontal(classes="flow-controls", id="flow-line-actions"):
+                yield Button("Remove Last Node", variant="warning", id="btn-remove-last")
+                yield Button("Clear Flow", variant="error", id="btn-clear-flow")
 
         # Flow Monitor Panel
         with Vertical(classes="panel-section", id="flow-monitor-section"):
@@ -2417,6 +2456,67 @@ class NexusPlex(App[None]):
 
         container.mount(Static(" [dim](click a node)[/dim]", classes="flow-arrow-dim"))
 
+    
+    # ── Inline Flow Editor Handlers ───────────────────────────────────────────
+    @on(Button.Pressed, "#btn-add-macro")
+    def add_macro_to_flow(self) -> None:
+        sel = self.query_one("#macro-select", Select)
+        if not sel.value or sel.value == Select.BLANK:
+            return
+        name = str(sel.value)
+        mapping = {}
+        # Try to resolve agents if agent_select is populated
+        agent_sel = self.query_one("#agent-select", Select)
+        if agent_sel.value and agent_sel.value != Select.BLANK:
+            selected_agent = str(agent_sel.value)
+            try:
+                from maccre_core.macronode_registry import get_macronode_store
+                store = get_macronode_store()
+                macro_def = store.load(name)
+                slots = macro_def.get("agent_slots", [])
+                for slot in slots:
+                    mapping[slot] = selected_agent
+            except Exception:
+                pass
+
+        from maccre_core.orchestration.flow_engine import FlowStep
+        step = FlowStep(macronode_name=name, agent_mapping=mapping)
+        self.active_flow_steps.append(step)
+        self._refresh_active_flow_sequence()
+
+    @on(Button.Pressed, "#btn-add-agent")
+    def add_agent_to_flow(self) -> None:
+        sel = self.query_one("#agent-select", Select)
+        if not sel.value or sel.value == Select.BLANK:
+            return
+        name = str(sel.value)
+        from maccre_core.orchestration.flow_engine import FlowStep
+        step = FlowStep(macronode_name=name)
+        self.active_flow_steps.append(step)
+        self._refresh_active_flow_sequence()
+
+    @on(Button.Pressed, "#btn-add-special")
+    def add_special_to_flow(self) -> None:
+        sel = self.query_one("#special-select", Select)
+        if not sel.value or sel.value == Select.BLANK:
+            return
+        name = str(sel.value)
+        from maccre_core.orchestration.flow_engine import FlowStep
+        step = FlowStep(macronode_name=name)
+        self.active_flow_steps.append(step)
+        self._refresh_active_flow_sequence()
+
+    @on(Button.Pressed, "#btn-remove-last")
+    def remove_last_node(self) -> None:
+        if self.active_flow_steps:
+            self.active_flow_steps.pop()
+            self._refresh_active_flow_sequence()
+
+    @on(Button.Pressed, "#btn-clear-flow")
+    def clear_flow_sequence(self) -> None:
+        self.active_flow_steps.clear()
+        self._refresh_active_flow_sequence()
+
     def _refresh_active_flow_sequence(self) -> None:
         """Refresh the active flow sequence display with clickable nodes."""
         container = self.query_one("#active-flow-sequence", Horizontal)
@@ -2431,7 +2531,8 @@ class NexusPlex(App[None]):
             if i > 0:
                 container.mount(Static(" → ", classes="flow-arrow-dim"))
             name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
-            btn = Button(name, id=f"anode-{i}", classes="active-node-btn")
+            import uuid
+            btn = Button(name, id=f"anode-{i}-{uuid.uuid4().hex[:8]}", classes="active-node-btn")
             container.mount(btn)
 
     @on(Button.Pressed, ".active-node-btn")
@@ -2440,7 +2541,7 @@ class NexusPlex(App[None]):
             return
             
         try:
-            idx = int(event.button.id.replace("anode-", ""))
+            idx = int(event.button.id.split("-")[1])
             node = self.active_flow_steps[idx]
         except (ValueError, AttributeError):
             return
