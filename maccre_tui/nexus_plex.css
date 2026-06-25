@@ -418,7 +418,6 @@ FlowExecutionPanel {
     width: 1fr;
     height: 1fr;
     padding: 0 1;
-    overflow-y: auto;
 }
 
 #flow-execution-top {
@@ -443,8 +442,7 @@ FlowExecutionPanel {
 }
 
 #flow-monitor-section {
-    height: auto;
-    min-height: 20;
+    height: 1fr;
     padding: 0;
 }
 
@@ -560,20 +558,11 @@ FlowExecutionPanel {
     padding: 0 0 1 0;
 }
 
-#flow-select-row {
-    height: auto;
-    max-height: 8;
-}
 
-.flow-select-group {
-    width: 1fr;
-    height: auto;
-    padding: 0 1;
-}
 
-.flow-add-btn {
-    margin: 1 0 0 0;
-}
+
+
+
 
 #flow-info-row {
     height: 1fr;
@@ -862,4 +851,48 @@ FlowExecutionPanel {
 
 #fh-canonize-btn {
     margin-left: 1;
+}
+\n
+/* ── Flow Selection Row (New UI) ─────────────────────────────────────────── */
+#flow-select-row {
+    height: auto;
+    margin-bottom: 1;
+    padding: 1;
+    layout: horizontal;
+}
+
+.flow-select-group {
+    width: 1fr;
+    height: auto;
+    margin-right: 1;
+    layout: vertical;
+}
+
+.info-panel-container {
+    height: 10;
+    border: round #30363d;
+    padding: 1;
+    overflow-y: auto;
+    margin-top: 1;
+}
+
+.info-panel-title {
+    color: #8b949e;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.info-panel-body {
+    color: #c9d1d9;
+}
+
+.flow-add-btn {
+    width: 100%;
+    margin-top: 1;
+}
+
+#flow-line-actions {
+    height: auto;
+    margin-top: 1;
+    margin-bottom: 1;
 }
