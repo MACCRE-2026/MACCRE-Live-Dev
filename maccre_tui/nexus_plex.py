@@ -1190,13 +1190,6 @@ class FlowExecutionPanel(Vertical):
         # Flow Execution Top Panel
         with Vertical(classes="panel-section", id="flow-execution-top"):
             yield Label("Flow Execution", classes="pane-title")
-            with Horizontal(classes="flow-controls"):
-                yield Button("Launch Flow", variant="success", id="btn-launch-flow")
-                yield Button("Stop Flow", variant="error", id="btn-stop-flow", disabled=True)
-                yield Button("Resume Flow", variant="success", id="btn-resume-flow", disabled=True)
-                yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
-                yield Button("Create Payload", variant="primary", id="btn-create-payload")
-
             with Horizontal(id="flow-select-row"):
                 with Vertical(classes="flow-select-group"):
                     yield Label("MacroNode")
@@ -1219,6 +1212,13 @@ class FlowExecutionPanel(Vertical):
                         yield Label("Special Details", classes="info-panel-title")
                         yield Static("[dim]Select a Special Node above to see its description.[/dim]", id="special-info-body", classes="info-panel-body")
                     yield Button("Add Special", variant="warning", id="btn-add-special", classes="flow-add-btn")
+
+            with Horizontal(classes="flow-controls"):
+                yield Button("Launch Flow", variant="success", id="btn-launch-flow")
+                yield Button("Stop Flow", variant="error", id="btn-stop-flow", disabled=True)
+                yield Button("Resume Flow", variant="success", id="btn-resume-flow", disabled=True)
+                yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
+                yield Button("Create Payload", variant="primary", id="btn-create-payload")
 
             yield Label("Active Flow Sequence")
             with Horizontal(id="active-flow-sequence", classes="flow-controls"):
