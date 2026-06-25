@@ -46,8 +46,8 @@ _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 def _get_brave_key() -> str:
     """Retrieve the Brave Search API key from the Windows Credential Vault."""
     try:
-        from maccre_core.orchestration.windows_vault import get_native_credential  # noqa: PLC0415
-        key = get_native_credential("BRAVE_SEARCH_API_KEY")
+        from maccre_core.orchestration.universal_vault import get_provider_credential  # noqa: PLC0415
+        key = get_provider_credential("BRAVE_SEARCH_API_KEY")
         return str(key).strip() if key else ""
     except Exception:  # noqa: BLE001
         return ""

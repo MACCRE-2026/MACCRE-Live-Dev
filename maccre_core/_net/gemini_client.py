@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, Generator, Callable
 
 from maccre_core._net.client_interface import InferenceClient, InferenceResponse, EmbeddingResult
-from maccre_core.orchestration.windows_vault import wipe_string
+from maccre_core.orchestration.universal_vault import wipe_string
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 

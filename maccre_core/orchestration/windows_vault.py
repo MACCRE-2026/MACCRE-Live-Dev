@@ -21,7 +21,7 @@ Dual-mode credential store.
 Primary:  DPAPI .bin files in __DATACENTER/.vault/  (written by `config set-key`)
 Fallback: Windows Credential Manager via CredReadW  (written by `cmdkey`)
 
-Both stores are read transparently by get_native_credential().
+Both stores are read transparently by get_provider_credential().
 """
 import ctypes
 import os
@@ -154,7 +154,7 @@ def _try_wincred(target_name: str) -> str | None:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-def get_native_credential(target_name: str) -> str | None:
+def get_provider_credential(target_name: str) -> str | None:
     """Read a secret from the MACCRE vault or Windows Credential Manager.
 
     Resolution order:

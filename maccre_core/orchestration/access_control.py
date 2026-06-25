@@ -179,10 +179,10 @@ def verify_elevation_pin(pin_attempt: str, session_id: str = "") -> bool:
     Returns:
         True if PIN matches, False otherwise.
     """
-    from maccre_core.orchestration.windows_vault import get_native_credential
+    from maccre_core.orchestration.universal_vault import get_provider_credential
 
     # Try to load a custom PIN hash from the vault; fall back to default.
-    stored_hash = get_native_credential("MACCRE_ELEVATION_PIN_HASH") or _DEFAULT_PIN_HASH
+    stored_hash = get_provider_credential("MACCRE_ELEVATION_PIN_HASH") or _DEFAULT_PIN_HASH
     attempt_hash = hashlib.sha256(f"maccre_salt_{pin_attempt}".encode()).hexdigest()
 
     approved = attempt_hash == str(stored_hash).strip()

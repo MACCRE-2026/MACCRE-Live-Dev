@@ -36,7 +36,7 @@ from typing import Any
 
 from maccre_core._net.model_registry import ModelSurface, get_registry
 from maccre_core.logger import logger
-from maccre_core.orchestration.windows_vault import get_native_credential
+from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.tools.audio_tools import (
     VoiceProfile,
     build_tts_config,
@@ -85,12 +85,12 @@ class CloudMediaPipeline(BaseMediaPipeline):
     _TTS_URL    = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     def __init__(self) -> None:
-        raw_key = get_native_credential("MACCRE_Sovereign")
+        raw_key = get_provider_credential("MACCRE_Sovereign")
         if not raw_key:
             raise ValueError("CRITICAL: Vault returned empty for CloudMediaPipeline.")
         self._key: str = str(raw_key).strip()
         self._ssl = ssl.create_default_context()
-        self._registry = get_registry(lambda: get_native_credential("MACCRE_Sovereign"))
+        self._registry = get_registry(lambda: get_provider_credential("MACCRE_Sovereign"))
         # active_image_model is set lazily from registry on first generate_image call
         self.active_image_model: str = ""
 

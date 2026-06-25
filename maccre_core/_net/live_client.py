@@ -40,5 +40,5 @@ class GeminiLiveClient:
                 _log.info(f"[LiveClient] WebSocket bound to {self.model}")
                 await run_loop_cb(session)
         finally:
-            from maccre_core.orchestration.windows_vault import wipe_string  # noqa: PLC0415
+            from maccre_core.orchestration.universal_vault import wipe_string  # noqa: PLC0415
             wipe_string(raw_key)

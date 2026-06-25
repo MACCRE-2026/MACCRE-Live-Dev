@@ -154,11 +154,11 @@ class UniversalSwarmWorker:
         from google import genai
         # SOVEREIGNTY EXCEPTION: Live API WebSocket protocol has no REST equivalent
         from google.genai import types
-        from maccre_core.orchestration.windows_vault import get_native_credential
+        from maccre_core.orchestration.universal_vault import get_provider_credential
         from maccre_core.orchestration.queues import JsonFileQueue
         import asyncio
 
-        api_key = str(get_native_credential("MACCRE_Sovereign") or "").strip()
+        api_key = str(get_provider_credential("MACCRE_Sovereign") or "").strip()
         client = genai.Client(api_key=api_key)
         
         message_bus = JsonFileQueue("live_session_bus")

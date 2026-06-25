@@ -927,8 +927,8 @@ class FlowHistoryModalScreen(ModalScreen[dict | None]):
 class FileCabinetModalScreen(ModalScreen[dict]):
     def compose(self) -> ComposeResult:
         with Container(classes="dialog", id="file-cabinet-dialog"):
-            yield Label("File Cabinet (Notebook Ingestion)")
-            yield Input(placeholder="Notebook Name...", id="fc-notebook-name")
+            yield Label("File Cabinet (Knowledge Collection)")
+            yield Input(placeholder="Collection Name...", id="fc-collection-name")
             yield Input(placeholder="Datacenter (Project Name)...", id="fc-datacenter")
             yield Input(placeholder="Files to Ingest (Comma separated paths)...", id="fc-files")
             with Horizontal(classes="dialog-buttons"):
@@ -941,7 +941,7 @@ class FileCabinetModalScreen(ModalScreen[dict]):
         
     @on(Button.Pressed, "#ingest-btn")
     def ingest(self):
-        name = self.query_one("#fc-notebook-name", Input).value.strip()
+        name = self.query_one("#fc-collection-name", Input).value.strip()
         project = self.query_one("#fc-datacenter", Input).value.strip()
         files = self.query_one("#fc-files", Input).value.strip()
         if name and project:

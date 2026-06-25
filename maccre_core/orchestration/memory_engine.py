@@ -31,7 +31,7 @@ import json
 from typing import TypedDict, List, cast
 
 from maccre_core._net.gemini_client import GeminiClient, user_turn
-from maccre_core.orchestration.windows_vault import get_native_credential
+from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.utils.path_resolver import get_maccre_root
 
 import logging
@@ -65,14 +65,14 @@ class CognitiveMemoryEngine:
         )
         os.makedirs(self.memory_dir, exist_ok=True)
 
-        raw_key = get_native_credential("MACCRE_Sovereign")
+        raw_key = get_provider_credential("MACCRE_Sovereign")
         if not raw_key or not str(raw_key).strip().startswith("AIza"):
             raise ValueError(
                 "CRITICAL: Vault returned empty or invalid key for Memory Engine. "
                 f"Got: '{raw_key}'"
             )
 
-        self.client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
+        self.client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
         self.extractor_model = "gemini-2.5-flash"
 
     def extract_and_store(self, agent_payload: str, source_node: str, file_name: str) -> None:

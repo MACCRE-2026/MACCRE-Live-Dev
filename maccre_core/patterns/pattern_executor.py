@@ -520,12 +520,12 @@ class PatternExecutor:
 
     def _read_sentinel_health(self) -> dict[str, int]:
         try:
-            from maccre_core.orchestration.windows_vault import get_native_credential  # noqa: PLC0415
+            from maccre_core.orchestration.universal_vault import get_provider_credential  # noqa: PLC0415
             from maccre_core._net.model_sentinel import get_sentinel  # noqa: PLC0415
-            key = get_native_credential("MACCRE_Sovereign")
+            key = get_provider_credential("MACCRE_Sovereign")
             if not key:
                 return {}
-            s = get_sentinel(lambda: get_native_credential("MACCRE_Sovereign"))
+            s = get_sentinel(lambda: get_provider_credential("MACCRE_Sovereign"))
             report: dict[str, Any] = s.report()
             return {
                 "healthy": int(report.get("healthy", 0)),

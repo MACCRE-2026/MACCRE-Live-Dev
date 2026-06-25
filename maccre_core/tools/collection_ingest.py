@@ -196,7 +196,7 @@ def execute_archive_ingestion(ingestion_project_name: str, categories: list[str]
                 "project": f"GLOBAL/{ingestion_project_name}",
                 "filename": file_path.name,
                 "category": cat,
-                "tier": "global_notebook",
+                "tier": "global_collection",
                 "ingested_at": datetime.datetime.utcnow().isoformat(),
             }
             

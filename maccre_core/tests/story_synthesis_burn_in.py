@@ -226,8 +226,8 @@ def phase3_finops_gate() -> str:
     print(f"[P3] Using custom Source Lore -> {source_path}")
 
     # Calculate FinOps
-    from maccre_core.orchestration.windows_vault import get_native_credential
-    api_key = get_native_credential("MACCRE_Sovereign")
+    from maccre_core.orchestration.universal_vault import get_provider_credential
+    api_key = get_provider_credential("MACCRE_Sovereign")
     if not api_key:
          print("[P3] CRITICAL: No MACCRE_Sovereign key in Vault. Bypassing FinOps Count API.")
          total_usd = 0.0

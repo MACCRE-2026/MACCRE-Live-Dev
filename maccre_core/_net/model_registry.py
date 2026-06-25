@@ -46,7 +46,7 @@ import urllib.request
 from enum import Enum
 from typing import Any, Callable
 
-from maccre_core.orchestration.windows_vault import wipe_string
+from maccre_core.orchestration.universal_vault import wipe_string
 
 logger = logging.getLogger("maccre_core")
 

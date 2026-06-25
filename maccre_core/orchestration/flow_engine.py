@@ -251,8 +251,8 @@ class FlowRunner:
             from maccre_core._net.model_sentinel import get_sentinel
             api_key = os.environ.get('GOOGLE_API_KEY', '')
             if api_key:
-                from maccre_core.orchestration.windows_vault import get_native_credential
-                sentinel = get_sentinel(lambda: get_native_credential("MACCRE_Sovereign"))
+                from maccre_core.orchestration.universal_vault import get_provider_credential
+                sentinel = get_sentinel(lambda: get_provider_credential("MACCRE_Sovereign"))
                 for model in set(all_models):
                     if not sentinel.is_healthy(model):
                         report.issues.append({

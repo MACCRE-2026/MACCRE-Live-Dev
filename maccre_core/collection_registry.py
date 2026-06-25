@@ -9,12 +9,12 @@
 # │  VII. TEARDOWN    try/finally on all handles (omni clean compliance).      │
 # └─────────────────────────────────────────────────────────────────────────────┘
 """
-maccre_core/notebook_registry.py
+maccre_core/collection_registry.py
 =================================
-Notebook Registry — SQLite backend for RAG Notebooks.
+Collection Registry — SQLite backend for RAG Collections.
 
 Storage path (relative to MACCRE root):
-  __DATACENTER/<project_id>/notebook_registry.db
+  __DATACENTER/<project_id>/collection_registry.db
 """
 from __future__ import annotations
 
@@ -31,20 +31,20 @@ from maccre_core.memory.knowledge_store import get_knowledge_store, PinRecord
 
 # ── Path helpers ──────────────────────────────────────────────────────────────
 
-_DATACENTER = "notebook_registry.db"
+_DATACENTER = "collection_registry.db"
 _GLOBAL_PROJECT = "GLOBAL"
 
 
 def _db_path(project_id: str = "") -> Path:
-    """Return the notebook_registry.db path for a given project (or GLOBAL)."""
+    """Return the collection_registry.db path for a given project (or GLOBAL)."""
     pid = project_id.strip() or _GLOBAL_PROJECT
     return get_maccre_root() / "__DATACENTER" / pid / _DATACENTER
 
 
 # ── Abstract Interface ────────────────────────────────────────────────────────
 
-class NotebookStore(abc.ABC):
-    """ABC for Notebook persistence."""
+class CollectionStore(abc.ABC):
+    """ABC for Collection persistence."""
 
     @abc.abstractmethod
     def save(
@@ -52,11 +52,11 @@ class NotebookStore(abc.ABC):
         name: str,
         files: list[str],
     ) -> None:
-        """Upsert a named Notebook into the store."""
+        """Upsert a named Collection into the store."""
 
     @abc.abstractmethod
     def load(self, name: str) -> dict[str, list[str]]:
-        """Return Notebook dict. Raises KeyError if not found."""
+        """Return Collection dict. Raises KeyError if not found."""
 
     @abc.abstractmethod
     def list_all(self) -> list[str]:
@@ -64,13 +64,13 @@ class NotebookStore(abc.ABC):
 
     @abc.abstractmethod
     def delete(self, name: str) -> None:
-        """Remove a named Notebook. Raises KeyError if not found."""
+        """Remove a named Collection. Raises KeyError if not found."""
 
 
 # ── SQLite Implementation ─────────────────────────────────────────────────────
 
 _CREATE_SQL = """
-CREATE TABLE IF NOT EXISTS notebook_registry (
+CREATE TABLE IF NOT EXISTS collection_registry (
     name            TEXT PRIMARY KEY,
     files_json      TEXT NOT NULL,
     created_at      TEXT NOT NULL,
@@ -79,8 +79,8 @@ CREATE TABLE IF NOT EXISTS notebook_registry (
 """
 
 
-class SQLiteNotebookStore(NotebookStore):
-    """SQLite-backed Notebook registry. Thread-safe via check_same_thread=False."""
+class SQLiteCollectionStore(CollectionStore):
+    """SQLite-backed Collection registry. Thread-safe via check_same_thread=False."""
 
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,7 +103,7 @@ class SQLiteNotebookStore(NotebookStore):
         conn = self._conn()
         try:
             conn.execute(
-                """INSERT INTO notebook_registry
+                """INSERT INTO collection_registry
                    (name, files_json, created_at, last_used)
                    VALUES (?, ?, ?, ?)
                    ON CONFLICT(name) DO UPDATE SET
@@ -126,13 +126,13 @@ class SQLiteNotebookStore(NotebookStore):
         try:
             row = conn.execute(
                 "SELECT name, files_json, created_at, last_used "
-                "FROM notebook_registry WHERE name = ?",
+                "FROM collection_registry WHERE name = ?",
                 (name.strip(),),
             ).fetchone()
         finally:
             conn.close()
         if not row:
-            raise KeyError(f"Notebook '{name}' not found in {self._path}")
+            raise KeyError(f"Collection '{name}' not found in {self._path}")
         self._touch(name.strip())
         return {
             "name": row[0],
@@ -145,7 +145,7 @@ class SQLiteNotebookStore(NotebookStore):
         conn = self._conn()
         try:
             rows = conn.execute(
-                "SELECT name FROM notebook_registry ORDER BY last_used DESC"
+                "SELECT name FROM collection_registry ORDER BY last_used DESC"
             ).fetchall()
         finally:
             conn.close()
@@ -154,18 +154,18 @@ class SQLiteNotebookStore(NotebookStore):
     def delete(self, name: str) -> None:
         conn = self._conn()
         try:
-            cur = conn.execute("DELETE FROM notebook_registry WHERE name = ?", (name.strip(),))
+            cur = conn.execute("DELETE FROM collection_registry WHERE name = ?", (name.strip(),))
             conn.commit()
         finally:
             conn.close()
         if cur.rowcount == 0:
-            raise KeyError(f"Notebook '{name}' not found — nothing deleted.")
+            raise KeyError(f"Collection '{name}' not found — nothing deleted.")
 
     def _touch(self, name: str) -> None:
         conn = self._conn()
         try:
             conn.execute(
-                "UPDATE notebook_registry SET last_used = ? WHERE name = ?",
+                "UPDATE collection_registry SET last_used = ? WHERE name = ?",
                 (datetime.now(timezone.utc).isoformat(), name),
             )
             conn.commit()
@@ -175,21 +175,24 @@ class SQLiteNotebookStore(NotebookStore):
 
 # ── Public Factory ────────────────────────────────────────────────────────────
 
-def get_notebook_store(project_id: str = "") -> SQLiteNotebookStore:
-    """Return a SQLiteNotebookStore for the given project (defaults to GLOBAL)."""
-    return SQLiteNotebookStore(_db_path(project_id))
+def get_collection_store(project_id: str = "") -> SQLiteCollectionStore:
+    """Return a SQLiteCollectionStore for the given project (defaults to GLOBAL)."""
+    return SQLiteCollectionStore(_db_path(project_id))
 
 
-def ingest_to_notebook(notebook_name: str, project_id: str, files: list[str]) -> None:
+def ingest_to_collection(collection_name: str, project_id: str, files: list[str]) -> None:
     """
-    Ingest a list of files into a RAG Notebook.
-    1. Copies files to __DATACENTER/<project_id>/01_Raw_Source/<notebook_name>
-    2. Registers them in the notebook_registry.db
+    Ingest a list of files into a RAG Collection.
+    1. Copies files to __DATACENTER/<project_id>/02_Dynamic_Context/KnowledgeStore/<collection_name>
+    2. Registers them in the collection_registry.db
     """
     root = get_maccre_root()
     pid = project_id.strip() or _GLOBAL_PROJECT
-    dest_dir = root / "__DATACENTER" / pid / "01_Raw_Source" / notebook_name
+    dest_dir = root / "__DATACENTER" / pid / "02_Dynamic_Context" / "KnowledgeStore" / collection_name
     dest_dir.mkdir(parents=True, exist_ok=True)
+    
+    from maccre_core.ingestion.fingerprint_index import FingerprintManager
+    fingerprint_mgr = FingerprintManager(pid)
     
     ingested_paths = []
     for fpath in files:
@@ -199,6 +202,10 @@ def ingest_to_notebook(notebook_name: str, project_id: str, files: list[str]) ->
             
         src = Path(fpath)
         if not src.exists():
+            continue
+            
+        # Check if the file is new or modified before proceeding
+        if not fingerprint_mgr.is_modified(str(src), collection_name):
             continue
             
         dest = dest_dir / src.name
@@ -224,7 +231,7 @@ def ingest_to_notebook(notebook_name: str, project_id: str, files: list[str]) ->
             documents = parser.parse_file(dest)
             
             # 3. Route parsed artifacts to 04_Code_Artifacts directory isolation
-            artifacts_dir = root / "__DATACENTER" / pid / "04_Code_Artifacts" / "notebooks" / notebook_name
+            artifacts_dir = root / "__DATACENTER" / pid / "04_Code_Artifacts" / "collections" / collection_name
             artifacts_dir.mkdir(parents=True, exist_ok=True)
             parsed_file = artifacts_dir / f"{dest.stem}_parsed.json"
             parsed_file.write_text(json.dumps(documents, indent=2), encoding="utf-8")
@@ -238,21 +245,24 @@ def ingest_to_notebook(notebook_name: str, project_id: str, files: list[str]) ->
                         text=doc.get("content", ""),
                         metadata=doc.get("metadata", {})
                     )
-                    store.upsert(f"notebook_{notebook_name}", record)
+                    store.upsert(f"collection_{collection_name}", record)
             finally:
                 store.close()
+                
+            # Mark the file as ingested only after successful processing
+            fingerprint_mgr.mark_ingested(str(src), collection_name)
                 
         except Exception:
             pass # Skip unreadable files
             
-    store = get_notebook_store(pid)
-    # If notebook exists, append. Else create new.
+    store = get_collection_store(pid)
+    # If collection exists, append. Else create new.
     try:
-        existing = store.load(notebook_name)
+        existing = store.load(collection_name)
         new_files = existing["files"] + ingested_paths
         # Dedup keeping order
         new_files = list(dict.fromkeys(new_files))
-        store.save(notebook_name, new_files)
+        store.save(collection_name, new_files)
     except KeyError:
-        store.save(notebook_name, ingested_paths)
+        store.save(collection_name, ingested_paths)
 

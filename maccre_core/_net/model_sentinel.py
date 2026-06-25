@@ -55,7 +55,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from maccre_core.orchestration.windows_vault import wipe_string
+from maccre_core.orchestration.universal_vault import wipe_string
 from maccre_core.utils.path_resolver import get_maccre_root
 
 logger = logging.getLogger("maccre_core")

@@ -33,7 +33,7 @@ from typing import Any
 from maccre_core._net.gemini_client import GeminiClient
 
 from maccre_core.memory import PinRecord, get_knowledge_store
-from maccre_core.orchestration.windows_vault import get_native_credential
+from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.utils.path_resolver import get_datacenter_path
 
 _log = logging.getLogger(__name__)
@@ -46,13 +46,13 @@ _rag_client: GeminiClient | None = None
 def _get_rag_client() -> GeminiClient:
     global _rag_client
     if not _rag_client:
-        raw_key = get_native_credential("MACCRE_Sovereign")
+        raw_key = get_provider_credential("MACCRE_Sovereign")
         if not raw_key:
             raise ValueError("CRITICAL: Vault returned empty.")
         clean_key = str(raw_key).strip()
         if not clean_key.startswith("AIza"):
             raise ValueError("CRITICAL: Invalid Key.")
-        _rag_client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
+        _rag_client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
     return _rag_client
 
 

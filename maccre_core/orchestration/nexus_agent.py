@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from maccre_core._net.gemini_client import GeminiClient, GeminiResponse
-from maccre_core.orchestration.windows_vault import get_native_credential
+from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.tools.admin_tools import mint_agent, build_topology
 from maccre_core.tools.macro_nodes import (
     save_macro_node, list_macro_nodes, fetch_macro_node,
@@ -265,7 +265,7 @@ class NexusAgent:
         self.history: list[dict[str, Any]] = []
         
 
-        self.client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
+        self.client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
         self.model = "gemini-3.1-pro-preview"  # Highest tier Pro model available for orchestration
         
         # Initialize memory store for Nexus sessions

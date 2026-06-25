@@ -57,7 +57,7 @@ from maccre_core._net.gemini_client import (
 )
 from maccre_core._net.model_registry import get_registry, ModelRegistry
 
-from maccre_core.orchestration.windows_vault import get_native_credential
+from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.orchestration.telemetry_db import log_thought
 from maccre_core.tools.tool_registry import get_tools_from_sheet, generate_universal_json_schema
 from maccre_core.orchestration.cache_manager import CacheManager
@@ -168,7 +168,7 @@ class UniversalRouter:
 
     def __init__(self) -> None:
         def gemini_provider() -> str | None:
-            k = get_native_credential("MACCRE_Sovereign")
+            k = get_provider_credential("MACCRE_Sovereign")
             return str(k).strip() if k and str(k).strip().startswith("AIza") else None
 
         # Sovereign Gemini HTTP Client — zero SDK dependency
@@ -415,7 +415,7 @@ class UniversalRouter:
 
         # ── Claude ────────────────────────────────────────────────────────────
         elif "claude" in model_lower:
-            anthropic_key = get_native_credential("MACCRE_Sovereign_Anthropic")
+            anthropic_key = get_provider_credential("MACCRE_Sovereign_Anthropic")
             if not anthropic_key:
                 raise ValueError("Missing Anthropic OS Vault Key.")
             try:
@@ -461,7 +461,7 @@ class UniversalRouter:
 
         # ── OpenAI ────────────────────────────────────────────────────────────
         if "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
-            openai_key = get_native_credential("MACCRE_Sovereign_OpenAI")
+            openai_key = get_provider_credential("MACCRE_Sovereign_OpenAI")
             if not openai_key:
                 raise ValueError("Missing OpenAI OS Vault Key.")
             try:
@@ -487,7 +487,7 @@ class UniversalRouter:
             
         # ── Groq ──────────────────────────────────────────────────────────────
         elif "groq" in model_lower:
-            groq_key = get_native_credential("MACCRE_Sovereign_Groq")
+            groq_key = get_provider_credential("MACCRE_Sovereign_Groq")
             if not groq_key:
                 raise ValueError("Missing Groq OS Vault Key.")
             try:

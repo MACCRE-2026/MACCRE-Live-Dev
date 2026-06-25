@@ -30,7 +30,7 @@ from typing import Any, Type, Optional
 
 from maccre_core._net.environment_probe import get_environment_matrix
 from maccre_core.schemas.sovereign_schema import dict_to_dataclass, SchemaValidationError
-from maccre_core.orchestration.windows_vault import get_native_credential
+from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.logger import logger
 
 def _dataclass_to_json_schema(cls: Type[Any]) -> dict[str, Any]:
@@ -78,7 +78,7 @@ class OmniDaemon:
     
     def __init__(self):
         self.matrix = get_environment_matrix()
-        self.api_key = get_native_credential("MACCRE_Sovereign")
+        self.api_key = get_provider_credential("MACCRE_Sovereign")
         
     def _route_local(self, prompt: str, schema: Optional[Type[Any]], system_instruction: str, temperature: float) -> str:
         """Route entirely locally to Ollama."""
@@ -143,7 +143,7 @@ class OmniDaemon:
             raise ValueError("No API key available for cloud routing.")
 
         from maccre_core._net.gemini_client import GeminiClient, user_turn  # noqa: PLC0415
-        client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
+        client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
 
         resolved_schema = _dataclass_to_json_schema(schema) if schema else None
 

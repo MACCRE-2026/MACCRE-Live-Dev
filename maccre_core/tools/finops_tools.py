@@ -366,7 +366,7 @@ def calculate_predicted_cost(
         input_tokens = 0
     finally:
         if raw_key:
-            from maccre_core.orchestration.windows_vault import wipe_string  # noqa: PLC0415
+            from maccre_core.orchestration.universal_vault import wipe_string  # noqa: PLC0415
             wipe_string(raw_key)
 
     rates = _get_rates(model_id, input_tokens)

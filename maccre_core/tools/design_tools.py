@@ -36,7 +36,7 @@ from typing import Any
 from dataclasses import dataclass, field
 
 from maccre_core._net.gemini_client import GeminiClient, user_turn, is_transient_error, is_fatal_error
-from maccre_core.orchestration.windows_vault import get_native_credential
+from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.utils.path_resolver import get_maccre_root
 from maccre_core.logger import logger
 
@@ -326,11 +326,11 @@ def design_swarm(description: str, answers: str = "") -> str:
         or a ``[DESIGN_NEEDS_INPUT]`` block listing missing requirements as questions,
         or a ``[DESIGN_FAULT]`` string describing a hard error.
     """
-    api_key = get_native_credential("MACCRE_Sovereign")
+    api_key = get_provider_credential("MACCRE_Sovereign")
     if not api_key:
         return "[DESIGN_FAULT] MACCRE_Sovereign vault key not found. Ensure it is registered in Windows Credential Manager."
 
-    client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
+    client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
 
     # ── Enumerate known topology library entries for context ──────────────────
     _prior_art = ""
@@ -397,7 +397,7 @@ Return your complete swarm design with full rationale."""
     # ── Shared Diamond Loop retry helper — uses live registry failover chain ──
     import time as _t  # noqa: PLC0415
     from maccre_core._net.model_registry import get_registry  # noqa: PLC0415
-    _registry = get_registry(lambda: get_native_credential("MACCRE_Sovereign"))
+    _registry = get_registry(lambda: get_provider_credential("MACCRE_Sovereign"))
 
     def _gemini_with_retry(
         contents: str,
