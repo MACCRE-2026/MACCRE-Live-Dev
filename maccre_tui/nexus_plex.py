@@ -1357,7 +1357,7 @@ class NexusPlex(App[None]):
             macros = store.list_all()
             macro_sel = self.query_one("#macro-select", Select)
             if macro_sel:
-                macro_sel.set_options([(m, m) for m in macros])
+                macro_sel.set_options([(m.get("name", "Unknown"), m.get("name", "Unknown")) for m in macros])
             
             agents = get_agent_store("GLOBAL").get_names()
             agent_sel = self.query_one("#agent-select", Select)
