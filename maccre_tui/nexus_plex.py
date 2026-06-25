@@ -2037,7 +2037,9 @@ class NexusPlex(App[None]):
         store = get_agent_store("GLOBAL")
         try:
             p = store.get(str(event.value))
-            desc = p.get("description", "No description available.")
+            desc = p.get("description") or p.get("system_prompt", "No description available.")
+            if len(desc) > 250:
+                desc = desc[:247] + "..."
             self.query_one("#agent-info-body", Static).update(desc)
         except Exception as e:
             self.query_one("#agent-info-body", Static).update(f"[red]Error: {e}[/red]")
@@ -2073,19 +2075,25 @@ class NexusPlex(App[None]):
     def _refresh_active_flow_sequence(self) -> None:
         """Refresh the active flow sequence display with clickable nodes."""
         container = self.query_one("#active-flow-sequence", Horizontal)
-        container.remove_children()
+        
+        # Safely mark all existing children for removal
+        container.query("*").remove()
         
         if not self.active_flow_steps:
             container.mount(Static("No flow loaded.", classes="flow-seq-text"))
             return
             
+        widgets_to_mount = []
         for i, step in enumerate(self.active_flow_steps):
             if i > 0:
-                container.mount(Static(" → ", classes="flow-arrow-dim"))
+                widgets_to_mount.append(Static(" → ", classes="flow-arrow-dim"))
             name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
             import uuid
-            btn = Button(name, id=f"anode-{i}-{uuid.uuid4().hex[:8]}", classes="active-node-btn")
-            container.mount(btn)
+            btn = Button(name, variant="primary", id=f"anode-{i}-{uuid.uuid4().hex[:8]}", classes="active-node-btn")
+            widgets_to_mount.append(btn)
+            
+        # Batch mount the new widgets
+        container.mount(*widgets_to_mount)
 
     @on(Button.Pressed, ".active-node-btn")
     def action_configure_node(self, event: Button.Pressed) -> None:
