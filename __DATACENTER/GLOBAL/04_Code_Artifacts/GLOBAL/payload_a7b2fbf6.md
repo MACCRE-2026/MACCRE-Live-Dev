@@ -1,0 +1,1 @@
+Lets examine the timeline of the individual items contained in the recent tranches and disclosures by the US government concerning UAP, NHI and technology, and non-human biologics. Look for historical correlations and conjectures dismissed as conspiracy theory that are given epistemic and empiric weight by the disclosures and tranches.

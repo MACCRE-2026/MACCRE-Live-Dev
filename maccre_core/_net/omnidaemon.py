@@ -143,7 +143,7 @@ class OmniDaemon:
             raise ValueError("No API key available for cloud routing.")
 
         from maccre_core._net.gemini_client import GeminiClient, user_turn  # noqa: PLC0415
-        client = GeminiClient(api_key=str(self.api_key))
+        client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
 
         resolved_schema = _dataclass_to_json_schema(schema) if schema else None
 

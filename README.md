@@ -2,12 +2,24 @@
 ## Modular Autonomous Cognitive Computing and Routing Engine -- Human Exo-Cortex Project
 
 > [!IMPORTANT]
-> **Architectural Shift: The Textual TUI Era has Begun.**
-> The system has evolved beyond the pure, headless CLI era and the deprecated Flet GUI era. We are now operating a fluid, terminal-based Textual interface (The Nexus Plex). The system is strictly governed by the **Omni CI/CD Gatekeeper** and executed via rigorous Sovereign Physical Laws.
+> **Architectural Shift: Zero-Cleartext Auth & TUI Nexus Plex (Phase 5/6)**
+> The system has evolved into its most secure and interactive state yet. We are now operating a fluid, terminal-based Textual interface (The Nexus Plex) underpinned by Zero-Cleartext Authentication. The system remains strictly governed by the **Omni CI/CD Gatekeeper** and executed via rigorous Sovereign Physical Laws.
 
 ---
 
-## 1. The Omni JIT Gatekeeper (Sovereign Prefix Mandate)
+## 1. Current Project Momentum (v2.5 - Textual TUI & Zero-Cleartext Era)
+
+The current development trajectory focuses heavily on strict capability routing, credential security, and rich media processing.
+
+- **Zero-Cleartext Auth**: We have successfully refactored `maccre_core/_net` clients (e.g., `gemini_client.py`, `live_client.py`, `UniversalRouter`) to use the `windows_vault.py` DPAPI bindings. Credentials are resolved JIT (Just-In-Time) milliseconds before HTTP dispatch and purged from system memory via C-level `ctypes.memset` in a strict `try/finally` wipe block. Keys never touch disk or stay resident in python memory.
+- **TUI Nexus Plex**: The Textual-based interface (`maccre_tui/nexus_plex.py`) provides an interactive split-pane environment for orchestrating node flows, managing macros, and injecting real-time context without leaving the terminal.
+- **Payload & Manual Intercept**: Real-time human interaction has been injected directly into the swarm loop via the `MANUAL` MacroNode intercept, allowing users to alter payloads and inject context precisely at the exact point of need.
+- **Unified File Cabinet & Ingestion Evolution**: Legacy hoarding scripts have been subsumed into `maccre_core/tools/notebook_ingest.py`, generating dynamic concept categories via federated namespaces in our bespoke SovereignStore.
+- **FinOps Media Master Pipeline**: High-cost generative media actions (via `render_executor.py` and `finops_tools.py`) are strictly gated by Human-in-the-Loop authorization hooks with detailed pre-flight cost estimations.
+
+---
+
+## 2. The Omni JIT Gatekeeper (Sovereign Prefix Mandate)
 
 You must **never** invoke bare Python scripts (e.g., `python maccre.py` or `python run.py`) when initiating a swarm. 
 
@@ -23,15 +35,15 @@ For the full operational doctrine on `omni build`, `omni qa`, and `omni clean`, 
 
 ---
 
-## 2. Evolutionary Lineage: From 1stGen to Sovereign Edge
+## 3. Evolutionary Lineage: From 1stGen to Sovereign Edge
 
 The foundational architecture of this project was forged using the original system prompts located at `C:\Users\wilke\.gemini\1stGen-GEMINI.md.bak`. Those 1stGen instructions instilled the extreme structural discipline—the Strangler Fig ABCs, the 5-Tier Datacenter, and the absolute Type Hinting mandates—that allowed this project to survive its chaotic early growth phases.
 
-However, as the project evolved into the EXO_GANS framework and underwent the Omni Bifurcation, the Primary Antigravity Agent and the lead developer collaboratively rewrote the system instructions. We stripped out deprecated constraints (like Google Workspace API dependencies and the official `google-genai` SDK) and replaced them with our bespoke Sovereign REST clients and SQLite WAL telemetry matrices. We reinforced the absolute best parts of the old doctrine while demonstrating the flexibility to evolve relentlessly.
+However, as the project evolved into the EXO_GANS framework and underwent the Omni Bifurcation, the Primary Antigravity Agent and the lead developer collaboratively rewrote the system instructions. By reflecting on the positive changes and evolutions the project has undergone, we reinforced the absolute best parts of the old doctrine while demonstrating the flexibility to evolve relentlessly when warranted. We stripped out deprecated constraints (like Google Workspace API dependencies and the official `google-genai` SDK) and replaced them with our bespoke Sovereign REST clients, SQLite WAL telemetry matrices, and TUI physics.
 
 ---
 
-## 3. The 5-Tier Sovereign Datacenter
+## 4. The 5-Tier Sovereign Datacenter
 
 Because EXO_GANS is a file-driven edge ecosystem, understanding **where** files belong is critical. All active work product, logic, memory, and telemetry for a given run is siloed inside `__DATACENTER/<Project_Name>/` across 5 strict tiers:
 
@@ -45,25 +57,38 @@ Because EXO_GANS is a file-driven edge ecosystem, understanding **where** files 
 
 ---
 
-## 4. Project Momentum & Alphabet Oracle Hardening
+## 5. Active Discoveries & Technical Notes
 
-The current development trajectory is strictly defined by the Alphabet Oracle's 6-Phase Hardening Plan, located at: [Oracle_Hardening-Features-implementation_plan.md](file:///B:/EXO_GANS/Oracle_Hardening-Features-implementation_plan.md). 
+- **Parallel Advocates & Auto-Wrapping:** The routing engine successfully supports dynamic Auto-Wrapped MacroNodes and Parallel Advocates. The `GroupDialogueRunner` maintains conversational state isolation perfectly.
+- **CSS Fluidity Engine:** The Nexus Plex TUI successfully uses fractional `1fr` widths, ensuring dynamic scaling across terminal sizes.
+- **The MANUAL Cascade Bug (RESOLVED):** We resolved the previous critical routing failure for `MANUAL` cascade loops by implementing the TUI Manual Intercept pause events inside `swarm_worker.py`.
 
-Future developers and agents must refer to this document to understand the immediate dependency graph (ABC Contracts → Doctrine Compliance → Deterministic Nodes → TUI UX).
+---
+---
+
+# ARCHIVED VERSIONS (Versioned Changelog)
+
+*The following versions are deprecated and kept intact below to provide a firm anchor in time for later analysis.*
 
 ---
 
-## 5. Active Discoveries & Technical Notes
+## ARCHIVE: v2.0 - The Textual TUI Era Shift
 
+> [!IMPORTANT]
+> **Architectural Shift: The Textual TUI Era has Begun.**
+> The system has evolved beyond the pure, headless CLI era and the deprecated Flet GUI era. We are now operating a fluid, terminal-based Textual interface (The Nexus Plex). The system is strictly governed by the **Omni CI/CD Gatekeeper** and executed via rigorous Sovereign Physical Laws.
+
+### Current Project Momentum
+The current development trajectory is strictly defined by the Alphabet Oracle's 6-Phase Hardening Plan, located at: [Oracle_Hardening-Features-implementation_plan.md](file:///B:/EXO_GANS/Oracle_Hardening-Features-implementation_plan.md). 
+
+### Active Discoveries & Technical Notes
 - **Parallel Advocates & Auto-Wrapping:** The routing engine successfully supports dynamic Auto-Wrapped MacroNodes and Parallel Advocates (e.g., `CounterPartner` running alongside `Writer_Pipe`). The `GroupDialogueRunner` maintains conversational state isolation perfectly.
 - **CSS Fluidity Engine:** The Nexus Plex TUI has successfully migrated to fractional `1fr` widths. The layout dynamically scales during terminal resizes (`Ctrl +`/`Ctrl -`), permanently ending the era of "squashed" vertical text anomalies.
 - **The MANUAL Cascade Bug (PENDING PATCH):** There is currently a critical routing failure when assigning the user (`MANUAL`) to a cascade loop (e.g., `OSINTx3`). The failure occurs inside `maccre_core/orchestration/swarm_worker.py` at the `_load_agent_cfg` injection boundary. The engine attempts to pull a system prompt from the AI roster for `MANUAL`, triggering a `KeyError` because `MANUAL` is an organic user intercept, not a synthetic entity. This is prioritized for Phase 5/6 hardening.
 
 ---
----
 
-# ARCHIVED VERSION (Legacy README)
-*The following is the deprecated Phase 0 README, preserved for historical timeline analysis.*
+## ARCHIVE: v1.0 - MACCREv2 Headless Phase 0
 
 # MACCREv2 
 ## Modular Autonomous Cognitive Computing and Routing Engine -- Human Exo-Cortex Project 

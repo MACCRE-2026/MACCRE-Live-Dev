@@ -46,9 +46,10 @@ import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Callable
 
 from maccre_core._net.client_interface import InferenceClient, InferenceResponse, EmbeddingResult
+from maccre_core.orchestration.windows_vault import wipe_string
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -386,18 +387,13 @@ class GeminiClient(InferenceClient):
     list_models()              — enumerate available models (for ModelRegistry)
     """
 
-    def __init__(self, api_key: str) -> None:
-        if not api_key or not api_key.strip().startswith("AIza"):
-            raise ValueError(
-                "[GeminiClient] Invalid API key — must start with 'AIza'. "
-                "Check Windows Credential Manager for 'MACCRE_Sovereign'."
-            )
-        self._key = api_key.strip()
+    def __init__(self, key_provider: Callable[[], str | None]) -> None:
+        self._key_provider = key_provider
         self._ssl = ssl.create_default_context()
 
     def _url(self, model: str, action: str) -> str:
         clean = model.removeprefix("models/")
-        return f"{_BASE_URL}/{clean}:{action}?key={self._key}"
+        return f"{_BASE_URL}/{clean}:{action}"
 
     # ── Text Generation ───────────────────────────────────────────────────────
 
@@ -440,11 +436,17 @@ class GeminiClient(InferenceClient):
         if cached_content_uri:
             body["cachedContent"] = cached_content_uri
             
-        req = _make_req(
-            self._url(model, "generateContent"),
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        )
-        return GeminiResponse(_call(req, self._ssl))
+        raw_key = self._key_provider()
+        try:
+            req = _make_req(
+                self._url(model, "generateContent"),
+                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                extra_headers={"x-goog-api-key": raw_key} if raw_key else None
+            )
+            return GeminiResponse(_call(req, self._ssl))
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     def stream_generate_content(
         self,
@@ -483,8 +485,9 @@ class GeminiClient(InferenceClient):
         if cached_content_uri:
             body["cachedContent"] = cached_content_uri
             
-        url = self._url(model, "streamGenerateContent") + "&alt=sse"
-        req = _make_req(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        url = self._url(model, "streamGenerateContent") + "?alt=sse"
+        raw_key = self._key_provider()
+        req = _make_req(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), extra_headers={"x-goog-api-key": raw_key} if raw_key else None)
 
         try:
             with urllib.request.urlopen(req, context=self._ssl, timeout=_STREAM_TIMEOUT) as resp:
@@ -513,6 +516,9 @@ class GeminiClient(InferenceClient):
         except urllib.error.HTTPError as exc:
             err_body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"[GeminiClient] Stream error {exc.code}: {err_body[:300]}") from exc
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     # ── Embeddings ────────────────────────────────────────────────────────────
 
@@ -538,11 +544,17 @@ class GeminiClient(InferenceClient):
             "content": {"parts": [{"text": text}]},
             "taskType": task_type,
         }
-        req = _make_req(
-            self._url(model, "embedContent"),
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        )
-        return EmbeddingResponse(_call(req, self._ssl, timeout=30))
+        raw_key = self._key_provider()
+        try:
+            req = _make_req(
+                self._url(model, "embedContent"),
+                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                extra_headers={"x-goog-api-key": raw_key} if raw_key else None
+            )
+            return EmbeddingResponse(_call(req, self._ssl, timeout=30))
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     def batch_embed_contents(
         self,
@@ -571,12 +583,18 @@ class GeminiClient(InferenceClient):
                 for t in texts
             ]
         }
-        req = _make_req(
-            self._url(model, "batchEmbedContents"),
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        )
-        result = _call(req, self._ssl)
-        return [EmbeddingResponse({"embedding": e}) for e in result.get("embeddings", [])]
+        raw_key = self._key_provider()
+        try:
+            req = _make_req(
+                self._url(model, "batchEmbedContents"),
+                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                extra_headers={"x-goog-api-key": raw_key} if raw_key else None
+            )
+            result = _call(req, self._ssl)
+            return [EmbeddingResponse({"embedding": e}) for e in result.get("embeddings", [])]
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     # ── File API ──────────────────────────────────────────────────────────────
 
@@ -626,13 +644,19 @@ class GeminiClient(InferenceClient):
         parts += file_bytes
         parts += f"\r\n--{boundary}--\r\n".encode("utf-8")
 
-        url = f"{_UPLOAD_URL}?key={self._key}"
-        req = _make_req(
-            url, data=parts,
-            content_type=f"multipart/related; boundary={boundary}",
-        )
-        result = _call(req, self._ssl)
-        return FileMetadata(result.get("file", result))
+        url = f"{_UPLOAD_URL}"
+        raw_key = self._key_provider()
+        try:
+            req = _make_req(
+                url, data=parts,
+                content_type=f"multipart/related; boundary={boundary}",
+                extra_headers={"x-goog-api-key": raw_key} if raw_key else None
+            )
+            result = _call(req, self._ssl)
+            return FileMetadata(result.get("file", result))
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     def get_file(self, name: str) -> FileMetadata:
         """Retrieve file metadata by resource name (e.g. 'files/abc123').
@@ -644,10 +668,15 @@ class GeminiClient(InferenceClient):
             FileMetadata with current .state (poll until 'ACTIVE' after upload).
         """
         clean = name.removeprefix("files/")
-        url = f"{_FILES_URL}/{clean}?key={self._key}"
-        req = _make_req(url, method="GET")
-        req.data = None
-        return FileMetadata(_call(req, self._ssl))
+        url = f"{_FILES_URL}/{clean}"
+        raw_key = self._key_provider()
+        try:
+            req = _make_req(url, method="GET", extra_headers={"x-goog-api-key": raw_key} if raw_key else None)
+            req.data = None
+            return FileMetadata(_call(req, self._ssl))
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     def delete_file(self, name: str) -> None:
         """Delete a File API upload by resource name.
@@ -656,15 +685,20 @@ class GeminiClient(InferenceClient):
             name: File resource name, e.g. 'files/abc123'.
         """
         clean = name.removeprefix("files/")
-        url = f"{_FILES_URL}/{clean}?key={self._key}"
-        req = _make_req(url, method="DELETE")
-        req.data = None
+        url = f"{_FILES_URL}/{clean}"
+        raw_key = self._key_provider()
         try:
-            with urllib.request.urlopen(req, context=self._ssl, timeout=_TIMEOUT) as resp:
-                resp.read()  # DELETE returns empty 200
-        except urllib.error.HTTPError as exc:
-            err_body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"[GeminiClient] delete_file {exc.code}: {err_body[:200]}") from exc
+            req = _make_req(url, method="DELETE", extra_headers={"x-goog-api-key": raw_key} if raw_key else None)
+            req.data = None
+            try:
+                with urllib.request.urlopen(req, context=self._ssl, timeout=_TIMEOUT) as resp:
+                    resp.read()  # DELETE returns empty 200
+            except urllib.error.HTTPError as exc:
+                err_body = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"[GeminiClient] delete_file {exc.code}: {err_body[:200]}") from exc
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     # ── Context Caching API ───────────────────────────────────────────────────
 
@@ -687,10 +721,15 @@ class GeminiClient(InferenceClient):
             The resource URI string (e.g., 'cachedContents/abc123xyz').
         """
         body = _build_cache_request_body(model, contents, system_instruction, ttl_seconds)
-        url = f"https://generativelanguage.googleapis.com/v1beta/cachedContents?key={self._key}"
-        req = _make_req(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"))
-        result = _call(req, self._ssl, timeout=120)
-        return str(result.get("name", ""))
+        url = "https://generativelanguage.googleapis.com/v1beta/cachedContents"
+        raw_key = self._key_provider()
+        try:
+            req = _make_req(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), extra_headers={"x-goog-api-key": raw_key} if raw_key else None)
+            result = _call(req, self._ssl, timeout=120)
+            return str(result.get("name", ""))
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     # ── Model listing (used by ModelRegistry) ─────────────────────────────────
 
@@ -710,22 +749,26 @@ class GeminiClient(InferenceClient):
         """
         models: list[dict[str, Any]] = []
         page_token: str | None = None
+        raw_key = self._key_provider()
+        try:
+            while True:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models"
+                    f"?pageSize={page_size}"
+                )
+                if page_token:
+                    url += f"&pageToken={page_token}"
 
-        while True:
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models"
-                f"?key={self._key}&pageSize={page_size}"
-            )
-            if page_token:
-                url += f"&pageToken={page_token}"
+                req = _make_req(url, method="GET", extra_headers={"x-goog-api-key": raw_key} if raw_key else None)
+                req.data = None
 
-            req = _make_req(url, method="GET")
-            req.data = None
+                result = _call(req, self._ssl)
+                models.extend(result.get("models", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
 
-            result = _call(req, self._ssl)
-            models.extend(result.get("models", []))
-            page_token = result.get("nextPageToken")
-            if not page_token:
-                break
-
-        return models
+            return models
+        finally:
+            if raw_key:
+                wipe_string(raw_key)

@@ -340,7 +340,7 @@ class UniversalSwarmWorker:
         if stop_event is not None and stop_event.is_set():
             return False
             
-        if pause_event is not None and pause_event.is_set():
+        if pause_event is not None and not pause_event.is_set():
             time.sleep(1.0)
             return True
 
@@ -357,7 +357,12 @@ class UniversalSwarmWorker:
         self._is_sleeping = False  # Wake up
         row_id: int = int(task["id"])
         job_id: str = str(task["job_id"])
-        project_id: str = str(task.get("project_id", "UNNAMED"))
+        # Fallback to the worker's bound project_name if the queue doesn't store project_id
+        project_id: str = str(task.get("project_id", self.project_name))
+        
+        # Explicitly scope the environment to this project for all downstream path resolution (e.g. telemetry_db)
+        os.environ["MACCRE_ACTIVE_PROJECT"] = project_id
+        
         payload_path: str = str(task["payload_path"])
         current_node: str = str(task.get("current_node", "START"))
 
@@ -453,6 +458,9 @@ class UniversalSwarmWorker:
                             _ag_model = str(_ag_row.get("model") or _ag_row.get("MODEL", ""))
                             if _ag_model:
                                 node_config["model"] = _ag_model
+                            _ag_tools = str(_ag_row.get("tools_allowed") or _ag_row.get("TOOLS_ALLOWED", ""))
+                            if _ag_tools:
+                                node_config["tools_allowed"] = _ag_tools
                             break
                 except Exception:
                     pass
@@ -755,7 +763,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         agent_b_tools=_p_tls,
                     )
                     try:
-                        transcript, final_turn, total_cost = _pair_runner.run(current_payload)
+                        transcript, final_turn, total_cost = _pair_runner.run(current_payload, stop_event=stop_event)
                     except ManualInputRequired as e:
                         _sp = get_datacenter_path("02_Dynamic_Context", f"{job_id}_dialogue_state.json")
                         _sp.write_text(_json.dumps(e.checkpoint), encoding="utf-8")
@@ -802,7 +810,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                         host_tools=_host_tls,
                     )
                     try:
-                        transcript, final_turn, total_cost = _grp_runner.run(current_payload)
+                        transcript, final_turn, total_cost = _grp_runner.run(current_payload, stop_event=stop_event)
                     except ManualInputRequired as e:
                         _sp = get_datacenter_path("02_Dynamic_Context", f"{job_id}_dialogue_state.json")
                         _sp.write_text(_json.dumps(e.checkpoint), encoding="utf-8")
@@ -956,7 +964,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
 
             self.memory_engine.extract_and_store(ledger_content_out, current_node, job_id)
 
-            next_node: str = str(node_config["next_node_success"])
+            next_node: str = str(node_config.get("next_node_success", node_config.get("Next_Node", "END")))
 
             # ── Phase 4: Conditional Routing ─────────────────────────────────────────
             # If the node's output contains ROUTE_TO:<NODE_ID>, override the static
@@ -1048,6 +1056,26 @@ You do NOT need to ask for permission to use them. If your instructions require 
             else:
                 routing_payload_path = ledger_path
 
+            # ── Unified Session Ledger Live-Update & Payload Mode Routing ─────────
+            try:
+                from maccre_core.orchestration.flow_engine import generate_unified_ledger
+                _ul_path = generate_unified_ledger(job_id)
+                logger.info(f"[{AGENT_ID}] Live-updated unified ledger: {_ul_path}")
+                
+                payload_mode = "Unified Ledger"
+                if self.topology:
+                    try:
+                        tgt_cfg = self.topology.get_node_config(next_node)
+                        payload_mode = str(tgt_cfg.get("payload_mode", "Unified Ledger"))
+                    except Exception:
+                        pass
+                
+                if payload_mode == "Unified Ledger" and _ul_path:
+                    routing_payload_path = _ul_path
+                    logger.info(f"[{AGENT_ID}] Routing via Unified Ledger: {routing_payload_path}")
+            except Exception as e:
+                logger.warning(f"[{AGENT_ID}] Failed to live-update or route unified session ledger: {e}")
+
             self.broker.route_task(
                 row_id,
                 job_id,
@@ -1057,6 +1085,9 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 source_payload_path=source_payload_path,
                 max_recursion=max_rec,
             )
+            
+            # Update the session with the live ledger
+            self.broker.update_session_ledger(job_id, routing_payload_path)
 
             # ── Auto-promote topology to library on terminal STOP success ─────
             if next_node.strip().upper() in ("STOP", "DONE", "TERMINATE"):

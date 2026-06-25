@@ -264,8 +264,8 @@ class NexusAgent:
         self.set_active_project = set_active_project_cb
         self.history: list[dict[str, Any]] = []
         
-        raw_key = get_native_credential("MACCRE_Sovereign")
-        self.client = GeminiClient(api_key=str(raw_key).strip() if raw_key else "")
+
+        self.client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
         self.model = "gemini-3.1-pro-preview"  # Highest tier Pro model available for orchestration
         
         # Initialize memory store for Nexus sessions

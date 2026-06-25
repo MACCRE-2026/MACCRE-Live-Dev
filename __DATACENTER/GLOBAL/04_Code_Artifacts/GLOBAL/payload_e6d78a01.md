@@ -1,0 +1,1 @@
+Please tell me about Keir Starmer and his tenure as Prime Minister. Was he well liked by the people? What scandals have persisted under his short tenure that have driven him to resign?

@@ -84,7 +84,7 @@ class _AgentSession:
             raise ManualInputRequired(participant_label=self.label)
 
         response_text, cost = router.generate(
-            model_id=self.model,
+            model_name=self.model,
             payload=message,
             system_prompt=self.system_prompt,
             tools_str=self.tools_str,
@@ -220,7 +220,7 @@ class DialogueRunner:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def run(self, initial_message: str) -> tuple[str, str, float]:
+    def run(self, initial_message: str, stop_event: Any = None) -> tuple[str, str, float]:
         """
         Execute the full dialogue and return the merged transcript.
 
@@ -262,6 +262,10 @@ class DialogueRunner:
 
         # Alternate for num_rounds full B→A exchanges.
         for round_idx in range(1, self._num_rounds + 1):
+            if stop_event is not None and stop_event.is_set():
+                logger.info("[DialogueRunner] --- Flow Stop Requested (cancelling between rounds) ---")
+                break
+                
             logger.info(
                 f"[DialogueRunner] ── Round {round_idx} / {self._num_rounds}: "
                 f"{self._agent_b.label} responding ──"
@@ -433,7 +437,7 @@ class GroupDialogueRunner:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def run(self, initial_message: str) -> tuple[str, str, float]:
+    def run(self, initial_message: str, stop_event: Any = None) -> tuple[str, str, float]:
         """
         Execute the full group dialogue and return the merged transcript.
 
@@ -479,6 +483,10 @@ class GroupDialogueRunner:
 
         # ── Rounds 1..N: participants respond, host synthesises ───────────────
         for round_idx in range(1, self._num_rounds + 1):
+            if stop_event is not None and stop_event.is_set():
+                logger.info("[GroupDialogueRunner] --- Flow Stop Requested (cancelling between rounds) ---")
+                break
+                
             p_replies: list[tuple[str, str]] = []
 
             for participant in self._participants:

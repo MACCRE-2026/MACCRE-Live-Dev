@@ -167,36 +167,30 @@ class UniversalRouter:
     """
 
     def __init__(self) -> None:
+        def gemini_provider() -> str | None:
+            k = get_native_credential("MACCRE_Sovereign")
+            return str(k).strip() if k and str(k).strip().startswith("AIza") else None
+
         # Sovereign Gemini HTTP Client — zero SDK dependency
-        raw_key = get_native_credential("MACCRE_Sovereign")
-        if raw_key and str(raw_key).strip().startswith("AIza"):
-            self.gemini_key: str | None = str(raw_key).strip()
-            self.gemini_client: GeminiClient | None = GeminiClient(api_key=self.gemini_key)
+        if gemini_provider():
+            self.gemini_client: GeminiClient | None = GeminiClient(key_provider=gemini_provider)
             # Phase 6: Live model registry + ModelSentinel for health-aware routing
-            self._model_registry: ModelRegistry = get_registry(self.gemini_key)
+            self._model_registry: ModelRegistry = get_registry(gemini_provider)
             from maccre_core._net.model_sentinel import get_sentinel  # noqa: PLC0415
-            self._sentinel = get_sentinel(self.gemini_key)
+            self._sentinel = get_sentinel(gemini_provider)
             self._sentinel.start()                          # No-op if already running
             self._model_registry.set_sentinel(self._sentinel)
         else:
-            self.gemini_key = None
             self.gemini_client = None
-            self._model_registry = get_registry("")
+            self._model_registry = get_registry(lambda: None)
             self._sentinel = None
             
         self._cache_manager = CacheManager()
 
-        # Anthropic (lazy import — only loaded when a claude-* model is requested)
-        self.anthropic_key = get_native_credential("MACCRE_Sovereign_Anthropic")
-        self.anthropic_client: object | None = None  # Initialised on first use
-
-        # OpenAI (lazy import)
-        self.openai_key = get_native_credential("MACCRE_Sovereign_OpenAI")
-        self.openai_client: object | None = None  # Initialised on first use
-
-        # Groq (lazy import)
-        self.groq_key = get_native_credential("MACCRE_Sovereign_Groq")
-        self.groq_client: object | None = None  # Initialised on first use
+        # Third-party clients (lazy import — only loaded when requested)
+        self.anthropic_client: object | None = None
+        self.openai_client: object | None = None
+        self.groq_client: object | None = None
 
     def generate(
         self,
@@ -421,14 +415,15 @@ class UniversalRouter:
 
         # ── Claude ────────────────────────────────────────────────────────────
         elif "claude" in model_lower:
-            if not self.anthropic_key:
+            anthropic_key = get_native_credential("MACCRE_Sovereign_Anthropic")
+            if not anthropic_key:
                 raise ValueError("Missing Anthropic OS Vault Key.")
             try:
                 from anthropic import Anthropic  # type: ignore[import-untyped]
             except ImportError:
                 raise ValueError("'anthropic' package not installed. Run: pip install anthropic")
             if self.anthropic_client is None:
-                self.anthropic_client = Anthropic(api_key=str(self.anthropic_key))
+                self.anthropic_client = Anthropic(api_key=str(anthropic_key))
             anthropic_tools = [generate_universal_json_schema(t) for t in active_tools]
             kwargs: dict[str, Any] = {
                 "model": model_name,
@@ -466,14 +461,15 @@ class UniversalRouter:
 
         # ── OpenAI ────────────────────────────────────────────────────────────
         if "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
-            if not self.openai_key:
+            openai_key = get_native_credential("MACCRE_Sovereign_OpenAI")
+            if not openai_key:
                 raise ValueError("Missing OpenAI OS Vault Key.")
             try:
                 import openai as _openai
             except ImportError:
                 raise ValueError("'openai' package not installed. Run: pip install openai")
             if self.openai_client is None:
-                self.openai_client = _openai.Client(api_key=str(self.openai_key))
+                self.openai_client = _openai.Client(api_key=str(openai_key))
             kwargs = {
                 "model": model_name,
                 "messages": [
@@ -491,14 +487,15 @@ class UniversalRouter:
             
         # ── Groq ──────────────────────────────────────────────────────────────
         elif "groq" in model_lower:
-            if not self.groq_key:
+            groq_key = get_native_credential("MACCRE_Sovereign_Groq")
+            if not groq_key:
                 raise ValueError("Missing Groq OS Vault Key.")
             try:
                 import groq as _groq  # type: ignore[import-untyped]
             except ImportError:
                 raise ValueError("'groq' package not installed. Run: pip install groq")
             if self.groq_client is None:
-                self.groq_client = _groq.Client(api_key=str(self.groq_key))
+                self.groq_client = _groq.Client(api_key=str(groq_key))
             kwargs = {
                 "model": model_name,
                 "messages": [

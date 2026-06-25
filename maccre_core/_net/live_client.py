@@ -19,10 +19,9 @@ class GeminiLiveClient:
     Currently locked to TEXT modalities to ensure full compatibility with 
     Termux/Android environments (bypassing pyaudio/sounddevice constraints).
     """
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash") -> None:
-        self.api_key = api_key
+    def __init__(self, key_provider: Callable[[], str | None], model: str = "gemini-2.0-flash") -> None:
+        self._key_provider = key_provider
         self.model = model
-        self.client = genai.Client(api_key=self.api_key)
         
     async def run_session(self, system_instruction: str, run_loop_cb: Callable[[Any], Any]) -> None:
         """Mount the WebSocket connection and run the provided async callback with the session."""
@@ -31,6 +30,15 @@ class GeminiLiveClient:
             response_modalities=[types.Modality.TEXT]
         )
         
-        async with self.client.aio.live.connect(model=self.model, config=config) as session:
-            _log.info(f"[LiveClient] WebSocket bound to {self.model}")
-            await run_loop_cb(session)
+        raw_key = self._key_provider()
+        if not raw_key:
+            raise ValueError("No API key provided for LiveClient.")
+            
+        client = genai.Client(api_key=raw_key)
+        try:
+            async with client.aio.live.connect(model=self.model, config=config) as session:
+                _log.info(f"[LiveClient] WebSocket bound to {self.model}")
+                await run_loop_cb(session)
+        finally:
+            from maccre_core.orchestration.windows_vault import wipe_string  # noqa: PLC0415
+            wipe_string(raw_key)

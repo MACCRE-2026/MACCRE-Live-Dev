@@ -90,7 +90,7 @@ class CloudMediaPipeline(BaseMediaPipeline):
             raise ValueError("CRITICAL: Vault returned empty for CloudMediaPipeline.")
         self._key: str = str(raw_key).strip()
         self._ssl = ssl.create_default_context()
-        self._registry = get_registry(self._key)
+        self._registry = get_registry(lambda: get_native_credential("MACCRE_Sovereign"))
         # active_image_model is set lazily from registry on first generate_image call
         self.active_image_model: str = ""
 

@@ -1,0 +1,1 @@
+Lets examine the DNI declassififcations by Tulsi Gabbard regarding russia collusion, covid, and other topics.

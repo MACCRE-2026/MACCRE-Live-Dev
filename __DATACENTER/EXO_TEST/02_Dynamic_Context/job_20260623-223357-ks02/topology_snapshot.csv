@@ -1,0 +1,5 @@
+Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds,Payload_Mode
+C_ADV_TOPPERSHEPHE_08447e51,TopperShepherd,gemini-2.5-flash,C_JUDGE_08447e51,1.0,,None,FAILED,3,,FALSE,None,0,Select.NULL
+C_ADV_TOPPERANGRY_08447e51,TopperAngry,gemini-2.5-flash,C_JUDGE_08447e51,1.0,,None,FAILED,3,,FALSE,None,0,Select.NULL
+C_ADV_TOPPERBUDDY_08447e51,TopperBuddy,gemini-2.5-flash,C_JUDGE_08447e51,1.0,,None,FAILED,3,,FALSE,None,0,Select.NULL
+C_JUDGE_08447e51,GretchenHarwell,gemini-2.5-pro,END,0.2,,"C_ADV_TOPPERSHEPHE_08447e51,C_ADV_TOPPERANGRY_08447e51,C_ADV_TOPPERBUDDY_08447e51",FAILED,3,,FALSE,None,0,Select.NULL

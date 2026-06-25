@@ -72,7 +72,7 @@ class CognitiveMemoryEngine:
                 f"Got: '{raw_key}'"
             )
 
-        self.client = GeminiClient(api_key=str(raw_key).strip())
+        self.client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
         self.extractor_model = "gemini-2.5-flash"
 
     def extract_and_store(self, agent_payload: str, source_node: str, file_name: str) -> None:

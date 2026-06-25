@@ -343,13 +343,19 @@ def calculate_predicted_cost(
     body = {"contents": [{"role": "user", "parts": [{"text": combined}]}]}
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model_id.removeprefix('models/')}:countTokens?key={client._key}"
+        f"{model_id.removeprefix('models/')}:countTokens"
     )
+    
+    raw_key = client._key_provider()
+    headers = {"Content-Type": "application/json"}
+    if raw_key:
+        headers["x-goog-api-key"] = raw_key
+
     req = urllib.request.Request(
         url,
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     ctx = ssl.create_default_context()
     try:
@@ -358,6 +364,10 @@ def calculate_predicted_cost(
         input_tokens: int = int(str(result.get("totalTokens", 0)))
     except Exception:
         input_tokens = 0
+    finally:
+        if raw_key:
+            from maccre_core.orchestration.windows_vault import wipe_string  # noqa: PLC0415
+            wipe_string(raw_key)
 
     rates = _get_rates(model_id, input_tokens)
     predicted = (input_tokens / 1_000_000.0) * rates["input"]

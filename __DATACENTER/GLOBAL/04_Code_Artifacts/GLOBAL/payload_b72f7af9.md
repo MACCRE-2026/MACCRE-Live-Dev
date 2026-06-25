@@ -1,0 +1,1 @@
+Lets examine the prosecution of Martha Stewart and compare it to the portfolio performance of Nancy Pelosi.

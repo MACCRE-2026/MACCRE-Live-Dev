@@ -52,7 +52,7 @@ def _get_rag_client() -> GeminiClient:
         clean_key = str(raw_key).strip()
         if not clean_key.startswith("AIza"):
             raise ValueError("CRITICAL: Invalid Key.")
-        _rag_client = GeminiClient(api_key=clean_key)
+        _rag_client = GeminiClient(key_provider=lambda: get_native_credential("MACCRE_Sovereign"))
     return _rag_client
 
 

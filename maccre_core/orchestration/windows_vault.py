@@ -25,6 +25,7 @@ Both stores are read transparently by get_native_credential().
 """
 import ctypes
 import os
+import sys
 from ctypes import wintypes
 from pathlib import Path
 
@@ -36,6 +37,28 @@ class DATA_BLOB(ctypes.Structure):
         ("cbData", wintypes.DWORD),
         ("pbData", ctypes.POINTER(ctypes.c_char)),
     ]
+
+
+def wipe_string(target: str) -> None:
+    """Overwrites the CPython string buffer in RAM with null bytes."""
+    if not isinstance(target, str):
+        return
+    # Direct memory mutation via ctypes
+    buffer_size = sys.getsizeof(target)
+    address = id(target)
+    ctypes.memset(address, 0, buffer_size)
+
+
+def clear_windows_clipboard() -> None:
+    """Empties the Windows clipboard via Win32 API."""
+    user32 = ctypes.windll.user32
+    if user32.OpenClipboard(None):
+        try:
+            user32.EmptyClipboard()
+        finally:
+            user32.CloseClipboard()
+
+
 
 
 def _get_vault_dir() -> Path:

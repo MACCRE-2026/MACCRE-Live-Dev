@@ -525,7 +525,7 @@ class PatternExecutor:
             key = get_native_credential("MACCRE_Sovereign")
             if not key:
                 return {}
-            s = get_sentinel(str(key))
+            s = get_sentinel(lambda: get_native_credential("MACCRE_Sovereign"))
             report: dict[str, Any] = s.report()
             return {
                 "healthy": int(report.get("healthy", 0)),

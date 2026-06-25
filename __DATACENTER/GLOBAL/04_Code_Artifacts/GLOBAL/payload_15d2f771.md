@@ -1,0 +1,1 @@
+Tulsi Gabbard is the head of DHS and declassified documents showing Fauci commited war crimes, tell me about them.

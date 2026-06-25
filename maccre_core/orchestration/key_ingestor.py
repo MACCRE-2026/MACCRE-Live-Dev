@@ -26,7 +26,7 @@ any arbitrary secret without waiting for a fingerprint pattern.
 """
 import re
 
-from maccre_core.orchestration.windows_vault import protect_string
+from maccre_core.orchestration.windows_vault import protect_string, clear_windows_clipboard
 
 # Fingerprint Map: Regex -> Target Vault Name
 _FINGERPRINTS: dict[str, str] = {
@@ -69,6 +69,7 @@ def ingest_key(raw_key: str, vault_name: str = "") -> str:
     if vault_name:
         try:
             protect_string(vault_name, raw_key)
+            clear_windows_clipboard()
             return (
                 f"SUCCESS: Key stored in DPAPI Vault as '{vault_name}.bin' "
                 "(explicit name — fingerprinting bypassed)."
@@ -84,6 +85,7 @@ def ingest_key(raw_key: str, vault_name: str = "") -> str:
                 vendor = "Brave Search"
             try:
                 protect_string(target_name, raw_key)
+                clear_windows_clipboard()
                 return (
                     f"SUCCESS: Fingerprint matched '{vendor}'. "
                     f"Key securely locked in DPAPI Vault under '{target_name}.bin'."

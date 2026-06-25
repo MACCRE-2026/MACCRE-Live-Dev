@@ -109,6 +109,17 @@ class LocalMessageBroker(MessageBroker):
     def _init_db(self) -> None:
         conn = self._get_conn()
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_sessions (
+                job_id               TEXT PRIMARY KEY,
+                status               TEXT DEFAULT 'active',
+                topology_csv         TEXT,
+                current_ledger_path  TEXT DEFAULT '',
+                current_step_index   INTEGER DEFAULT 0,
+                created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS task_queue (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id               TEXT NOT NULL,
@@ -151,6 +162,54 @@ class LocalMessageBroker(MessageBroker):
         except sqlite3.OperationalError:
             pass
         conn.commit()
+
+    # ── Session Management ────────────────────────────────────────────────────
+
+    def create_session(self, job_id: str, topology_csv: str) -> None:
+        """Create a new job session anchor."""
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT INTO job_sessions (job_id, status, topology_csv) VALUES (?, 'active', ?)",
+            (job_id, topology_csv)
+        )
+        conn.commit()
+
+    def update_session_status(self, job_id: str, status: str) -> None:
+        """Update the lifecycle status of a session."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE job_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+            (status, job_id)
+        )
+        conn.commit()
+
+    def update_session_ledger(self, job_id: str, ledger_path: str) -> None:
+        """Track the most recent ledger path for the session."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE job_sessions SET current_ledger_path = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+            (ledger_path, job_id)
+        )
+        conn.commit()
+
+    def update_session_step_index(self, job_id: str, step_index: int) -> None:
+        """Track the active MacroNode step index for resumption."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE job_sessions SET current_step_index = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+            (step_index, job_id)
+        )
+        conn.commit()
+
+    def get_resumable_sessions(self) -> list[dict[str, Any]]:
+        """Retrieve sessions that crashed or were paused."""
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM job_sessions WHERE status IN ('failed', 'paused', 'cancelled', 'active') ORDER BY updated_at DESC"
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     # ── Worker Interface ──────────────────────────────────────────────────────
 
@@ -361,20 +420,27 @@ class LocalMessageBroker(MessageBroker):
         """
         conn = self._get_conn()
         cursor = conn.execute(
-            "SELECT id, payload_path FROM task_queue "
+            "SELECT id, payload_path, current_node, source_payload_path FROM task_queue "
             "WHERE job_id = ? AND lock_status = 'paused' LIMIT 1",
             (job_id,),
         )
         row = cursor.fetchone()
         if not row:
             return False
-        row_id = row[0]
-        payload = new_payload_path or row[1]
-        conn.execute(
-            "UPDATE task_queue SET lock_status = 'open', payload_path = ? WHERE id = ?",
-            (payload, row_id),
-        )
-        conn.commit()
+        row_id, old_payload, current_node, source_payload = row
+        payload = new_payload_path or old_payload
+        
+        if str(current_node).startswith("DET_PAUSE"):
+            # PAUSE nodes have no action other than pausing. 
+            # If we reopen them, they'll just pause again. Route them to the next node.
+            # In a macro flow, the Next_Node is END. For now, we assume END.
+            self.route_task(row_id, job_id, "END", payload, source_payload_path=source_payload)
+        else:
+            conn.execute(
+                "UPDATE task_queue SET lock_status = 'open', payload_path = ? WHERE id = ?",
+                (payload, row_id),
+            )
+            conn.commit()
         return True
 
     def has_paused_tasks(self, job_id: str) -> bool:
@@ -451,8 +517,13 @@ class LocalMessageBroker(MessageBroker):
         for node in starting_nodes:
             conn.execute(
                 "INSERT INTO task_queue "
-                "(job_id, payload_path, source_payload_path, current_node) "
-                "VALUES (?, ?, ?, ?)",
+                "(job_id, payload_path, source_payload_path, current_node, loop_iteration_count) "
+                "VALUES (?, ?, ?, ?, 0) "
+                "ON CONFLICT(job_id, current_node) DO UPDATE SET "
+                "lock_status='open', "
+                "payload_path=excluded.payload_path, "
+                "source_payload_path=excluded.source_payload_path, "
+                "loop_iteration_count=task_queue.loop_iteration_count + 1",
                 (job_id, payload_path, payload_path, node),
             )
         conn.commit()

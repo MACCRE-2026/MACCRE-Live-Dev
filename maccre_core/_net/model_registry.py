@@ -44,7 +44,9 @@ import time
 import urllib.error
 import urllib.request
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
+
+from maccre_core.orchestration.windows_vault import wipe_string
 
 logger = logging.getLogger("maccre_core")
 
@@ -230,8 +232,8 @@ class ModelRegistry:
         # → ModelSurface.IMAGE_GENERATION
     """
 
-    def __init__(self, api_key: str, ttl_seconds: int = 3600) -> None:
-        self._key = api_key.strip()
+    def __init__(self, key_provider: Callable[[], str | None], ttl_seconds: int = 3600) -> None:
+        self._key_provider = key_provider
         self._ttl = ttl_seconds
         self._ssl = ssl.create_default_context()
         self._lock = threading.Lock()
@@ -426,32 +428,40 @@ class ModelRegistry:
         """Paginate through GET /v1beta/models and return all model dicts."""
         models: list[dict[str, Any]] = []
         page_token: str | None = None
+        raw_key = self._key_provider()
+        try:
+            while True:
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models"
+                    "?pageSize=100"
+                )
+                if page_token:
+                    url += f"&pageToken={page_token}"
 
-        while True:
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models"
-                f"?key={self._key}&pageSize=100"
-            )
-            if page_token:
-                url += f"&pageToken={page_token}"
+                headers = {"User-Agent": "MACCREv2-ModelRegistry/6.0 (Python urllib)"}
+                if raw_key:
+                    headers["x-goog-api-key"] = raw_key
 
-            req = urllib.request.Request(
-                url, method="GET",
-                headers={"User-Agent": "MACCREv2-ModelRegistry/6.0 (Python urllib)"},
-            )
-            try:
-                with urllib.request.urlopen(req, context=self._ssl, timeout=30) as resp:
-                    result: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
-            except urllib.error.HTTPError as exc:
-                err_body = exc.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"HTTP {exc.code}: {err_body[:200]}") from exc
+                req = urllib.request.Request(
+                    url, method="GET",
+                    headers=headers,
+                )
+                try:
+                    with urllib.request.urlopen(req, context=self._ssl, timeout=30) as resp:
+                        result: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
+                except urllib.error.HTTPError as exc:
+                    err_body = exc.read().decode("utf-8", errors="replace")
+                    raise RuntimeError(f"HTTP {exc.code}: {err_body[:200]}") from exc
 
-            models.extend(result.get("models", []))
-            page_token = result.get("nextPageToken")
-            if not page_token:
-                break
+                models.extend(result.get("models", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
 
-        return models
+            return models
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     def _build_text_chain(self, model_name: str) -> list[str]:
         """Build a dynamic failover chain within TEXT_GENERATION surface.
@@ -501,13 +511,13 @@ _registry: ModelRegistry | None = None
 _registry_lock = threading.Lock()
 
 
-def get_registry(api_key: str) -> ModelRegistry:
+def get_registry(key_provider: Callable[[], str | None]) -> ModelRegistry:
     """Get or create the module-level ModelRegistry singleton."""
     global _registry  # noqa: PLW0603
     if _registry is None:
         with _registry_lock:
             if _registry is None:
-                _registry = ModelRegistry(api_key=api_key)
+                _registry = ModelRegistry(key_provider=key_provider)
     return _registry
 
 

@@ -80,14 +80,45 @@ class TopologyEngine(TopologyProvider):
         try:
             # 1. Load the Base Agent Configuration Matrix from the Agent Roster
             agent_roster: Dict[str, Dict[str, str]] = {}
-            roster_path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
+            from maccre_core.agent_library import get_agent_store # noqa: PLC0415
+            from pathlib import Path # noqa: PLC0415
             
+            # Derive project_id from csv_path (e.g. __DATACENTER/GLOBAL/02_Dynamic_Context/topology.csv -> GLOBAL)
+            try:
+                project_id = Path(self.csv_path).parent.parent.name
+            except Exception:
+                project_id = "GLOBAL"
+            
+            # Load from project library first, then global
+            store_project = get_agent_store(project_id)
+            for agent in store_project.load_all():
+                # Remap keys to match the capitalized legacy keys expected by the engine
+                agent_roster[agent["agent_name"]] = {
+                    "System_Prompt": agent.get("system_prompt", ""),
+                    "Model": agent.get("model", ""),
+                    "Tools_Allowed": agent.get("tools_allowed", "")
+                }
+                
+            if project_id.upper() != "GLOBAL":
+                store_global = get_agent_store("GLOBAL")
+                for agent in store_global.load_all():
+                    if agent["agent_name"] not in agent_roster:
+                        agent_roster[agent["agent_name"]] = {
+                            "System_Prompt": agent.get("system_prompt", ""),
+                            "Model": agent.get("model", ""),
+                            "Tools_Allowed": agent.get("tools_allowed", "")
+                        }
+            
+            # Fallback for legacy csv if needed (for older installations)
+            roster_path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
             if roster_path.exists():
                 with open(roster_path, "r", encoding="utf-8") as f:
                     reader = csv.DictReader(f)
                     for r in reader:
-                        agent_roster[r.get('Agent_Name', '').strip()] = dict(r)
-            
+                        a_name = r.get('Agent_Name', '').strip()
+                        if a_name and a_name not in agent_roster:
+                            agent_roster[a_name] = dict(r)
+                            
             # 2. Parse the Active Swarm Topology and merge overrides
             graph: Dict[str, Any] = {}
             with open(self.csv_path, mode='r', encoding='utf-8-sig') as f:
@@ -110,15 +141,15 @@ class TopologyEngine(TopologyProvider):
                     roster_profile: Dict[str, str] = agent_roster.get(agent_name, {})
 
                     # Merge Overrides with Roster Baselines
-                    base_prompt: str = roster_profile.get("System_Prompt", "")
+                    base_prompt: str = roster_profile.get("System_Prompt", roster_profile.get("system_prompt", ""))
                     topo_prompt: str = str(row_upper.get('INSTRUCTION_OVERRIDE', '')).strip()
                     final_prompt: str = topo_prompt if topo_prompt else base_prompt
 
-                    base_model: str = roster_profile.get("Model", "gemini-2.5-flash")
+                    base_model: str = roster_profile.get("Model", roster_profile.get("model", "gemini-2.5-flash"))
                     topo_model: str = str(row_upper.get('MODEL_OVERRIDE', '')).strip()
                     final_model: str = topo_model if topo_model else base_model
 
-                    base_tools: str = roster_profile.get("Tools_Allowed", "none")
+                    base_tools: str = roster_profile.get("Tools_Allowed", roster_profile.get("tools_allowed", "none"))
                     # Tool routing is exclusively owned by the roster's Tools_Allowed.
                     # Auto_Tool has been retired — roster is the single source of truth.
                     final_tools: str = base_tools
@@ -140,6 +171,7 @@ class TopologyEngine(TopologyProvider):
                         "agent_name": agent_name,
                         "max_recursion": max_rec,
                         "live_profile": str(row_upper.get('LIVE_PROFILE', '')).strip(),
+                        "payload_mode": str(row_upper.get('PAYLOAD_MODE', 'Unified Ledger')).strip() or 'Unified Ledger',
                         # ── Dialogue Mode ────────────────────────────────────────
                         # When set, swarm_worker fires DialogueRunner instead of
                         # the standard single-shot generate loop.

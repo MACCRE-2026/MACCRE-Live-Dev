@@ -1,0 +1,1 @@
+Research the US governments prohibition of Marijuana. Examine the threat vectors puportedly mitigated by prohibition and examine the actual effects of prohibition on the class of people that were supposed to be protected from the threat vectors.

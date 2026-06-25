@@ -73,6 +73,14 @@ class MessageBroker(abc.ABC):
     # ── Interrupt / Injection ─────────────────────────────────────────────────
 
     @abc.abstractmethod
+    def update_session_ledger(self, job_id: str, ledger_path: str) -> None:
+        """Update the current ledger path for a running session."""
+
+    @abc.abstractmethod
+    def update_session_step_index(self, job_id: str, step_index: int) -> None:
+        """Update the current topology step index for a running session."""
+
+    @abc.abstractmethod
     def inject_interrupt(self, job_id: str, override_text: str) -> None:
         """Push an urgent priority override into the running swarm."""
 

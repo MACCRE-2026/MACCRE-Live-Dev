@@ -53,8 +53,9 @@ import urllib.error
 import urllib.request
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
+from maccre_core.orchestration.windows_vault import wipe_string
 from maccre_core.utils.path_resolver import get_maccre_root
 
 logger = logging.getLogger("maccre_core")
@@ -145,11 +146,11 @@ class ModelSentinel:
 
     def __init__(
         self,
-        api_key: str,
+        key_provider: Callable[[], str | None],
         probe_interval_s: int = 1800,
         capability_cache_path: str = "",
     ) -> None:
-        self._key = api_key.strip()
+        self._key_provider = key_provider
         self._ssl = ssl.create_default_context()
         self._probe_interval = probe_interval_s
         self._cache_path = capability_cache_path or str(
@@ -333,28 +334,38 @@ class ModelSentinel:
     def _fetch_all_models(self) -> list[dict[str, Any]]:
         models: list[dict[str, Any]] = []
         page_token: str | None = None
-        while True:
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models"
-                f"?key={self._key}&pageSize=100"
-            )
-            if page_token:
-                url += f"&pageToken={page_token}"
-            req = urllib.request.Request(url, method="GET")
-            try:
-                with urllib.request.urlopen(req, context=self._ssl, timeout=30) as r:
-                    result: dict[str, Any] = json.loads(r.read().decode("utf-8"))
-            except urllib.error.HTTPError as exc:
-                logger.warning("[ModelSentinel] HTTP %d fetching model list.", exc.code)
-                return []
-            except Exception as exc:
-                logger.warning("[ModelSentinel] Fetch error: %s", exc)
-                return []
-            models.extend(result.get("models", []))
-            page_token = result.get("nextPageToken")
-            if not page_token:
-                break
-        return models
+        raw_key = self._key_provider()
+        try:
+            while True:
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models"
+                    "?pageSize=100"
+                )
+                if page_token:
+                    url += f"&pageToken={page_token}"
+                
+                headers = {}
+                if raw_key:
+                    headers["x-goog-api-key"] = raw_key
+                    
+                req = urllib.request.Request(url, method="GET", headers=headers)
+                try:
+                    with urllib.request.urlopen(req, context=self._ssl, timeout=30) as r:
+                        result: dict[str, Any] = json.loads(r.read().decode("utf-8"))
+                except urllib.error.HTTPError as exc:
+                    logger.warning("[ModelSentinel] HTTP %d fetching model list.", exc.code)
+                    return []
+                except Exception as exc:
+                    logger.warning("[ModelSentinel] Fetch error: %s", exc)
+                    return []
+                models.extend(result.get("models", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
+            return models
+        finally:
+            if raw_key:
+                wipe_string(raw_key)
 
     def _get_or_create_health(self, model_name: str) -> ModelHealth:
         """Must be called with self._lock held."""
@@ -414,13 +425,13 @@ _sentinel: ModelSentinel | None = None
 _sentinel_lock = threading.Lock()
 
 
-def get_sentinel(api_key: str, probe_interval_s: int = 1800) -> ModelSentinel:
+def get_sentinel(key_provider: Callable[[], str | None], probe_interval_s: int = 1800) -> ModelSentinel:
     """Get or create the module-level ModelSentinel singleton."""
     global _sentinel  # noqa: PLW0603
     if _sentinel is None:
         with _sentinel_lock:
             if _sentinel is None:
-                _sentinel = ModelSentinel(api_key=api_key, probe_interval_s=probe_interval_s)
+                _sentinel = ModelSentinel(key_provider=key_provider, probe_interval_s=probe_interval_s)
     return _sentinel
 
 

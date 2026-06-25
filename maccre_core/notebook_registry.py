@@ -24,8 +24,10 @@ import sqlite3
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+import uuid
 
 from maccre_core.utils.path_resolver import get_maccre_root
+from maccre_core.memory.knowledge_store import get_knowledge_store, PinRecord
 
 # ── Path helpers ──────────────────────────────────────────────────────────────
 
@@ -203,6 +205,43 @@ def ingest_to_notebook(notebook_name: str, project_id: str, files: list[str]) ->
         try:
             shutil.copy2(src, dest)
             ingested_paths.append(str(dest))
+            
+            # --- PHASE 2 UNIFIED FILE CABINET ROUTING ---
+            
+            # 1. Select the correct parser
+            fname = dest.name.lower()
+            if "aistudio" in fname:
+                from maccre_core.ingestion.ai_studio_parser import AIStudioParser
+                parser = AIStudioParser(pid)
+            elif "gemini" in fname:
+                from maccre_core.ingestion.gemini_parser import GeminiParser
+                parser = GeminiParser(pid)
+            else:
+                from maccre_core.ingestion.antigravity_parser import AntigravityParser
+                parser = AntigravityParser(pid)
+                
+            # 2. Parse the file into standardized documents
+            documents = parser.parse_file(dest)
+            
+            # 3. Route parsed artifacts to 04_Code_Artifacts directory isolation
+            artifacts_dir = root / "__DATACENTER" / pid / "04_Code_Artifacts" / "notebooks" / notebook_name
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            parsed_file = artifacts_dir / f"{dest.stem}_parsed.json"
+            parsed_file.write_text(json.dumps(documents, indent=2), encoding="utf-8")
+            
+            # 4. Insert into Sovereign SQLite Memory Separation
+            store = get_knowledge_store(pid)
+            try:
+                for doc in documents:
+                    record = PinRecord(
+                        doc_id=str(uuid.uuid4()),
+                        text=doc.get("content", ""),
+                        metadata=doc.get("metadata", {})
+                    )
+                    store.upsert(f"notebook_{notebook_name}", record)
+            finally:
+                store.close()
+                
         except Exception:
             pass # Skip unreadable files
             
