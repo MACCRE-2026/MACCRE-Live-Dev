@@ -851,8 +851,7 @@ FlowExecutionPanel {
 
 #fh-canonize-btn {
     margin-left: 1;
-}
-\n
+
 /* ── Flow Selection Row (New UI) ─────────────────────────────────────────── */
 #flow-select-row {
     height: auto;
