@@ -418,6 +418,7 @@ FlowExecutionPanel {
     width: 1fr;
     height: 1fr;
     padding: 0 1;
+    overflow-y: auto;
 }
 
 #flow-execution-top {
@@ -442,7 +443,7 @@ FlowExecutionPanel {
 }
 
 #flow-monitor-section {
-    height: 1fr;
+    height: 25;
     padding: 0;
 }
 
@@ -564,24 +565,11 @@ FlowExecutionPanel {
 
 
 
-#flow-info-row {
-    height: 1fr;
-    padding: 1 0;
-}
 
-#flow-macro-info, #flow-agent-info {
-    width: 1fr;
-    height: 1fr;
-    border: solid #30363d;
-    padding: 0 1;
-    overflow-y: auto;
-}
 
-.info-panel-title {
-    color: #58a6ff;
-    text-style: bold;
-    padding: 0 0 1 0;
-}
+
+
+
 
 .info-panel-body {
     height: 1fr;
@@ -869,7 +857,7 @@ FlowExecutionPanel {
 }
 
 .info-panel-container {
-    height: 10;
+    height: 20;
     border: round #30363d;
     padding: 1;
     overflow-y: auto;
