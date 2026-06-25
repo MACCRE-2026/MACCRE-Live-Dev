@@ -418,11 +418,11 @@ FlowExecutionPanel {
     width: 1fr;
     height: 1fr;
     padding: 0 1;
+    overflow-y: auto;
 }
 
 #flow-execution-top {
     height: auto;
-    max-height: 12;
     padding: 0;
 }
 
@@ -443,7 +443,8 @@ FlowExecutionPanel {
 }
 
 #flow-monitor-section {
-    height: 1fr;
+    height: auto;
+    min-height: 20;
     padding: 0;
 }
 
