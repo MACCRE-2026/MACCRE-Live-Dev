@@ -156,6 +156,20 @@ class SQLiteAgentStore(AgentStore):
             conn.close()
         return [json.loads(r[0]) for r in rows]
 
+    def get(self, agent_name: str) -> dict[str, Any]:
+        """Retrieve a specific agent by name."""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT agent_json FROM agent_library WHERE agent_name = ?", (agent_name.strip(),)
+            ).fetchone()
+        finally:
+            conn.close()
+        
+        if not row:
+            raise KeyError(f"Agent '{agent_name}' not found in AgentStore.")
+        return json.loads(row[0])
+
     def get_names(self) -> list[str]:
         conn = self._conn()
         try:

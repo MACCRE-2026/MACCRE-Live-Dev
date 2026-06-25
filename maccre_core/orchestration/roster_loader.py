@@ -65,43 +65,35 @@ def _read_roster() -> list[dict[str, str]]:
 
 
 def load_agent_from_roster(agent_name: str) -> dict[str, Any]:
-    """Load an agent's full config from the Global agent roster.
-
-    Returns dict with keys: name, model, system_prompt, tools_allowed, description.
-    Raises KeyError if agent not found.
+    """Load an agent's full config from the Global agent store (redirected from roster).
 
     Args:
-        agent_name: Exact agent name as it appears in the Agent_Name column.
+        agent_name: Exact agent name.
 
     Returns:
         Dict with keys: name, model, system_prompt, tools_allowed, description.
 
     Raises:
-        KeyError: If the agent_name is not found in the roster.
+        KeyError: If the agent_name is not found.
     """
-    rows = _read_roster()
-    for row in rows:
-        if row.get("Agent_Name", "").strip() == agent_name.strip():
-            logger.info("[roster_loader] Loaded agent '%s' from roster", agent_name)
-            return {
-                "name": row.get("Agent_Name", "").strip(),
-                "model": row.get("Model", "").strip(),
-                "system_prompt": row.get("System_Prompt", "").strip(),
-                "tools_allowed": row.get("Tools_Allowed", "").strip(),
-                "description": row.get("Description", "").strip(),
-            }
-    raise KeyError(f"Agent '{agent_name}' not found in roster at {_roster_path()}")
+    from maccre_core.agent_library import get_agent_store
+    agent = get_agent_store("GLOBAL").get(agent_name)
+    logger.info("[roster_loader] Loaded agent '%s' from SQLiteAgentStore", agent_name)
+    
+    # Translate from library format to roster format if needed
+    return {
+        "name": agent.get("agent_name", ""),
+        "model": agent.get("model", ""),
+        "system_prompt": agent.get("system_prompt", ""),
+        "tools_allowed": agent.get("tools_allowed", ""),
+        "description": agent.get("description", ""),
+    }
 
 
 def list_roster_agents() -> list[str]:
-    """Return sorted list of all agent names in the Global roster.
-
-    Returns:
-        Alphabetically sorted list of agent name strings.
-    """
-    rows = _read_roster()
-    names = [row.get("Agent_Name", "").strip() for row in rows if row.get("Agent_Name", "").strip()]
-    return sorted(set(names))
+    """Return sorted list of all agent names in the Global store."""
+    from maccre_core.agent_library import get_agent_store
+    return get_agent_store("GLOBAL").get_names()
 
 
 def validate_agents_exist(agent_names: list[str]) -> list[str]:

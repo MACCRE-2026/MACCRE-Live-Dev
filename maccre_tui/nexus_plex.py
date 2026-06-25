@@ -855,7 +855,7 @@ class ProjectControls(Horizontal):
 class AgentBuilderPanel(Vertical):
     """Panel to define and mint new agents into the roster."""
     def compose(self) -> ComposeResult:
-        yield Label("Build an Agent", classes="pane-title")
+        yield Label("Agent Builder", classes="pane-title")
         yield Button("Edit Agent", variant="warning", id="btn-open-edit-agent", classes="top-edit-btn")
         yield Button("Edit MacroNode", variant="warning", id="btn-open-edit-macro", classes="top-edit-btn")
         yield Label("Agent Name")
@@ -1352,14 +1352,14 @@ class NexusPlex(App[None]):
         # Populate inline flow editor selects
         try:
             from maccre_core.macronode_registry import get_macronode_store
-            from maccre_core.orchestration.roster_loader import load_agent_names_from_library as loader_func
+            from maccre_core.agent_library import get_agent_store
             store = get_macronode_store()
             macros = store.list_all()
             macro_sel = self.query_one("#macro-select", Select)
             if macro_sel:
                 macro_sel.set_options([(m, m) for m in macros])
             
-            agents = loader_func(self.active_project)
+            agents = get_agent_store("GLOBAL").get_names()
             agent_sel = self.query_one("#agent-select", Select)
             if agent_sel:
                 agent_sel.set_options([(a, a) for a in agents])
@@ -1368,8 +1368,8 @@ class NexusPlex(App[None]):
             special_sel = self.query_one("#special-select", Select)
             if special_sel:
                 special_sel.set_options([(s, s) for s in special])
-        except Exception:
-            pass
+        except Exception as e:
+            self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
 
 
     def on_unmount(self) -> None:
@@ -1688,7 +1688,7 @@ class NexusPlex(App[None]):
         }
 
         # Ensure we're hitting the DB
-        store = get_agent_store(self.active_project)
+        store = get_agent_store("GLOBAL")
         
         def commit_save():
             try:
@@ -1706,7 +1706,7 @@ class NexusPlex(App[None]):
             except Exception as e:
                 self.write_nexus_log(f"[red]Error saving agent: {e}[/red]")
 
-        existing = load_agent_names_from_library(self.active_project)
+        existing = get_agent_store("GLOBAL").get_names()
         if name in existing:
             def do_save(proceed: bool | None):
                 if proceed:

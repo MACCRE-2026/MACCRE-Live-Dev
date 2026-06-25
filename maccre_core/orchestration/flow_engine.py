@@ -741,8 +741,52 @@ class FlowRunner:
                 topo_dst = session_dir / "topology_snapshot.csv"
                 shutil.copy2(topo_src, topo_dst)
                 logger.info(f"[FLOW_ENGINE] Saved final topology snapshot to {topo_dst}")
+                
+                # --- AS-WRAPPED ARTIFACTS ---
+                from maccre_core.macronode_registry import get_macronode_store
+                from maccre_core.agent_library import get_agent_store
+                import json
+                import csv
+                
+                macronode_store = get_macronode_store()
+                agent_store = get_agent_store("GLOBAL")
+                
+                as_wrapped = {
+                    "job_id": job_id,
+                    "macronodes": {},
+                    "agents": {}
+                }
+                
+                used_agents = set()
+                with open(topo_src, newline="", encoding="utf-8") as f:
+                    for row in csv.reader(f):
+                        if len(row) > 1 and row[1].strip():
+                            used_agents.add(row[1].strip())
+                            
+                for step in steps:
+                    m_name = step.macronode_name
+                    if m_name not in as_wrapped["macronodes"]:
+                        try:
+                            as_wrapped["macronodes"][m_name] = macronode_store.load(m_name)
+                        except Exception:
+                            as_wrapped["macronodes"][m_name] = None
+                            
+                special_nodes = {"MANUAL", "DET_PAUSE", "DET_ANCHOR", "DET_RECURSION", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"}
+                for a_name in used_agents:
+                    if a_name.upper() in special_nodes:
+                        continue
+                    try:
+                        as_wrapped["agents"][a_name] = agent_store.get(a_name)
+                    except Exception:
+                        as_wrapped["agents"][a_name] = None
+                        
+                wrapped_dst = session_dir / "as_wrapped_topology.json"
+                with open(wrapped_dst, "w", encoding="utf-8") as f:
+                    json.dump(as_wrapped, f, indent=4)
+                logger.info(f"[FLOW_ENGINE] Saved as-wrapped topology to {wrapped_dst}")
+                
         except Exception as e:
-            logger.warning(f"[FLOW_ENGINE] Could not save topology snapshot: {e}")
+            logger.warning(f"[FLOW_ENGINE] Could not save topology snapshots: {e}")
 
         # ── 10. Persist Flow History ───────────────────────────────────────────
         try:

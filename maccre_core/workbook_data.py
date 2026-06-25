@@ -102,19 +102,9 @@ def load_agent_roster_csv(project_id: str = "") -> list[dict[str, str]]:
 
 
 def load_agent_names_from_library(project_id: str = "") -> list[str]:
-    """Return agent names from the project's agent_library.db + legacy agent_roster.csv."""
+    """Return agent names from the GLOBAL SQLite agent_library.db."""
     from maccre_core.agent_library import get_agent_store
-    names = get_agent_store(project_id).get_names()
-    if not names and project_id and project_id.upper() != _GLOBAL:
-        names = get_agent_store(_GLOBAL).get_names()
-        
-    # Also load legacy migrated agents
-    for row in load_agent_roster_csv(project_id):
-        n = str(row.get("Agent_Name") or row.get("AGENT_NAME") or "").strip()
-        if n and n not in names:
-            names.append(n)
-            
-    return sorted(names)
+    return get_agent_store("GLOBAL").get_names()
 
 
 def load_topology_names_from_library(project_id: str = "") -> list[str]:
