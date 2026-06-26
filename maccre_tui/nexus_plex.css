@@ -818,6 +818,27 @@ FlowExecutionPanel {
     border: thick #1f6feb;
 }
 
+#context-inject-dialog {
+    width: 90%;
+    height: 90%;
+    padding: 1 2;
+    background: #0d1117;
+    border: thick #1f6feb;
+}
+
+#hitl-ledger-content {
+    height: 1fr;
+    border: round #30363d;
+    background: #161b22;
+    margin-bottom: 1;
+}
+
+#hitl-header-row {
+    height: auto;
+    margin-bottom: 1;
+    align: left middle;
+}
+
 #flow-history-title {
     text-style: bold;
     color: #58a6ff;

@@ -607,7 +607,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     _extras_path = get_datacenter_path("02_Dynamic_Context", "agent_extras.json")
                     if _extras_path.exists():
                         _extras: dict[str, Any] = json.loads(_extras_path.read_text(encoding="utf-8"))
-                        _agent_name = str(node_config.get("agent", ""))
+                        _agent_name = agent_name
                         _agent_extra = _extras.get(_agent_name, {})
                         if _agent_extra.get("search_grounding") and "google_search" not in tools_str:
                             tools_str = f"{tools_str}|google_search" if tools_str.lower() != "none" else "google_search"
