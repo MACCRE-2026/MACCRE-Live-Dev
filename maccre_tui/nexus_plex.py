@@ -2129,10 +2129,21 @@ class NexusPlex(App[None]):
             from maccre_core.macronode_registry import get_macronode_store
             store = get_macronode_store()
             macro_def = store.load(node.macronode_name)
+            
+            # Extract from topology rows
             for row in macro_def.get("topology_rows", []):
                 aname = str(row.get("Agent_Name", ""))
                 for slot_key, slot_val in getattr(node, "agent_mapping", {}).items():
                     if aname == f"{{{slot_key}}}" or aname == slot_key:
+                        aname = slot_val
+                if aname and not aname.startswith("{") and aname.upper() != "NONE" and aname != "Select.NULL":
+                    agents_in_node.add(aname)
+                    
+            # Extract from agent slots (covers template macros where secondary agents aren't explicit rows)
+            for slot in macro_def.get("agent_slots", []):
+                aname = slot
+                for slot_key, slot_val in getattr(node, "agent_mapping", {}).items():
+                    if aname == slot_key:
                         aname = slot_val
                 if aname and not aname.startswith("{") and aname.upper() != "NONE" and aname != "Select.NULL":
                     agents_in_node.add(aname)
@@ -2376,7 +2387,6 @@ class NexusPlex(App[None]):
         self.is_session_active = True
         self.query_one("#btn-launch-flow", Button).disabled = True
         self.query_one("#btn-stop-flow", Button).disabled = False
-        self.query_one("#btn-flow-editor", Button).disabled = True
         self.query_one("#btn-create-payload", Button).disabled = True
         
         self.write_agent_log(
@@ -2466,7 +2476,6 @@ class NexusPlex(App[None]):
             
         self.query_one("#btn-launch-flow", Button).disabled = False
         self.query_one("#btn-stop-flow", Button).disabled = True
-        self.query_one("#btn-flow-editor", Button).disabled = False
         self.query_one("#btn-create-payload", Button).disabled = False
         self._set_vcr_state("idle")
         self._exit_paused_state()
