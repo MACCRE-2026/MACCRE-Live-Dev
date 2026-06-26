@@ -113,7 +113,7 @@ class UniversalSwarmWorker:
         card_path = get_datacenter_path("02_Dynamic_Context", card_str)
         if not card_path.exists():
             # Short text that isn't a valid card name — warn and return as-is
-            logger.warning(f"[{AGENT_ID}] WARNING: Missing ROM Cartridge -> {card_str} (using as inline instruction)")
+            logger.debug(f"[{AGENT_ID}] Missing ROM Cartridge -> {card_str} (using as inline instruction)")
             return str(card_name).strip()
 
         try:

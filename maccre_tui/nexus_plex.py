@@ -172,8 +172,15 @@ class OverwriteConfirmModal(ModalScreen[bool]):
 
 
 class ContextInjectModalScreen(ModalScreen[str]):
+    def __init__(self, current_payload: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self.current_payload = current_payload
+
     def compose(self) -> ComposeResult:
         with Container(classes="dialog", id="context-inject-dialog"):
+            yield Label("Unified Ledger Context (Up to this point):")
+            with Container(id="hitl-ledger-scroll"):
+                yield Static(self.current_payload, id="hitl-ledger-content")
             yield Label("Inject Context")
             yield TextArea(id="context-text-area")
             with Horizontal(classes="dialog-buttons"):
@@ -1370,6 +1377,8 @@ class NexusPlex(App[None]):
                 special_sel.set_options([(s, s) for s in special])
         except Exception as e:
             self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
+            
+        self._load_autosave_flow()
 
 
     def on_unmount(self) -> None:
@@ -2100,6 +2109,7 @@ class NexusPlex(App[None]):
             
         # Batch mount the new widgets
         container.mount(*widgets_to_mount)
+        self._save_autosave_flow()
 
     @on(Button.Pressed, ".active-node-btn")
     def action_configure_node(self, event: Button.Pressed) -> None:
@@ -2148,7 +2158,12 @@ class NexusPlex(App[None]):
                 if aname and not aname.startswith("{") and aname.upper() != "NONE" and aname != "Select.NULL":
                     agents_in_node.add(aname)
         except Exception:
-            pass
+            try:
+                from maccre_core.agent_library import get_agent_store
+                if get_agent_store("GLOBAL").get_profile(node.macronode_name):
+                    agents_in_node.add(node.macronode_name)
+            except Exception:
+                pass
 
         self.push_screen(NodeConfigModal(
             node_name=node.macronode_name,
@@ -2499,7 +2514,7 @@ class NexusPlex(App[None]):
             else:
                 self.write_agent_log("[dim]HITL modal dismissed — flow remains paused. Use ▶ to resume.[/dim]")
 
-        self.push_screen(ContextInjectModalScreen(), _on_hitl_inject)
+        self.push_screen(ContextInjectModalScreen(current_payload=payload), _on_hitl_inject)
 
     def _hitl_resume_with_context(self, job_id: str, context: str) -> None:
         """Write injected context to a payload file and resume the paused broker task."""
@@ -2512,8 +2527,8 @@ class NexusPlex(App[None]):
         hitl_payload_path.write_text(context, encoding="utf-8")
 
         # Resume the paused task with the new payload
-        from maccre_core.orchestration.local_broker import LocalBroker  # noqa: PLC0415
-        broker = LocalBroker()
+        from maccre_core.orchestration.local_broker import LocalMessageBroker  # noqa: PLC0415
+        broker = LocalMessageBroker()
         resumed = broker.resume_paused_task(job_id, str(hitl_payload_path))
 
         if resumed:
