@@ -1671,7 +1671,33 @@ class NexusPlex(App[None]):
         self.push_screen(SystemInstructionsModal(self.system_instructions_buffer), save_instructions)
 
     def refresh_agent_dropdown(self) -> None:
-        pass
+        try:
+            from maccre_core.agent_library import get_agent_store
+            agents = get_agent_store("GLOBAL").get_names()
+            
+            try:
+                agent_sel = self.query_one("#agent-select", Select)
+                if agent_sel:
+                    # Save current value if it exists
+                    current_val = agent_sel.value
+                    agent_sel.set_options([(a, a) for a in agents])
+                    if current_val in agents:
+                        agent_sel.value = current_val
+            except Exception:
+                pass
+
+            try:
+                edit_agent_sel = self.query_one("#edit-agent-select", Select)
+                if edit_agent_sel:
+                    current_edit_val = edit_agent_sel.value
+                    edit_agent_sel.set_options([(a, a) for a in agents])
+                    if current_edit_val in agents:
+                        edit_agent_sel.value = current_edit_val
+            except Exception:
+                pass
+                
+        except Exception as e:
+            self.write_nexus_log(f"[red]Error refreshing agent dropdowns: {e}[/red]")
 
     @on(Button.Pressed, "#btn-save-agent")
     def action_save_agent(self) -> None:
@@ -2191,7 +2217,7 @@ class NexusPlex(App[None]):
         except Exception:
             try:
                 from maccre_core.agent_library import get_agent_store
-                if get_agent_store("GLOBAL").get_profile(node.macronode_name):
+                if get_agent_store("GLOBAL").get(node.macronode_name):
                     agents_in_node.add(node.macronode_name)
             except Exception:
                 pass
