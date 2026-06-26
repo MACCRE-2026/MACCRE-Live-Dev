@@ -178,15 +178,40 @@ class ContextInjectModalScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         with Container(classes="dialog", id="context-inject-dialog"):
-            yield Label("Unified Ledger Context (Up to this point):")
-            with Container(id="hitl-ledger-scroll"):
-                yield Static(self.current_payload, id="hitl-ledger-content")
+            with Horizontal(id="hitl-header-row"):
+                yield Label("Unified Ledger Context (Up to this point):", id="hitl-ledger-title")
+                yield Button("Copy Ledger", id="btn-copy-hitl-ledger", variant="default", classes="copy-btn-small")
+            
+            yield RichLog(id="hitl-ledger-content", wrap=True, highlight=True, markup=True)
             yield Label("Inject Context")
             yield TextArea(id="context-text-area")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", variant="error", id="cancel-btn")
                 yield Button("Paste from Clipboard", variant="default", id="paste-btn")
                 yield Button("Send", variant="success", id="send-btn")
+
+    def on_mount(self) -> None:
+        log_widget = self.query_one("#hitl-ledger-content", RichLog)
+        payload_content = self.current_payload
+        try:
+            import os
+            if os.path.exists(self.current_payload) and os.path.isfile(self.current_payload):
+                with open(self.current_payload, "r", encoding="utf-8") as f:
+                    payload_content = f.read()
+        except Exception:
+            pass
+        log_widget.write(payload_content)
+
+    @on(Button.Pressed, "#btn-copy-hitl-ledger")
+    def copy_hitl_ledger(self):
+        try:
+            import pyperclip
+            log_widget = self.query_one("#hitl-ledger-content", RichLog)
+            text_lines = [line.plain for line in log_widget.lines]
+            pyperclip.copy("\n".join(text_lines))
+            self.notify("Copied Ledger to clipboard!")
+        except Exception as e:
+            self.notify(f"Failed to copy to clipboard: {e}", severity="error")
 
     @on(Button.Pressed, "#cancel-btn")
     def cancel(self):
@@ -1004,7 +1029,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
     }
     #node-config-container {
         width: 70%;
-        height: 80%;
+        height: 90%;
         border: solid $accent;
         background: $surface;
         padding: 1 2;
@@ -1029,6 +1054,10 @@ class NodeConfigModal(ModalScreen[dict | None]):
     #cfg-custom-instructions {
         height: 1fr;
         border: solid $panel;
+    }
+    #cfg-agent-tools-container {
+        height: 12;
+        margin-bottom: 1;
     }
     """
     
@@ -1319,11 +1348,13 @@ class NexusPlex(App[None]):
         self.active_project = project_name
         label = self.query_one("#active-project-label", Static)
         
+        display_name = project_name if project_name else "SET ACTIVE PROJECT"
+        
         import threading
         if self._thread_id == threading.get_ident():
-            label.update(f"Project: [bold cyan]{project_name}[/bold cyan]")
+            label.update(f"Project: [bold cyan]{display_name}[/bold cyan]")
         else:
-            self.call_from_thread(label.update, f"Project: [bold cyan]{project_name}[/bold cyan]")
+            self.call_from_thread(label.update, f"Project: [bold cyan]{display_name}[/bold cyan]")
             
         self.refresh_agent_dropdown()
 
@@ -1354,7 +1385,7 @@ class NexusPlex(App[None]):
         except Exception as e:
             self.write_nexus_log(f"[red]Error loading models: {e}[/red]")
 
-        self.set_active_project("GLOBAL")
+        self.set_active_project("")
 
         # Populate inline flow editor selects
         try:
@@ -2316,7 +2347,11 @@ class NexusPlex(App[None]):
                 "or launching with empty payload.[/yellow]"
             )
 
-        # ── Pre-Flight Validation Gate ────────────────────────────────────────
+        if not self.active_project or self.active_project == "SET ACTIVE PROJECT":
+            self.write_agent_log("[red]Please select or create an active project before launching.[/red]")
+            return
+            
+        # Check pre-flight conditions Gate ────────────────────────────────────────
         self.write_agent_log("\n[bold cyan]Running pre-flight checks...[/bold cyan]")
         try:
             from maccre_core.orchestration.flow_engine import FlowRunner  # noqa: PLC0415
@@ -2711,6 +2746,34 @@ class NexusPlex(App[None]):
         inp.value = ""
         self.write_agent_log(f"\n[bold green]You (Context Inject):[/bold green] {msg}")
         self.write_agent_log("[dim italic]Note: Mid-flow context injection requires Swarm Worker queue injection (Phase 5).[/dim italic]")
+
+    def _save_autosave_flow(self) -> None:
+        """Saves the current flow sequence to a quick-recovery autosave file."""
+        import json
+        from maccre_core.utils.path_resolver import get_datacenter_path
+        autosave_path = get_datacenter_path("GLOBAL", "autosave_flow.json")
+        try:
+            steps_data = [s.to_dict() for s in self.active_flow_steps]
+            autosave_path.parent.mkdir(parents=True, exist_ok=True)
+            autosave_path.write_text(json.dumps(steps_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _load_autosave_flow(self) -> None:
+        """Loads the flow sequence from the quick-recovery autosave file."""
+        import json
+        from maccre_core.orchestration.flow_engine import FlowStep
+        from maccre_core.utils.path_resolver import get_datacenter_path
+        autosave_path = get_datacenter_path("GLOBAL", "autosave_flow.json")
+        if not autosave_path.exists():
+            return
+        try:
+            steps_data = json.loads(autosave_path.read_text(encoding="utf-8"))
+            self.active_flow_steps = [FlowStep.from_dict(d) for d in steps_data]
+            self._refresh_active_flow_sequence()
+            self.write_nexus_log("[dim]Autosaved flow sequence recovered.[/dim]")
+        except Exception:
+            pass
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 

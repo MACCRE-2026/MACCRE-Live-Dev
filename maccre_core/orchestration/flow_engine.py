@@ -710,6 +710,15 @@ class FlowRunner:
                 # If we got here and it is not cancelled and did not exception, it completed successfully
                 broker.update_session_status(job_id, "completed")
 
+        # ── 9. Generate Unified Session Ledger ────────────────────────────────
+        try:
+            self.active_flow_steps = steps
+            _ul_path = generate_unified_ledger(job_id, steps)
+            logger.info(f"[FLOW_ENGINE] Wrote final unified ledger to {_ul_path}")
+            current_payload = str(_ul_path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[FLOW_ENGINE] Could not assemble unified ledger: {e}")
+
         logger.info(f"\n[FLOW_ENGINE] Linear Flow Complete. Final artifact: {current_payload}")
 
         # ── 8. Cleanup Orphaned Tasks ────────────────────────────────────────────
@@ -723,13 +732,7 @@ class FlowRunner:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[FLOW_ENGINE] Could not clean up orphaned tasks: {e}")
 
-        # ── 9. Generate Unified Session Ledger ────────────────────────────────
-        try:
-            self.active_flow_steps = steps
-            _ul_path = generate_unified_ledger(job_id, steps)
-            logger.info(f"[FLOW_ENGINE] Wrote final unified ledger to {_ul_path}")
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[FLOW_ENGINE] Could not assemble unified ledger: {e}")
+        # (Unified Ledger generation moved above so it can be returned as the Final Artifact)
 
         # ── 9b. Final Topology Snapshot ───────────────────────────────────────
         try:
@@ -873,8 +876,8 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
         for m in node_meta:
             if m.get("current_node", "") in fname:
                 return m.get("completed_at", "") or ""
-        # Fallback to mtime isoformat if not in db
-        return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        # Fallback to mtime if not in db. Use SQLite datetime format so string-sort matches.
+        return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         
     ledger_entries.sort(key=get_ledger_sort_key)
     tool_audits.sort(key=get_ledger_sort_key)
