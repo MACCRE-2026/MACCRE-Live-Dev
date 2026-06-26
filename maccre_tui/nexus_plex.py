@@ -1968,13 +1968,13 @@ class NexusPlex(App[None]):
     @on(Button.Pressed, "#btn-add-macro")
     def add_macro_to_flow(self) -> None:
         sel = self.query_one("#macro-select", Select)
-        if not sel.value or sel.value == Select.BLANK:
+        if not sel.value or sel.value == Select.BLANK or str(sel.value) == "Select.NULL":
             return
         name = str(sel.value)
         mapping = {}
         # Try to resolve agents if agent_select is populated
         agent_sel = self.query_one("#agent-select", Select)
-        if agent_sel.value and agent_sel.value != Select.BLANK:
+        if agent_sel.value and agent_sel.value != Select.BLANK and str(agent_sel.value) != "Select.NULL":
             selected_agent = str(agent_sel.value)
             try:
                 from maccre_core.macronode_registry import get_macronode_store
@@ -1996,7 +1996,7 @@ class NexusPlex(App[None]):
     @on(Button.Pressed, "#btn-add-agent")
     def add_agent_to_flow(self) -> None:
         sel = self.query_one("#agent-select", Select)
-        if not sel.value or sel.value == Select.BLANK:
+        if not sel.value or sel.value == Select.BLANK or str(sel.value) == "Select.NULL":
             return
         name = str(sel.value)
         from maccre_core.orchestration.flow_engine import FlowStep
@@ -2009,7 +2009,7 @@ class NexusPlex(App[None]):
     @on(Button.Pressed, "#btn-add-special")
     def add_special_to_flow(self) -> None:
         sel = self.query_one("#special-select", Select)
-        if not sel.value or sel.value == Select.BLANK:
+        if not sel.value or sel.value == Select.BLANK or str(sel.value) == "Select.NULL":
             return
         name = str(sel.value)
         from maccre_core.orchestration.flow_engine import FlowStep
@@ -2134,7 +2134,7 @@ class NexusPlex(App[None]):
                 for slot_key, slot_val in getattr(node, "agent_mapping", {}).items():
                     if aname == f"{{{slot_key}}}" or aname == slot_key:
                         aname = slot_val
-                if aname and not aname.startswith("{") and aname.upper() != "NONE":
+                if aname and not aname.startswith("{") and aname.upper() != "NONE" and aname != "Select.NULL":
                     agents_in_node.add(aname)
         except Exception:
             pass

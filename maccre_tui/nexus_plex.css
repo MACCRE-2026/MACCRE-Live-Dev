@@ -437,12 +437,18 @@ FlowExecutionPanel {
 
 #active-flow-sequence {
     width: 1fr;
-    height: 5;
+    height: 7;
     padding: 1 1;
     color: #58a6ff;
-    overflow-x: auto;
+    overflow-x: scroll;
     border: solid #30363d;
     background: #0d1117;
+}
+
+.flow-arrow-dim {
+    width: auto;
+    color: #8b949e;
+    padding: 1 1;
 }
 
 .active-node-btn {
@@ -879,6 +885,7 @@ FlowExecutionPanel {
 
 .info-panel-body {
     color: #c9d1d9;
+    height: auto;
 }
 
 .flow-add-btn {
