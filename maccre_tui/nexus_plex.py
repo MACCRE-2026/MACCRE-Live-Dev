@@ -2038,19 +2038,9 @@ class NexusPlex(App[None]):
             return
         name = str(sel.value)
         mapping = {}
-        # Try to resolve agents if agent_select is populated
-        agent_sel = self.query_one("#agent-select", Select)
-        if agent_sel.value and agent_sel.value != Select.BLANK and str(agent_sel.value) != "Select.NULL":
-            selected_agent = str(agent_sel.value)
-            try:
-                from maccre_core.macronode_registry import get_macronode_store
-                store = get_macronode_store()
-                macro_def = store.load(name)
-                slots = macro_def.get("agent_slots", [])
-                for slot in slots:
-                    mapping[slot] = selected_agent
-            except Exception:
-                pass
+        # We no longer aggressively overwrite all template slots with the single agent
+        # selected in the #agent-select dropdown. The default agent names defined 
+        # in the template will be preserved.
 
         from maccre_core.orchestration.flow_engine import FlowStep
         step = FlowStep(macronode_name=name, agent_mapping=mapping)
