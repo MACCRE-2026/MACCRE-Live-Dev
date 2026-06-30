@@ -136,24 +136,56 @@ def _ro(db: Path) -> Generator[sqlite3.Connection | None, None, None]:
         conn.close()
 
 
-def _fetch_thoughts(job_id: str, since: int) -> list[tuple[int, str, str, str]]:
-    with _ro(_telemetry("thoughts.db")) as conn:
-        if conn is None:
-            return []
+def _fetch_thoughts(job_id: str, project: str, since: int) -> list[tuple[int, str, str, str]]:
+    job_dir = _find_root() / "__DATACENTER" / project / "03_Agent_Ledgers" / f"job_{job_id}"
+    if not job_dir.exists():
+        return []
+
+    import re
+    from datetime import datetime, timezone
+    _SCRATCHPAD_PAT = re.compile(r"<scratchpad(?:.*?timestamp=\"([^\"]+)\")?[^>]*>(.*?)</scratchpad>", re.DOTALL)
+    
+    thoughts = []
+    for md_file in job_dir.glob("thoughts_and_tools_*.md"):
         try:
-            rows = conn.execute(
-                "SELECT id, timestamp, source_node, scratchpad_content "
-                "FROM thoughts WHERE session_id=? AND id>? ORDER BY id",
-                (job_id, since),
-            ).fetchall()
-            return [(r["id"], (r["timestamp"] or "")[:8], r["source_node"] or "?", r["scratchpad_content"][:200])
-                    for r in rows]
+            content = md_file.read_text(encoding="utf-8", errors="replace")
+            # Extract agent name from filename: thoughts_and_tools_{agent}_{row_id}.md
+            parts = md_file.stem.split("_")
+            agent = parts[3] if len(parts) > 3 else "?"
+            
+            for match in _SCRATCHPAD_PAT.finditer(content):
+                ts_val = match.group(1)
+                thought_content = match.group(2).strip()
+                if ts_val:
+                    try:
+                        dt = datetime.fromisoformat(ts_val)
+                        ts_str = dt.strftime("%H:%M:%S")
+                        sort_key = dt.timestamp()
+                    except Exception:
+                        ts_str = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc).strftime("%H:%M:%S")
+                        sort_key = md_file.stat().st_mtime
+                else:
+                    ts_str = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc).strftime("%H:%M:%S")
+                    sort_key = md_file.stat().st_mtime
+                    
+                thoughts.append((thought_content, agent, ts_str, sort_key))
         except Exception:
-            return []
+            continue
+            
+    # Sort chronologically
+    thoughts.sort(key=lambda x: x[3])
+    
+    results = []
+    for idx, (thought, agent, ts_str, _) in enumerate(thoughts, start=1):
+        if idx > since:
+            results.append((idx, ts_str, agent, thought[:200]))
+            
+    return results
 
 
-def _fetch_events(job_id: str, since: int) -> list[tuple[int, str, str, str]]:
-    with _ro(_telemetry("system_logs.db")) as conn:
+def _fetch_events(job_id: str, project: str, since: int) -> list[tuple[int, str, str, str]]:
+    sys_db = _find_root() / "__DATACENTER" / project / "telemetry" / "system_logs.db"
+    with _ro(sys_db) as conn:
         if conn is None:
             return []
         try:
@@ -371,13 +403,13 @@ def run_watcher(job_id: str, project: str, poll_ms: int = 500) -> None:
                             e_scroll = max(e_scroll - 3, 0)                          # Right (→)
 
             # ── Poll thoughts ────────────────────────────────────────────────
-            for rid, ts, node, content in _fetch_thoughts(job_id, t_max):
+            for rid, ts, node, content in _fetch_thoughts(job_id, project, t_max):
                 t_max = max(t_max, rid)
                 t_buf.append(f"[{ts}] [{node}] {content}")
                 t_scroll = 0  # snap to bottom on new data
 
             # ── Poll events ──────────────────────────────────────────────────
-            for rid, ts, node, msg in _fetch_events(job_id, e_max):
+            for rid, ts, node, msg in _fetch_events(job_id, project, e_max):
                 e_max = max(e_max, rid)
                 e_buf.append(f"[{ts}] [{node}] {msg}")
                 e_scroll = 0

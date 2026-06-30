@@ -1,0 +1,1 @@
+Tulsi Gabbards tenure at DNI just ended. Lets examine the deltas surrounding the documents she released on her way out the door.

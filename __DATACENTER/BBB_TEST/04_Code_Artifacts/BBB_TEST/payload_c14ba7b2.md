@@ -1,0 +1,1 @@
+Lets explore how the narratives around the Donald Trump and Russia collusion during his 2016 campaign and beyond. I want to parse the initial accusations and investigations to see who made what accusations and then i want to see if those accusations held up empirically.

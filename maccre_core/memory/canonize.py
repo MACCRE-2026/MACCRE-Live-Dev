@@ -24,7 +24,6 @@ import json
 import logging
 import uuid
 import datetime
-from typing import Any
 
 from maccre_core._net.gemini_client import GeminiClient, get_gemini_embedding
 from maccre_core.memory.knowledge_store import get_knowledge_store, PinRecord
@@ -130,7 +129,6 @@ def canonize_job(
     # Track canonization event to project_registry.db or active_flow_topology
     try:
         import sqlite3
-        registry_path = str(get_datacenter_path("..", "project_registry.db").resolve())
         # The path resolver usually anchors at the project. 
         # Actually, get_datacenter_path is relative to the ACTIVE project. 
         # The registry is at MACCRE_ROOT.

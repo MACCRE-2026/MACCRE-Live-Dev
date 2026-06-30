@@ -92,13 +92,13 @@ def build_topology(nodes: List[List[str]]) -> str:
         Instruction_Override, Wait_For, Failure_Target, Max_Recursion, Artifact_Path, Live_Profile
 
     Args:
-        nodes: A list of rows. Each row is 6-14 items:
+        nodes: A list of rows. Each row is 6-15 items:
                [Node_ID, Agent_Name, Model_Override, Next_Node,
                 Temperature, Instruction_Override,
-                Wait_For?, Failure_Target?, Max_Recursion?, Artifact_Path?, Live_Profile?, Dialogue_Partner?, Dialogue_Rounds?, Payload_Mode?]
+                Wait_For?, Failure_Target?, Max_Recursion?, Artifact_Path?, Live_Profile?, Dialogue_Partner?, Dialogue_Rounds?, Payload_Mode?, Tools_Allowed?]
                Optional columns receive defaults.
     """
-    _DEFAULTS = ["none", "FAILED", "3", "", "FALSE", "", "0", "Unified Ledger"]
+    _DEFAULTS = ["none", "FAILED", "3", "", "FALSE", "", "0", "Unified Ledger", ""]
     try:
         topo_path = get_datacenter_path("02_Dynamic_Context", "topology.csv")
         os.makedirs(os.path.dirname(topo_path), exist_ok=True)
@@ -108,17 +108,17 @@ def build_topology(nodes: List[List[str]]) -> str:
                 "Node_ID", "Agent_Name", "Model_Override", "Next_Node",
                 "Temperature", "Instruction_Override",
                 "Wait_For", "Failure_Target", "Max_Recursion", "Artifact_Path", "Live_Profile",
-                "Dialogue_Partner", "Dialogue_Rounds", "Payload_Mode"
+                "Dialogue_Partner", "Dialogue_Rounds", "Payload_Mode", "Tools_Allowed"
             ])
             for raw_node in nodes:
                 node: list[str] = list(raw_node)
-                if len(node) < 6 or len(node) > 14:
+                if len(node) < 6 or len(node) > 15:
                     return (
                         f"[ADMIN_FAULT] Node malformed. Expected 6-14 items, "
                         f"got {len(node)}. Node: {node}"
                     )
                 # Pad optional trailing columns with defaults
-                while len(node) < 14:
+                while len(node) < 15:
                     node.append(_DEFAULTS[len(node) - 6])
                 writer.writerow(node)
                 

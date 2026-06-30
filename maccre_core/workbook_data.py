@@ -89,16 +89,16 @@ def load_node_ids(project_id: str = "") -> list[str]:
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 
-def load_agent_roster_csv(project_id: str = "") -> list[dict[str, str]]:
-    """Read agent_roster.csv from a project silo. Returns list of row dicts."""
-    path = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
-    if not path.exists():
-        return []
-    rows: list[dict[str, str]] = []
-    with path.open(newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            rows.append(dict(row))
-    return rows
+def load_agent_roster_csv(project_id: str = "") -> list[dict[str, Any]]:
+    """Read agents from the agent_library.db (formerly agent_roster.csv). Returns list of row dicts."""
+    from maccre_core.agent_library import get_agent_store
+    
+    # In the modern architecture, all agents are retrieved from the GLOBAL store
+    # regardless of project_id, but we'll respect project_id if it's passed just in case.
+    store = get_agent_store(project_id if project_id else "GLOBAL")
+    
+    # load_all() returns exactly the list of agent dictionaries we need
+    return store.load_all()
 
 
 def load_agent_names_from_library(project_id: str = "") -> list[str]:

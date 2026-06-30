@@ -67,6 +67,8 @@ class NewProjectModal(ModalScreen[str]):
         if val:
             proj_dir = get_maccre_root() / "__DATACENTER" / val
             proj_dir.mkdir(parents=True, exist_ok=True)
+            for tier in ["01_Raw_Source", "02_Dynamic_Context", "03_Agent_Ledgers", "04_Code_Artifacts", "05_Rendered_Media"]:
+                (proj_dir / tier).mkdir(exist_ok=True)
             self.dismiss(val)
 
 
@@ -355,7 +357,7 @@ class NodeLiveChatModal(ModalScreen[dict[str, str] | None]):
 
     @on(Button.Pressed, "#btn-close-live-chat")
     def action_close_chat(self) -> None:
-        """Close without delivering — flow stays paused."""
+        """Close without delivering - flow stays paused."""
         self.dismiss(None)
 
 
@@ -418,7 +420,7 @@ class FlowHistoryModalScreen(ModalScreen[dict | None]):
                 cost = f"${flow.get('total_cost', 0.0):.4f}"
                 date = str(flow.get("completed_at", "?"))[:16]
                 artifact = str(flow.get("final_artifact", ""))
-                has_artifact = "✓" if artifact and artifact != "none" else "—"
+                has_artifact = "✓" if artifact and artifact != "none" else "-"
                 table.add_row(job_id, flow_names, cost, date, has_artifact)
                 self._flow_records.append(flow)
         except Exception:  # noqa: BLE001
@@ -1020,18 +1022,100 @@ class CreatePayloadModal(ModalScreen[dict]):
         self.dismiss(result)
 
 
+
+class FlowRegistryModalScreen(ModalScreen[dict | None]):
+    """Modal to save/load complete flow layouts from flow_registry.db"""
+    
+    CSS = """
+    FlowRegistryModalScreen {
+        align: center middle;
+    }
+    #reg-dialog {
+        width: 80;
+        height: auto;
+        max-height: 90vh;
+        background: $panel;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    .reg-section {
+        border: solid $secondary;
+        padding: 1;
+        margin-bottom: 1;
+    }
+    #reg-save-desc {
+        height: 5;
+    }
+    """
+    
+    def __init__(self, flows: list[dict], **kwargs):
+        super().__init__(**kwargs)
+        self.flows = flows
+        
+    def compose(self) -> ComposeResult:
+        with Vertical(id="reg-dialog"):
+            yield Label("Flow Registry", classes="pane-title")
+            
+            with Vertical(classes="reg-section"):
+                yield Label("Save Current Flow", classes="node-cfg-title")
+                yield Input(placeholder="Flow Name", id="reg-save-name")
+                yield TextArea(id="reg-save-desc")
+                yield Button("Save Flow", variant="success", id="btn-reg-save")
+                
+            with Vertical(classes="reg-section"):
+                yield Label("Load Flow", classes="node-cfg-title")
+                opts = [(f["name"], f["name"]) for f in self.flows]
+                yield Select(opts, prompt="Select Flow...", id="reg-load-select")
+                yield Static("", id="reg-load-desc", classes="info-panel-body")
+                yield Button("Load Flow", variant="primary", id="btn-reg-load")
+                
+            with Horizontal():
+                yield Button("Cancel", variant="error", id="btn-reg-cancel")
+
+    @on(Select.Changed, "#reg-load-select")
+    def on_select(self, event: Select.Changed):
+        desc = self.query_one("#reg-load-desc", Static)
+        if not event.value or event.value == Select.BLANK:
+            desc.update("")
+            return
+        for f in self.flows:
+            if f["name"] == str(event.value):
+                desc.update(f"[b]Description:[/b]\n{f['description']}")
+                break
+
+    @on(Button.Pressed, "#btn-reg-save")
+    def action_save(self):
+        name = self.query_one("#reg-save-name", Input).value.strip()
+        desc = self.query_one("#reg-save-desc", TextArea).text.strip()
+        if name:
+            self.dismiss({"action": "save", "name": name, "description": desc})
+
+    @on(Button.Pressed, "#btn-reg-load")
+    def action_load(self):
+        sel = self.query_one("#reg-load-select", Select)
+        if sel.value and sel.value != Select.BLANK:
+            self.dismiss({"action": "load", "name": str(sel.value)})
+
+    @on(Button.Pressed, "#btn-reg-cancel")
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class NodeConfigModal(ModalScreen[dict | None]):
-    """Modal to edit a MacroNode's name or override parameters."""
+    """Modal to configure payload, routing, tools, and prompts for a specific instance of a MacroNode."""
+    
     CSS = """
     NodeConfigModal {
         align: center middle;
         background: $background 80%;
     }
     #node-config-container {
-        width: 70%;
-        height: 90%;
-        border: solid $accent;
+        width: 95%;
+        max-width: 160;
+        height: auto;
+        max-height: 95vh;
         background: $surface;
+        border: solid $primary;
         padding: 1 2;
     }
     .node-cfg-title {
@@ -1042,7 +1126,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
     }
     .node-cfg-row {
         height: auto;
-        align: left middle;
+        margin-top: 1;
         margin-bottom: 1;
     }
     .category-title {
@@ -1052,28 +1136,48 @@ class NodeConfigModal(ModalScreen[dict | None]):
         margin-bottom: 1;
     }
     #cfg-custom-instructions {
-        height: 1fr;
+        height: 6;
+        border: solid $panel;
+    }
+    #cfg-payload-injection {
+        height: 6;
         border: solid $panel;
     }
     #cfg-agent-tools-container {
         height: 12;
         margin-bottom: 1;
     }
+    .tool-button-group {
+        height: 3;
+        margin-top: 1;
+    }
+    .tool-button-group Button {
+        min-width: 12;
+    }
+    #cfg-agent-row {
+        height: 3;
+        margin-bottom: 1;
+    }
+    #node-tools-input {
+        width: 1fr;
+    }
     """
     
-    def __init__(self, node_name: str, current_payload_mode: str = "Unified Ledger", current_instructions: str = "", active_project: str = "", agents_in_node: list[str] = None, **kwargs):
+    def __init__(self, node_name: str, current_payload_mode: str = "Unified Ledger", current_instructions: str = "", active_project: str = "", agents_in_node: list[str] = None, baked_tools: dict = None, current_agent_tools_overrides: dict = None, **kwargs):
         super().__init__(**kwargs)
         self.node_name = node_name
         self.current_payload_mode = current_payload_mode
         self.current_instructions = current_instructions
         self.active_project = active_project
         self.agents_in_node = agents_in_node or []
+        self.baked_tools = baked_tools or {}
+        self.current_agent_tools_overrides = current_agent_tools_overrides or {}
         self.agent_profiles = {}
         
         if self.agents_in_node and self.active_project:
             try:
                 from maccre_core.agent_library import get_agent_store
-                store = get_agent_store("GLOBAL")
+                store = get_agent_store(self.active_project)
                 for p in store.load_all():
                     aname = (p.get("agent_name") or p.get("AGENT_NAME", "")).strip()
                     if aname in self.agents_in_node:
@@ -1098,11 +1202,14 @@ class NodeConfigModal(ModalScreen[dict | None]):
 
             if self.agents_in_node:
                 yield Label("Agent Tool Configuration", classes="category-title")
-                yield Select(
-                    [(a, a) for a in self.agents_in_node],
-                    prompt="Select Agent to configure...",
-                    id="cfg-agent-select"
-                )
+                with Horizontal(id="cfg-agent-row"):
+                    yield Select(
+                        [(a, a) for a in self.agents_in_node],
+                        prompt="Select Agent to configure...",
+                        id="cfg-agent-select"
+                    )
+                    yield Input(value="", id="node-tools-input", disabled=True)
+                    
                 with Horizontal(id="cfg-agent-tools-container"):
                     with Vertical(classes="flow-select-group"):
                         yield Label("[dim]Available Tools[/dim]")
@@ -1113,13 +1220,13 @@ class NodeConfigModal(ModalScreen[dict | None]):
                             id="tool-select",
                             disabled=True
                         )
-                        yield Button("Add Tool", id="btn-add-tool", variant="primary", disabled=True, classes="flow-add-btn")
+                        with Horizontal(classes="tool-button-group"):
+                            yield Button("Add Tool", id="btn-add-tool", variant="primary", disabled=True, classes="flow-add-btn")
+                            yield Button("Clear", id="btn-clear-tools", variant="error", disabled=True, classes="flow-add-btn")
                     
                     with Vertical(id="tool-info-panel", classes="info-panel-container"):
                         yield Label("Tool Details", classes="info-panel-title")
                         yield Static("[dim]Select a tool to view details.[/dim]", id="tool-info-body", classes="info-panel-body")
-                
-                yield Input(value="", id="node-tools-input", disabled=True)
 
             yield Label("Node-Specific Custom Instructions (Appended to System Prompt):", classes="node-cfg-row")
             yield TextArea(text=self.current_instructions, id="cfg-custom-instructions")
@@ -1137,23 +1244,39 @@ class NodeConfigModal(ModalScreen[dict | None]):
         agent_name = str(event.value) if event.value and event.value != Select.BLANK else ""
         tool_select = self.query_one("#tool-select", Select)
         btn_add = self.query_one("#btn-add-tool", Button)
+        btn_clear = self.query_one("#btn-clear-tools", Button)
         tools_input = self.query_one("#node-tools-input", Input)
         
         if not agent_name:
             tool_select.disabled = True
             btn_add.disabled = True
+            btn_clear.disabled = True
             tools_input.disabled = True
             tools_input.value = ""
             return
             
         tool_select.disabled = False
         btn_add.disabled = False
+        btn_clear.disabled = False
         tools_input.disabled = False
         
         prof = self.agent_profiles.get(agent_name, {})
-        tools = prof.get("tools_allowed", "")
+        # Precedence: Overrides -> Baked Tools -> Base Agent Profile
+        if agent_name in self.current_agent_tools_overrides:
+            tools = self.current_agent_tools_overrides[agent_name]
+        elif agent_name in self.baked_tools:
+            tools = self.baked_tools[agent_name]
+        else:
+            tools = prof.get("tools_allowed", "")
+            
         assigned = [t.strip() for t in tools.split(",")] if tools and tools != "none" else []
         tools_input.value = ",".join(assigned) if assigned else "none"
+
+    @on(Input.Changed, "#node-tools-input")
+    def on_tools_input_changed(self, event: Input.Changed) -> None:
+        agent_select = self.query_one("#cfg-agent-select", Select)
+        if agent_select and agent_select.value and agent_select.value != Select.BLANK:
+            self.current_agent_tools_overrides[str(agent_select.value)] = event.input.value.strip() or "none"
 
     @on(Button.Pressed, "#btn-add-tool")
     def add_tool(self):
@@ -1165,7 +1288,11 @@ class NodeConfigModal(ModalScreen[dict | None]):
                 current.append(str(sel.value))
                 inp.value = ",".join(current)
                 
-    
+    @on(Button.Pressed, "#btn-clear-tools")
+    def clear_tools(self):
+        inp = self.query_one("#node-tools-input", Input)
+        if not inp.disabled:
+            inp.value = "none"
     @on(Select.Changed, "#tool-select")
     def tool_selection_changed(self, event: Select.Changed) -> None:
         body = self.query_one("#tool-info-body", Static)
@@ -1203,21 +1330,17 @@ class NodeConfigModal(ModalScreen[dict | None]):
         new_mode = self.query_one("#cfg-payload-mode", Select).value
         new_instr = self.query_one("#cfg-custom-instructions", TextArea).text.strip()
         
-        # Save Agent tool config to AgentStore
+        # Ensure the final edit is captured if the user didn't blur the input
         try:
             agent_select = self.query_one("#cfg-agent-select", Select)
             if agent_select and agent_select.value and agent_select.value != Select.BLANK:
                 tools_val = self.query_one("#node-tools-input", Input).value.strip() or "none"
                 agent_name = str(agent_select.value)
-                if agent_name in self.agent_profiles:
-                    self.agent_profiles[agent_name]["tools_allowed"] = tools_val
-                    from maccre_core.agent_library import get_agent_store
-                    store = get_agent_store(self.active_project)
-                    store.save(self.agent_profiles[agent_name])
+                self.current_agent_tools_overrides[agent_name] = tools_val
         except Exception:
             pass
             
-        self.dismiss({"name": new_name, "payload_mode": new_mode, "custom_instructions": new_instr})
+        self.dismiss({"name": new_name, "payload_mode": new_mode, "custom_instructions": new_instr, "agent_tools_overrides": self.current_agent_tools_overrides})
 
 
 
@@ -1232,14 +1355,14 @@ class FlowExecutionPanel(Vertical):
                     yield Select([], prompt="Select MacroNode…", id="macro-select")
                     with Vertical(id="flow-macro-info", classes="info-panel-container"):
                         yield Label("MacroNode Details", classes="info-panel-title")
-                        yield Static("[dim]Select a MacroNode above to see its description.[/dim]", id="macro-info-body", classes="info-panel-body")
+                        yield RichLog(id="macro-info-body", classes="info-panel-body", wrap=True, markup=True)
                     yield Button("Add MacroNode", variant="primary", id="btn-add-macro", classes="flow-add-btn")
                 with Vertical(classes="flow-select-group"):
                     yield Label("Agent")
                     yield Select([], prompt="Select Agent…", id="agent-select")
                     with Vertical(id="flow-agent-info", classes="info-panel-container"):
                         yield Label("Agent Details", classes="info-panel-title")
-                        yield Static("[dim]Select an Agent above to see its profile.[/dim]", id="agent-info-body", classes="info-panel-body")
+                        yield RichLog(id="agent-info-body", classes="info-panel-body", wrap=True, markup=True)
                     yield Button("Add Agent", variant="success", id="btn-add-agent", classes="flow-add-btn")
                 with Vertical(classes="flow-select-group"):
                     yield Label("Special Node")
@@ -1263,6 +1386,7 @@ class FlowExecutionPanel(Vertical):
             with Horizontal(classes="flow-controls", id="flow-line-actions"):
                 yield Button("Remove Last Node", variant="warning", id="btn-remove-last")
                 yield Button("Clear Flow", variant="error", id="btn-clear-flow")
+                yield Button("Flow Registry", variant="primary", id="btn-flow-registry")
 
         # Flow Monitor Panel
         with Vertical(classes="panel-section", id="flow-monitor-section"):
@@ -1300,7 +1424,7 @@ class FlowExecutionPanel(Vertical):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class NexusPlex(App[None]):
-    """MACCREv2 Command Center — Nexus_Plex v2."""
+    """MACCREv2 Command Center - Nexus_Plex v2."""
 
     CSS_PATH = "nexus_plex.css"
     TITLE = "Nexus_Plex  ·  MACCREv2 Agentic Command Center"
@@ -1346,6 +1470,8 @@ class NexusPlex(App[None]):
 
     def set_active_project(self, project_name: str) -> None:
         self.active_project = project_name
+        import os
+        os.environ["MACCRE_ACTIVE_PROJECT"] = project_name
         label = self.query_one("#active-project-label", Static)
         
         display_name = project_name if project_name else "SET ACTIVE PROJECT"
@@ -1521,11 +1647,11 @@ class NexusPlex(App[None]):
         agents = load_agent_names_from_library(self.active_project)
         
         special_nodes = [
-            ("MANUAL", "Live swarm intercept — pauses the task in awaiting_orders for manual resume."),
-            ("DET_ANCHOR", "Entry marker — passes payload through unchanged."),
+            ("MANUAL", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
+            ("DET_ANCHOR", "Entry marker - passes payload through unchanged."),
             ("DET_RECURSION", "Loop-back control with counter tracking."),
             ("DET_PAUSE", "Halts execution, sets task to paused for manual resume."),
-            ("DET_GATE", "Conditional gate — blocks unless prerequisite nodes complete."),
+            ("DET_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
             ("DET_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
             ("DET_DELAY", "Sleeps for a configurable number of seconds."),
             ("DET_TRANSFORM", "Applies a static text wrapper/template to the payload."),
@@ -1546,9 +1672,14 @@ class NexusPlex(App[None]):
             def do_save():
                 from maccre_core.orchestration.macro_factory import build_from_template
                 from maccre_core.workbook_data import load_agent_roster_csv
-                
                 roster_rows = load_agent_roster_csv(self.active_project)
-                roster_dict = {str(r.get("Agent_Name", r.get("agent_name"))): dict(r) for r in roster_rows}
+                global_rows = load_agent_roster_csv("GLOBAL")
+                roster_dict = {}
+                for r in global_rows:
+                    roster_dict[str(r.get("Agent_Name", r.get("agent_name")))] = dict(r)
+                for r in roster_rows:
+                    roster_dict[str(r.get("Agent_Name", r.get("agent_name")))] = dict(r)
+                    
                 for sn in special_nodes:
                     roster_dict[sn[0]] = {"agent_name": sn[0], "system_prompt": "", "tools_allowed": "none"}
                 
@@ -1798,7 +1929,7 @@ class NexusPlex(App[None]):
             files = result.get("files", "")
 
             if not text and not files:
-                self.write_agent_log("[yellow]Payload is empty — no text or files provided.[/yellow]")
+                self.write_agent_log("[yellow]Payload is empty - no text or files provided.[/yellow]")
                 self._pending_payload_path = "none"
                 return
 
@@ -1843,7 +1974,7 @@ class NexusPlex(App[None]):
 
     @on(Button.Pressed, "#btn-vcr")
     def action_vcr_toggle(self) -> None:
-        """Toggle pause/play — the VCR transport button."""
+        """Toggle pause/play - the VCR transport button."""
         if self._vcr_state == "running":
             # PAUSE the flow
             self._vcr_state = "paused"
@@ -1951,7 +2082,7 @@ class NexusPlex(App[None]):
         self._refresh_active_flow_sequence()
 
     def _refresh_paused_flow_line(self) -> None:
-        """Rebuild flow line for paused state — nodes are clickable, arrows can turn orange."""
+        """Rebuild flow line for paused state - nodes are clickable, arrows can turn orange."""
         container = self.query_one("#active-flow-sequence", Horizontal)
         # Clear everything except the static fallback
         for w in list(container.children):
@@ -1988,7 +2119,7 @@ class NexusPlex(App[None]):
         for i, name in enumerate(display_names):
 
             if i > 0:
-                # Arrow between nodes — dim by default, illuminates orange when a radio selects it
+                # Arrow between nodes - dim by default, illuminates orange when a radio selects it
                 arrow_cls = "flow-arrow-dim"
                 if self._paused_selected_node is not None:
                     if self._paused_radio_side == "right" and i == self._paused_selected_node + 1:
@@ -2080,13 +2211,45 @@ class NexusPlex(App[None]):
         if not event.value or event.value == Select.BLANK:
             return
         from maccre_core.macronode_registry import get_macronode_store
+        from maccre_core.agent_library import get_agent_store
         store = get_macronode_store()
+        agent_store = get_agent_store("GLOBAL")
         try:
             m = store.load(str(event.value))
             desc = m.get("description", "No description available.")
-            self.query_one("#macro-info-body", Static).update(desc)
+            
+            output = f"[bold cyan]MacroNode Structure:[/bold cyan]\n{desc}\n\n[bold cyan]Agent Breakdown:[/bold cyan]\n"
+            
+            tpl_cfg = m.get("template_config", {})
+            agent_mapping = tpl_cfg.get("_agent_mapping", {})
+            slot_tools = tpl_cfg.get("slot_tools", {})
+            struct_augment = tpl_cfg.get("structural_augment", "")
+            
+            for slot, agents in agent_mapping.items():
+                for a_name in agents:
+                    tools_for_slot = slot_tools.get(f"{slot}_{a_name}", slot_tools.get(slot, "none"))
+                    p = agent_store.get(a_name)
+                    if p:
+                        sys_prompt = p.get('system_prompt', '')
+                        if struct_augment and slot in ("judge", "anchor"):
+                            sys_prompt += f"\n\n[STRUCTURAL AUGMENT]\n{struct_augment}"
+                            
+                        output += (
+                            f"\n[bold green]► {a_name}[/bold green] (Slot: {slot})\n"
+                            f"  [dim]Model:[/dim] {p.get('model', 'Unknown')}\n"
+                            f"  [dim]Tools Baked:[/dim] {tools_for_slot}\n"
+                            f"  [dim]System Prompt:[/dim]\n  {sys_prompt.replace(chr(10), chr(10)+'  ')}\n"
+                        )
+                    else:
+                        output += f"\n[bold red]► {a_name}[/bold red] (Profile not found in GLOBAL)\n"
+            
+            log_widget = self.query_one("#macro-info-body", RichLog)
+            log_widget.clear()
+            log_widget.write(output)
         except Exception as e:
-            self.query_one("#macro-info-body", Static).update(f"[red]Error: {e}[/red]")
+            log_widget = self.query_one("#macro-info-body", RichLog)
+            log_widget.clear()
+            log_widget.write(f"[red]Error: {e}[/red]")
 
     @on(Select.Changed, "#agent-select")
     def on_main_agent_selected(self, event: Select.Changed) -> None:
@@ -2097,14 +2260,20 @@ class NexusPlex(App[None]):
         try:
             p = store.get(str(event.value))
             desc = (
-                f"[bold cyan]Name:[/bold cyan] {p.get('agent_name', 'Unknown')}\n"
-                f"[bold cyan]Model:[/bold cyan] {p.get('model', 'Unknown')}\n"
-                f"[bold cyan]Tools:[/bold cyan] {p.get('tools_allowed', 'None')}\n\n"
-                f"[bold cyan]System Prompt:[/bold cyan]\n{p.get('system_prompt', 'No description available.')}"
+                f"[bold cyan]Agent Breakdown:[/bold cyan]\n"
+                f"[bold green]► {p.get('agent_name', 'Unknown')}[/bold green]\n"
+                f"  [dim]Model:[/dim] {p.get('model', 'Unknown')}\n"
+                f"  [dim]Tools:[/dim] None (Ephemeral until configured)\n"
+                f"  [dim]Temperature:[/dim] {p.get('temperature', '0.7')}\n"
+                f"  [dim]System Prompt:[/dim]\n  {str(p.get('system_prompt', '')).replace(chr(10), chr(10)+'  ')}"
             )
-            self.query_one("#agent-info-body", Static).update(desc)
+            log_widget = self.query_one("#agent-info-body", RichLog)
+            log_widget.clear()
+            log_widget.write(desc)
         except Exception as e:
-            self.query_one("#agent-info-body", Static).update(f"[red]Error: {e}[/red]")
+            log_widget = self.query_one("#agent-info-body", RichLog)
+            log_widget.clear()
+            log_widget.write(f"[red]Error: {e}[/red]")
 
     @on(Select.Changed, "#special-select")
     def on_special_selected(self, event: Select.Changed) -> None:
@@ -2133,6 +2302,46 @@ class NexusPlex(App[None]):
     def clear_flow_sequence(self) -> None:
         self.active_flow_steps.clear()
         self._refresh_active_flow_sequence()
+
+    @on(Button.Pressed, "#btn-flow-registry")
+    def action_flow_registry(self) -> None:
+        if self._vcr_state != "idle":
+            return
+            
+        try:
+            from maccre_core.flow_registry import FlowRegistryStore
+            store = FlowRegistryStore()
+            flows = store.load_all_flows()
+        except Exception as e:
+            self.write_agent_log(f"[red]Error loading Flow Registry: {e}[/red]")
+            return
+            
+        def handle_registry(result: dict | None):
+            if result:
+                action = result.get("action")
+                if action == "save":
+                    try:
+                        import json
+                        store = FlowRegistryStore()
+                        steps_json = json.dumps([s.to_dict() for s in self.active_flow_steps])
+                        store.save_flow(result["name"], result["description"], steps_json)
+                        self.write_agent_log(f"[green]Flow '{result['name']}' saved to registry.[/green]")
+                    except Exception as e:
+                        self.write_agent_log(f"[red]Failed to save flow: {e}[/red]")
+                elif action == "load":
+                    try:
+                        import json
+                        store = FlowRegistryStore()
+                        flow = store.load_flow(result["name"])
+                        steps_data = json.loads(flow["steps_json"])
+                        from maccre_core.orchestration.flow_engine import FlowStep
+                        self.active_flow_steps = [FlowStep.from_dict(s) for s in steps_data]
+                        self._refresh_active_flow_sequence()
+                        self.write_agent_log(f"[green]Flow '{result['name']}' loaded from registry.[/green]")
+                    except Exception as e:
+                        self.write_agent_log(f"[red]Failed to load flow: {e}[/red]")
+                        
+        self.app.push_screen(FlowRegistryModalScreen(flows), handle_registry)
 
     def _refresh_active_flow_sequence(self) -> None:
         """Refresh the active flow sequence display with clickable nodes."""
@@ -2177,6 +2386,8 @@ class NexusPlex(App[None]):
                     node.payload_mode = str(result["payload_mode"])
                 if "custom_instructions" in result:
                     node.custom_instructions = result["custom_instructions"]
+                if "agent_tools_overrides" in result:
+                    node.agent_tools_overrides.update(result["agent_tools_overrides"])
                 self.write_agent_log(f"[green]Node {idx} updated.[/green]")
                 self._refresh_active_flow_sequence()
                 
@@ -2212,12 +2423,32 @@ class NexusPlex(App[None]):
             except Exception:
                 pass
 
+        # Extract baked tools from MacroNode to prepopulate NodeConfigModal
+        baked_tools = {}
+        try:
+            tpl_cfg = macro_def.get("template_config", {})
+            slot_tools = tpl_cfg.get("slot_tools", {})
+            agent_mapping = getattr(node, "agent_mapping", None) or tpl_cfg.get("_agent_mapping", {})
+            
+            for slot, agents in agent_mapping.items():
+                for a in agents:
+                    tools = slot_tools.get(f"{slot}_{a}", slot_tools.get(slot, "none"))
+                    if tools and tools != "none":
+                        baked_tools[a] = tools
+        except Exception as e:
+            self.write_agent_log(f"[red]Error extracting baked tools: {e}[/red]")
+            pass
+            
+        self.write_agent_log(f"[dim]Debug:[/dim] Passing baked_tools to NodeConfigModal: {baked_tools}")
+        
         self.push_screen(NodeConfigModal(
             node_name=node.macronode_name,
             current_payload_mode=getattr(node, "payload_mode", "Unified Ledger"),
             current_instructions=getattr(node, "custom_instructions", ""),
             active_project=self.active_project,
-            agents_in_node=list(agents_in_node)
+            agents_in_node=list(agents_in_node),
+            baked_tools=baked_tools,
+            current_agent_tools_overrides=getattr(node, "agent_tools_overrides", {})
         ), handle_config)
 
     @on(Button.Pressed)
@@ -2225,7 +2456,7 @@ class NexusPlex(App[None]):
         """Route clicks on paused-state flow line elements."""
         btn_id = str(event.button.id or "")
 
-        # ── Node clicked — select it, show radio dots ──
+        # ── Node clicked - select it, show radio dots ──
         if btn_id.startswith("paused-node-"):
             if self._vcr_state != "paused":
                 return
@@ -2238,10 +2469,10 @@ class NexusPlex(App[None]):
             self._refresh_paused_flow_line()
             name = self.active_flow_steps[idx].macronode_name
             self.write_agent_log(
-                f"[cyan]Selected node: {name}[/cyan] — click ○ left (inject before) or ○ right (inject after/fork)"
+                f"[cyan]Selected node: {name}[/cyan] - click ○ left (inject before) or ○ right (inject after/fork)"
             )
 
-        # ── Radio dot clicked — set side, illuminate arrow ──
+        # ── Radio dot clicked - set side, illuminate arrow ──
         elif btn_id.startswith("radio-left-"):
             try:
                 idx = int(btn_id.replace("radio-left-", ""))
@@ -2266,7 +2497,7 @@ class NexusPlex(App[None]):
                 "Click the orange arrow to inject."
             )
 
-        # ── Orange arrow clicked — open context injection modal ──
+        # ── Orange arrow clicked - open context injection modal ──
         elif btn_id.startswith("paused-arrow-"):
             if self._paused_selected_node is None or not self._paused_radio_side:
                 return
@@ -2334,7 +2565,7 @@ class NexusPlex(App[None]):
             if result and result.get("action") == "continue":
                 payload = result.get("payload", "")
                 self.write_agent_log(
-                    f"[green]Live Chat complete — {len(payload)} chars payload ready.[/green]\n"
+                    f"[green]Live Chat complete - {len(payload)} chars payload ready.[/green]\n"
                     f"Click ▶ to resume flow from node '{step.macronode_name}'."
                 )
                 self._injected_context = payload
@@ -2376,7 +2607,7 @@ class NexusPlex(App[None]):
             self.write_agent_log(report.render())
 
             if not report.is_ok:
-                # Hard-block — show Proceed Anyway button
+                # Hard-block - show Proceed Anyway button
                 self.write_agent_log(
                     "\n[bold red]Pre-flight validation failed. "
                     "Review errors above, then click [Proceed Anyway] to override.[/bold red]"
@@ -2400,7 +2631,7 @@ class NexusPlex(App[None]):
                 self.query_one("#btn-proceed-anyway", Button).remove_class("hidden")
                 return
             else:
-                self.write_agent_log("[green]✓ Flow modified from history template — proceeding.[/green]")
+                self.write_agent_log("[green]✓ Flow modified from history template - proceeding.[/green]")
 
         # Reset history tracking on launch
         self._flow_loaded_from_history = False
@@ -2449,7 +2680,7 @@ class NexusPlex(App[None]):
             pass
 
     def _do_launch_flow(self) -> None:
-        """Internal launch — called after pre-flight passes or is overridden."""
+        """Internal launch - called after pre-flight passes or is overridden."""
         self.is_session_active = True
         self.query_one("#btn-launch-flow", Button).disabled = True
         self.query_one("#btn-stop-flow", Button).disabled = False
@@ -2547,7 +2778,7 @@ class NexusPlex(App[None]):
         self._exit_paused_state()
 
     def _surface_hitl_pause(self, step_index: int, job_id: str, payload: str) -> None:
-        """Surface HITL pause to the TUI — show injection modal."""
+        """Surface HITL pause to the TUI - show injection modal."""
         step_name = "unknown"
         if 0 <= step_index < len(self.active_flow_steps):
             step_name = self.active_flow_steps[step_index].macronode_name
@@ -2563,7 +2794,7 @@ class NexusPlex(App[None]):
             if text:
                 self._hitl_resume_with_context(job_id, text)
             else:
-                self.write_agent_log("[dim]HITL modal dismissed — flow remains paused. Use ▶ to resume.[/dim]")
+                self.write_agent_log("[dim]HITL modal dismissed - flow remains paused. Use ▶ to resume.[/dim]")
 
         self.push_screen(ContextInjectModalScreen(current_payload=payload), _on_hitl_inject)
 
@@ -2640,7 +2871,7 @@ class NexusPlex(App[None]):
         try:
             import pyperclip  # noqa: PLC0415
             log_widget = self.query_one(log_id, RichLog)
-            text_lines = [line.plain for line in log_widget.lines]
+            text_lines = [line.text for line in log_widget.lines]
             pyperclip.copy("\n".join(text_lines))
             self.notify(f"Copied {log_id.strip('#')} to clipboard!")
         except Exception as e:
@@ -2767,7 +2998,7 @@ class NexusPlex(App[None]):
         """Saves the current flow sequence to a quick-recovery autosave file."""
         import json
         from maccre_core.utils.path_resolver import get_datacenter_path
-        autosave_path = get_datacenter_path("GLOBAL", "autosave_flow.json")
+        autosave_path = get_datacenter_path("autosave_flow.json")
         try:
             steps_data = [s.to_dict() for s in self.active_flow_steps]
             autosave_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2780,7 +3011,7 @@ class NexusPlex(App[None]):
         import json
         from maccre_core.orchestration.flow_engine import FlowStep
         from maccre_core.utils.path_resolver import get_datacenter_path
-        autosave_path = get_datacenter_path("GLOBAL", "autosave_flow.json")
+        autosave_path = get_datacenter_path("autosave_flow.json")
         if not autosave_path.exists():
             return
         try:

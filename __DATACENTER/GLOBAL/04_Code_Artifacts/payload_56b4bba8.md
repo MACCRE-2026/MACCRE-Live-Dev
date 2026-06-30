@@ -1,0 +1,1 @@
+Lets explore how the narratives around UFO and UAP phenomenon have shifted since 1940. Lets look at the empiric changes in the infosphere that have forced the shifts in narrative including the PURSUE releases.

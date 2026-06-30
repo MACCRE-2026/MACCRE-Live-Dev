@@ -49,6 +49,7 @@ class MessageBroker(abc.ABC):
         actual_cost: float = 0.0,
         source_payload_path: str = "",
         max_recursion: int = 3,
+        status: str = "completed",
     ) -> None:
         """Mark a task completed and enqueue successor node(s).
 

@@ -18,16 +18,13 @@ maccre_core/orchestration/memory_engine.py
 ============================================
 Phase 4: The Universal Observer.
 
-Extracts Knowledge Triplets from every swarm node's output and pins them
-to the project-scoped corkboard at
-__DATACENTER/<project>/02_Dynamic_Context/memory_pins.
-
-Project-scoping ensures thought pins from Project A never leak into
-Project B's semantic context, and allows cross-pollination to be
-explicitly managed via the Synaptic Bridge when desired.
+Extracts Knowledge Triplets from canonized unified session ledgers
+and pins them to the project-scoped SovereignPinStore (SQLite3) at
+__DATACENTER/<project>/02_Dynamic_Context/memory_pins.db.
 """
 import os
 import json
+import sqlite3
 from typing import TypedDict, List, cast
 
 from maccre_core._net.gemini_client import GeminiClient, user_turn
@@ -52,18 +49,51 @@ class MemoryExtraction(TypedDict):
     triplets: List[KnowledgeTriplet]
 
 
+# ── SQLite SovereignPinStore ──────────────────────────────────────────────────
+
+class SovereignPinStore:
+    """Project-level database for tracking semantic pins from canonized sessions."""
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
+        self._init_db()
+        
+    def _init_db(self) -> None:
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS memory_pins (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    ledger_path TEXT NOT NULL,
+                    subject TEXT,
+                    predicate TEXT,
+                    object TEXT,
+                    significance TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+    def store_triplets(self, job_id: str, ledger_path: str, triplets: List[dict]) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            for t in triplets:
+                conn.execute(
+                    "INSERT INTO memory_pins (job_id, ledger_path, subject, predicate, object, significance) VALUES (?, ?, ?, ?, ?, ?)",
+                    (job_id, ledger_path, t.get("subject"), t.get("predicate"), t.get("object"), t.get("significance"))
+                )
+
+
 # ── Engine ────────────────────────────────────────────────────────────────────
 
 class CognitiveMemoryEngine:
     """Phase 4: The Universal Observer that extracts and pins Swarm memories."""
 
-    def __init__(self, memory_dir: str = "") -> None:
+    def __init__(self, db_path: str = "") -> None:
         active_project = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
-        self.memory_dir = (
-            memory_dir
-            or str(get_maccre_root() / "__DATACENTER" / active_project / "02_Dynamic_Context" / "memory_pins")
+        self.db_path = (
+            db_path
+            or str(get_maccre_root() / "__DATACENTER" / active_project / "02_Dynamic_Context" / "memory_pins.db")
         )
-        os.makedirs(self.memory_dir, exist_ok=True)
+        self.store = SovereignPinStore(self.db_path)
 
         raw_key = get_provider_credential("MACCRE_Sovereign")
         if not raw_key or not str(raw_key).strip().startswith("AIza"):
@@ -75,23 +105,26 @@ class CognitiveMemoryEngine:
         self.client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
         self.extractor_model = "gemini-2.5-flash"
 
-    def extract_and_store(self, agent_payload: str, source_node: str, file_name: str) -> None:
-        """Silently extracts thought pins from the payload and saves them to the corkboard."""
-        if not agent_payload or len(agent_payload) < 100:
-            return
-
-        schema_hint = (
-            '{"triplets": [{"subject": "...", "predicate": "...", "object": "...", "significance": "..."}]}'
-        )
-        system = (
-            "You are the MACCREv2 Cognitive Memory Engine. "
-            "Analyze the following agent output. Extract the most brilliant conceptual, mathematical, "
-            "or architectural relationships and output them as strict Knowledge Triplets. "
-            "Ignore conversational filler. Only pin high-value concepts. "
-            f"You MUST reply with ONLY valid JSON matching this schema exactly: {schema_hint}"
-        )
-
+    def extract_from_canonized_ledger(self, ledger_path: str, job_id: str) -> None:
+        """Silently extracts thought pins from a unified ledger and saves them to SQLite."""
         try:
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                agent_payload = f.read()
+                
+            if not agent_payload or len(agent_payload) < 100:
+                return
+
+            schema_hint = (
+                '{"triplets": [{"subject": "...", "predicate": "...", "object": "...", "significance": "..."}]}'
+            )
+            system = (
+                "You are the MACCREv2 Cognitive Memory Engine. "
+                "Analyze the following session ledger output. Extract the most brilliant conceptual, mathematical, "
+                "or architectural relationships and output them as strict Knowledge Triplets. "
+                "Ignore conversational filler. Only pin high-value concepts. "
+                f"You MUST reply with ONLY valid JSON matching this schema exactly: {schema_hint}"
+            )
+
             response = self.client.generate_content(
                 model=self.extractor_model,
                 contents=[user_turn(agent_payload)],
@@ -112,18 +145,8 @@ class CognitiveMemoryEngine:
             if not triplets:
                 return
 
-            # Keep the raw json dump as a forensic backup in 02_Dynamic_Context/memory_pins
-            out_path = os.path.join(self.memory_dir, f"pin_{source_node}_{file_name}.json")
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(triplets, f, indent=2)
-
-            logger.info(f"[Memory Engine] Extracted {len(triplets)} thought pins to the Corkboard.")
-
-            # NOTE: Session-level thought_pins.db creation has been removed.
-            # Knowledge triplets (thought-pins) are now only vectorized during
-            # canonize_session() to save on embedding cost and compute overhead.
-            # The raw JSON file in 02_Dynamic_Context/memory_pins/ serves as the forensic backup
-            # until the session is promoted to the project-level canon.
+            self.store.store_triplets(job_id, ledger_path, triplets)
+            logger.info(f"[Memory Engine] Extracted {len(triplets)} thought pins to SovereignPinStore.")
 
         except Exception as e:
             logger.info(f"[Memory Engine] Extraction skipped/failed: {e}")

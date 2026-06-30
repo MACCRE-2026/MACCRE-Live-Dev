@@ -254,16 +254,34 @@ class LocalMessageBroker(MessageBroker):
                 placeholders = ",".join(["?"] * len(required_nodes))
                 cursor.execute(
                     f"""
-                    SELECT COUNT(DISTINCT current_node)
+                    SELECT current_node, lock_status
                     FROM task_queue
-                    WHERE job_id = ?
-                      AND lock_status = 'completed'
-                      AND current_node IN ({placeholders})
+                    WHERE job_id = ? AND current_node IN ({placeholders})
+                    ORDER BY id ASC
                     """,
                     [task["job_id"]] + required_nodes,
                 )
-                result = cursor.fetchone()
-                completed_count = int(result[0] if result else 0)
+                rows = cursor.fetchall()
+                
+                # Keep only the latest status for each node
+                latest_status = {}
+                for r in rows:
+                    latest_status[r[0]] = r[1]
+                
+                # Check if we should abort due to failure
+                if any(stat == "failed" for stat in latest_status.values()):
+                    # A dependency failed. We must abort this node to prevent ghost ledgers
+                    import logging  # noqa: PLC0415
+                    logging.getLogger("maccre_core").error(f"[BROKER] Upstream dependency for {node_id} failed. Aborting {node_id}.")
+                    cursor.execute(
+                        "UPDATE task_queue SET lock_status = 'cancelled' WHERE id = ?",
+                        (task["id"],)
+                    )
+                    conn.commit()
+                    continue
+                
+                # Check if all required nodes are completed
+                completed_count = sum(1 for stat in latest_status.values() if stat == "completed")
                 if completed_count < len(required_nodes):
                     continue
 
@@ -287,6 +305,7 @@ class LocalMessageBroker(MessageBroker):
         actual_cost: float = 0.0,
         source_payload_path: str = "",
         max_recursion: int = 3,
+        status: str = "completed",
     ) -> None:
         """
         Mark the current task completed and enqueue successor nodes.
@@ -325,9 +344,9 @@ class LocalMessageBroker(MessageBroker):
         conn = self._get_conn()
         conn.execute(
             "UPDATE task_queue "
-            "SET lock_status = 'completed', payload_path = ?, actual_cost = ?, completed_at = CURRENT_TIMESTAMP "
+            "SET lock_status = ?, payload_path = ?, actual_cost = ?, completed_at = CURRENT_TIMESTAMP "
             "WHERE id = ?",
-            (new_payload_path, actual_cost, row_id),
+            (status, new_payload_path, actual_cost, row_id),
         )
         for node in next_nodes:
                 if node.upper() not in ("DONE", "FAILED", "STOP", "TERMINATE", "END"):

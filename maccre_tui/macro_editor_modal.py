@@ -2,45 +2,101 @@ from textual import on
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select
+from textual.widgets import Button, Input, Label, Select, TextArea
+from textual import work
 from maccre_core.orchestration.macro_factory import TEMPLATE_CATALOG
 
 class MacroNodeEditorModal(ModalScreen[dict | None]):
     """Modal to create or edit a Template MacroNode."""
     
     CSS = """
+    MacroNodeEditorModal {
+        align: center middle;
+        background: $background 80%;
+    }
     #macro-editor-dialog {
-        width: 90%;
-        max-width: 90%;
-        height: 90%;
+        width: 95%;
+        max-width: 95%;
+        height: 95%;
         border: round $primary;
         background: $surface;
-        padding: 1 2;
+        padding: 1 1;
         layout: horizontal;
     }
-    #me-left-form {
+    #me-left-col {
         width: 3fr;
         height: 100%;
-        overflow-y: auto;
         padding-right: 2;
         border-right: solid $primary;
+    }
+    #me-left-form {
+        height: auto;
+        max-height: 90%;
+        overflow-y: auto;
+        margin-bottom: 1;
     }
     #me-right-info {
         width: 2fr;
         height: 100%;
         padding-left: 2;
+        layout: vertical;
+    }
+    
+    #me-info-top {
+        height: 50%;
+        width: 100%;
+        overflow-y: auto;
+        border-bottom: solid $primary;
+        padding-bottom: 1;
+        margin-bottom: 1;
+    }
+    
+    #me-info-bottom {
+        height: 50%;
+        width: 100%;
         overflow-y: auto;
     }
+    
     .me-slot-row {
         layout: horizontal;
         height: auto;
         margin-bottom: 1;
     }
-    #me-buttons {
+    #me-save-row {
+        height: 3;
         margin-top: 1;
-        margin-bottom: 1;
-        padding-bottom: 1;
+        align: center middle;
     }
+    
+    .me-tool-select {
+        width: 36;
+        min-width: 30;
+        max-width: 40;
+        margin-right: 1;
+    }
+    
+    .me-tool-add-btn {
+        width: auto;
+        min-width: 6;
+        height: 3;
+        margin-right: 1;
+    }
+    
+    .me-tool-input {
+        width: 1fr;
+    }
+    
+    .augment-container {
+        height: auto;
+        min-height: 20;
+        margin-bottom: 1;
+    }
+    
+    .augment-editor {
+        width: 100%;
+        height: 100%;
+    }
+    
     .me-slot-label {
         width: auto;
         min-width: 20;
@@ -55,6 +111,9 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
         margin-top: 1;
         border-top: solid $primary;
         padding-top: 1;
+    }
+    .me-tools-container {
+        height: auto;
     }
     .info-panel-title {
         color: #8b949e;
@@ -74,45 +133,56 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
         self.all_agents = sorted(self.roster + [sn[0] for sn in self.special_nodes])
         self.current_slots: list[str] = []
         self.current_configs: list[str] = []
+        self.temp_tools: dict[str, str] = {}
+        self._pending_template: dict | None = None
 
     def compose(self) -> ComposeResult:
         from textual.widgets import Static
         from textual.containers import Vertical
         with Container(classes="dialog", id="macro-editor-dialog"):
-            with Vertical(id="me-left-form"):
-                yield Label("Edit / Create MacroNode", classes="pane-title", id="me-title")
-                
-                with Horizontal(classes="me-slot-row"):
-                    yield Label("Select MacroNode:", classes="me-slot-label")
-                    options = [("*** Create New... ***", "__NEW__")] + [(t["name"], t["name"]) for t in self.templates]
-                    yield Select(options, value="__NEW__", id="me-macro-select")
+            with Vertical(id="me-left-col"):
+                with Vertical(id="me-left-form"):
+                    yield Label("Edit / Create MacroNode", classes="pane-title", id="me-title")
                     
-                yield Label("Macro Name")
-                yield Input(id="me-name")
-                
-                yield Label("Description")
-                yield Input(id="me-desc")
-                
-                yield Label("Template Type")
-                type_opts = [(k, k) for k in TEMPLATE_CATALOG.keys()]
-                yield Select(type_opts, prompt="Select Template...", id="me-type-select")
-                
-                yield Container(id="me-dynamic-container")
-                
+                    with Horizontal(classes="me-slot-row"):
+                        yield Label("Select MacroNode:", classes="me-slot-label")
+                        options = [("*** Create New... ***", "__NEW__")] + [(t["name"], t["name"]) for t in self.templates]
+                        yield Select(options, value="__NEW__", id="me-macro-select")
+                        
+                    yield Label("Macro Name")
+                    yield Input(id="me-name")
+                    
+                    yield Label("Description")
+                    yield Input(id="me-desc")
+                    
+                    yield Label("Template Type")
+                    type_opts = [(k, k) for k in TEMPLATE_CATALOG.keys()]
+                    yield Select(type_opts, prompt="Select Template...", id="me-type-select")
+                    
+                    yield Container(id="me-dynamic-container")
+                    
                 with Horizontal(classes="dialog-buttons", id="me-buttons"):
                     yield Button("Cancel", variant="error", id="cancel-btn")
                     yield Button("Save", variant="success", id="save-btn")
 
             with Vertical(id="me-right-info"):
-                yield Label("Node / Agent Details", classes="info-panel-title")
-                yield Static(
-                    "[dim]Select an agent or special node in the slots to see its description here.[/dim]",
-                    id="me-info-body",
-                    classes="info-panel-body"
-                )
+                with Vertical(id="me-info-top"):
+                    yield Label("Node / Agent Details", classes="info-panel-title")
+                    yield Static(
+                        "[dim]Select an agent or special node in the slots to see its description here.[/dim]",
+                        id="me-info-body",
+                        classes="info-panel-body"
+                    )
+                with Vertical(id="me-info-bottom"):
+                    yield Label("Instruction Guide & Live Preview", classes="info-panel-title")
+                    yield Static(
+                        "[dim]The Instruction Guide and Live Preview for the Structural Augment will appear here.[/dim]",
+                        id="augment_preview",
+                        classes="info-panel-body"
+                    )
 
     @on(Select.Changed, "#me-macro-select")
-    def on_macro_select(self, event: Select.Changed) -> None:
+    async def on_macro_select(self, event: Select.Changed) -> None:
         val = str(event.value)
         name_inp = self.query_one("#me-name", Input)
         desc_inp = self.query_one("#me-desc", Input)
@@ -124,7 +194,7 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
             desc_inp.value = ""
             type_sel.disabled = False
             type_sel.clear()
-            self.query_one("#me-dynamic-container").remove_children()
+            await self.query_one("#me-dynamic-container").remove_children()
             self.current_slots.clear()
             self.current_configs.clear()
             return
@@ -138,20 +208,27 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
         desc_inp.value = template.get("description", "")
         
         tpl_type = template.get("template_type", "")
+        
+        # Stash the template so it populates AFTER the DOM mounts in on_type_select
+        self._pending_template = template
+        
         if tpl_type:
-            type_sel.value = tpl_type
             type_sel.disabled = True
+            if type_sel.value != tpl_type:
+                # This will automatically fire on_type_select which will handle the pending template
+                type_sel.value = tpl_type
+            else:
+                # Value didn't change, so event won't fire. Manually await it.
+                await self.on_type_select(Select.Changed(type_sel, tpl_type))
         else:
             type_sel.clear()
             type_sel.disabled = False
-        
-        self.set_timer(0.1, lambda: self._populate_existing(template))
 
     @on(Select.Changed, "#me-type-select")
-    def on_type_select(self, event: Select.Changed) -> None:
+    async def on_type_select(self, event: Select.Changed) -> None:
         val = event.value
         container = self.query_one("#me-dynamic-container")
-        container.remove_children()
+        await container.remove_children()
         self.current_slots.clear()
         self.current_configs.clear()
         
@@ -173,21 +250,41 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
             else:
                 inp = Input(placeholder="Comma-separated Agents (e.g. OSINT, MANUAL)", id=slot_id, classes="me-slot-input")
             container.mount(Horizontal(lbl, inp, classes="me-slot-row"))
-                
+            
+            from textual.containers import Vertical
+            tools_container = Vertical(id=f"tools_container_{slot.name}", classes="me-tools-container")
+            container.mount(tools_container)
+            self.set_timer(0.1, lambda s=slot.name: self.update_slot_tools_ui(s))
         if tpl_def.config:
             container.mount(Label(f"Configuration for {val}", classes="pane-title"))
             for cfg in tpl_def.config:
                 cfg_id = f"cfg_{cfg.name}"
                 self.current_configs.append(cfg.name)
                 lbl = Label(cfg.name, classes="me-slot-label")
-                if cfg.choices:
+                if cfg.name == "structural_augment":
+                    inp = TextArea(text=str(cfg.default), id=cfg_id, classes="augment-editor")
+                    
+                    h_container = Container(inp, classes="augment-container")
+                    
+                    container.mount(lbl)
+                    container.mount(h_container)
+                    
+                    self.update_augment_preview()
+                elif cfg.choices:
                     opts = [(c, c) for c in cfg.choices]
                     inp = Select(opts, value=cfg.default, id=cfg_id, classes="me-slot-input")
+                    container.mount(Horizontal(lbl, inp, classes="me-slot-row"))
                 else:
                     inp = Input(value=str(cfg.default), id=cfg_id, classes="me-slot-input")
-                container.mount(Horizontal(lbl, inp, classes="me-slot-row"))
+                    container.mount(Horizontal(lbl, inp, classes="me-slot-row"))
+                    
+        # Apply pending template data now that all widgets are mounted
+        if self._pending_template:
+            tpl = self._pending_template
+            self._pending_template = None
+            self.set_timer(0.1, lambda: self._populate_existing(tpl))
 
-    def _populate_existing(self, template: dict) -> None:
+    async def _populate_existing(self, template: dict) -> None:
         tpl_cfg = template.get("template_config") or {}
         agent_mapping = tpl_cfg.get("_agent_mapping") or {}
         
@@ -195,6 +292,15 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
             try:
                 inp = self.query_one(f"#slot_{s_name}")
                 val = agent_mapping.get(s_name, [])
+                
+                # Legacy fallback: If _agent_mapping is empty, try using the raw agent_slots list
+                if not val and template.get("agent_slots"):
+                    if len(self.current_slots) == 1:  # Simple templates like cascade
+                        val = template["agent_slots"]
+                    elif s_name == "advocates" or s_name == "facets" or s_name == "agents":
+                        # Attempt to dump all agents into the plural slot
+                        val = template["agent_slots"]
+                        
                 if isinstance(inp, Select):
                     if val:
                         inp.value = val[0]
@@ -202,8 +308,21 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
                         inp.clear()
                 elif isinstance(inp, Input):
                     inp.value = ", ".join(val)
+                    
+                slot_tools = tpl_cfg.get("slot_tools", {})
+                
+                # We will just populate self.temp_tools and the ui will pick it up
+                for a in val:
+                    key = f"{s_name}_{a}"
+                    if key in slot_tools:
+                        self.temp_tools[key] = slot_tools[key]
+                    elif s_name in slot_tools:  # Legacy fallback
+                        self.temp_tools[key] = slot_tools[s_name]
+                        
             except Exception:
                 pass
+                
+            await self.update_slot_tools_ui(s_name)
                 
         for c_name in self.current_configs:
             try:
@@ -214,6 +333,8 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
                         inp.value = str(val)
                     elif isinstance(inp, Input):
                         inp.value = str(val)
+                    elif hasattr(inp, "text"):  # TextArea
+                        inp.text = str(val)
             except Exception:
                 pass
 
@@ -232,6 +353,7 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
             return
             
         agent_mapping = {}
+        slot_tools = {}
         for s_name in self.current_slots:
             inp = self.query_one(f"#slot_{s_name}")
             if isinstance(inp, Select):
@@ -244,15 +366,31 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
                 parts = [p.strip() for p in inp.value.split(",") if p.strip()]
                 agent_mapping[s_name] = parts
                 
-        config = {}
+            for a in agent_mapping[s_name]:
+                try:
+                    # Look up the current input ID which has the unique suffix
+                    # This is tricky because we don't know the suffix from here.
+                    # It's better to just pull straight from temp_tools!
+                    cached = self.temp_tools.get(f"{s_name}_{a}")
+                    if cached:
+                        slot_tools[f"{s_name}_{a}"] = cached
+                except Exception:
+                    pass
+                
+        config = {"slot_tools": slot_tools}
         for c_name in self.current_configs:
             inp = self.query_one(f"#cfg_{c_name}")
             if isinstance(inp, Select):
                 config[c_name] = str(inp.value)
             elif isinstance(inp, Input):
                 config[c_name] = inp.value.strip()
+            elif hasattr(inp, "text"):  # TextArea
+                config[c_name] = inp.text.strip()
                 
         config["_agent_mapping"] = agent_mapping
+        
+        # Trigger an initial preview render
+        self.update_augment_preview()
         
         result = {
             "name": name,
@@ -263,54 +401,236 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
         }
         self.dismiss(result)
 
-    @on(Select.Changed, ".me-slot-input")
-    def on_slot_selection_changed(self, event: Select.Changed) -> None:
-        """Show selected Agent's or Special Node's profile in the info panel."""
+    def update_agent_details_panel(self) -> None:
+        """Show profiles for ALL agents currently assigned to ANY slot."""
         from textual.widgets import Static
-        body = self.query_one("#me-info-body", Static)
-        if not event.value or event.value == Select.BLANK:
-            return
-
-        name = str(event.value)
+        from maccre_core.orchestration.roster_loader import load_agent_from_roster
         
-        # Check if it's a special node
-        special_node = next((sn for sn in self.special_nodes if sn[0] == name), None)
-        if special_node:
-            info = [
-                f"[bold warning]{name}[/bold warning]",
-                "",
-                "[bold]Description[/bold]",
-                str(special_node[1]),
-            ]
-            body.update("\n".join(info))
+        body = self.query_one("#me-info-body", Static)
+        
+        agents = []
+        for s_name in self.current_slots:
+            try:
+                inp = self.query_one(f"#slot_{s_name}")
+                if isinstance(inp, Select):
+                    if inp.value and inp.value != Select.BLANK:
+                        agents.append(str(inp.value))
+                elif isinstance(inp, Input):
+                    parts = [p.strip() for p in inp.value.split(",") if p.strip()]
+                    agents.extend(parts)
+            except Exception:
+                pass
+                
+        if not agents:
+            body.update("[dim]Select an agent or special node in the slots to see its description here.[/dim]")
             return
-
-        # Otherwise it's an agent
+            
+        # Deduplicate while preserving order
+        seen = set()
+        unique_agents = []
+        for a in agents:
+            if a not in seen:
+                seen.add(a)
+                unique_agents.append(a)
+                
+        info_blocks = []
+        for name in unique_agents:
+            # Check if special node
+            special_node = next((sn for sn in self.special_nodes if sn[0] == name), None)
+            if special_node:
+                info_blocks.append(f"[bold warning]{name}[/bold warning]\n\n[bold]Description[/bold]\n{special_node[1]}")
+                continue
+                
+            try:
+                from rich.markup import escape
+                agent = load_agent_from_roster(name)
+                model = escape(agent.get("model", "unknown"))
+                tools = escape(agent.get("tools_allowed", "none"))
+                desc = escape(agent.get("description", ""))
+                instructions = escape(agent.get("system_prompt", "No instructions available."))
+                
+                block = f"[bold green]{escape(name)}[/bold green]\n[dim]Model:[/dim] {model}\n[dim]Tools:[/dim] {tools}"
+                if desc:
+                    block += f"\n[dim]Description:[/dim] {desc}"
+                block += f"\n\n[bold]System Instructions[/bold]\n{instructions}"
+                info_blocks.append(block)
+            except Exception as exc:
+                info_blocks.append(f"[red]Error loading '{name}': {exc}[/red]")
+                
+        body.update("\n\n---\n\n".join(info_blocks))
+        
+    async def update_slot_tools_ui(self, slot_name: str) -> None:
+        from textual.containers import Horizontal
         try:
-            from maccre_core.orchestration.roster_loader import load_agent_from_roster
-            agent = load_agent_from_roster(name)
-            model = agent.get("model", "unknown")
-            tools = agent.get("tools_allowed", "none")
-            desc = agent.get("description", "")
-            instructions = agent.get("system_prompt", "No instructions available.")
+            container = self.query_one(f"#tools_container_{slot_name}")
+            inp = self.query_one(f"#slot_{slot_name}")
             
-            info_parts = [
-                f"[bold green]{name}[/bold green]",
-                f"[dim]Model:[/dim] {model}",
-                f"[dim]Tools:[/dim] {tools}",
-            ]
-            if desc:
-                info_parts.append(f"[dim]Description:[/dim] {desc}")
-                
-            info_parts.append("")
-            info_parts.append("[bold]System Instructions[/bold]")
+            agents = []
+            if isinstance(inp, Select):
+                # Textual uses a sentinel object for blank, which strings to "Select.NULL"
+                str_val = str(inp.value)
+                if str_val and str_val != "Select.NULL" and inp.value != Select.BLANK:
+                    agents.append(str_val)
+            elif isinstance(inp, Input):
+                agents = [p.strip() for p in inp.value.split(",") if p.strip()]
             
-            instr_display = str(instructions)
-            if len(instr_display) > 1000:
-                instr_display = instr_display[:1000] + "\n\n[dim]…truncated…[/dim]"
+            await container.remove_children()
                 
-            info_parts.append(instr_display)
-            body.update("\n".join(info_parts))
-        except Exception as exc:
-            body.update(f"[red]Error loading '{name}': {exc}[/red]")
+            from maccre_core.tools.tool_registry import TOOL_REGISTRY
+            tool_opts = [(t.__name__, t.__name__) for t in TOOL_REGISTRY]
+            tool_opts.insert(0, ("google_search", "google_search"))
+            
+            import uuid
+            for agent in agents:
+                # Add a unique suffix to prevent DuplicateIds when rapid typing
+                unique_suffix = uuid.uuid4().hex
+                key = f"{slot_name}_{agent}"
+                unique_key = f"{key}_{unique_suffix}"
+                
+                cached_tools = self.temp_tools.get(key, "")
+                
+                lbl_tools = Label(f"Tools ({agent}):", classes="me-slot-label")
+                sel_tools = Select(tool_opts, prompt="Select tool...", id=f"sel_tools_{unique_key}", classes="me-tool-select")
+                btn_add_tool = Button("Add Tool", id=f"btn_add_tool_{unique_key}", classes="me-tool-add-btn", variant="primary")
+                inp_tools = Input(value=cached_tools, placeholder=f"Tools for {agent}...", id=f"tools_{unique_key}", classes="me-tool-input")
+                
+                container.mount(Horizontal(lbl_tools, sel_tools, btn_add_tool, inp_tools, classes="me-slot-row"))
+                
+        except Exception as e:
+            import traceback
+            with open("ui_error.log", "a") as f:
+                f.write(f"Error in update_slot_tools_ui: {e}\n{traceback.format_exc()}\n")
+
+    @on(Select.Changed, ".me-slot-input")
+    async def on_slot_selection_changed(self, event: Select.Changed) -> None:
+        if not event.select.id or not event.select.id.startswith("slot_"):
+            return
+        slot_name = event.select.id.replace("slot_", "")
+        self.update_agent_details_panel()
+        await self.update_slot_tools_ui(slot_name)
+        self.update_augment_preview()
+
+    @on(Input.Changed, ".me-slot-input")
+    async def on_slot_input_changed(self, event: Input.Changed) -> None:
+        try:
+            if event.input.id and event.input.id.startswith("slot_"):
+                slot_name = event.input.id.replace("slot_", "")
+                self.update_agent_details_panel()
+                await self.update_slot_tools_ui(slot_name)
+        except Exception as e:
+            import traceback
+            with open("ui_error.log", "a") as f:
+                f.write(f"Error in on_slot_input_changed: {e}\n{traceback.format_exc()}\n")
+        self.update_augment_preview()
+            
+    @on(Input.Changed, ".me-tool-input")
+    def on_tool_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id and event.input.id.startswith("tools_"):
+            unique_key = event.input.id.replace("tools_", "")
+            # Strip the unique timestamp to get the actual slot_agent key
+            key = unique_key.rsplit("_", 1)[0]
+            self.temp_tools[key] = event.input.value
+            
+    @on(Button.Pressed, ".me-tool-add-btn")
+    def on_add_tool_pressed(self, event: Button.Pressed) -> None:
+        unique_key = event.button.id.replace("btn_add_tool_", "")
+        key = unique_key.rsplit("_", 1)[0]
+        try:
+            sel = self.query_one(f"#sel_tools_{unique_key}", Select)
+            inp = self.query_one(f"#tools_{unique_key}", Input)
+            if sel.value and sel.value != Select.BLANK:
+                current = [p.strip() for p in inp.value.split(",") if p.strip()]
+                if str(sel.value) not in current:
+                    current.append(str(sel.value))
+                    new_val = ",".join(current)
+                    inp.value = new_val
+                    self.temp_tools[key] = new_val
+        except Exception:
+            pass
+        
+    @on(TextArea.Changed)
+    def on_textarea_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "cfg_structural_augment":
+            self.update_augment_preview()
+            
+    def update_augment_preview(self) -> None:
+        try:
+            from textual.widgets import Static, TextArea
+            preview_panel = self.query_one("#augment_preview", Static)
+            augment_text = self.query_one("#cfg_structural_augment", TextArea).text
+        except Exception:
+            return  # Elements not mounted yet or not present
+
+        # Gather all agents from slots
+        agents = []
+        host = ""
+        for s_name in self.current_slots:
+            try:
+                inp = self.query_one(f"#slot_{s_name}")
+                if isinstance(inp, Select):
+                    if inp.value and inp.value != Select.BLANK:
+                        val = str(inp.value)
+                        if s_name in ("judge", "host", "end_agent"):
+                            host = val
+                        else:
+                            agents.append(val)
+                elif isinstance(inp, Input):
+                    parts = [p.strip() for p in inp.value.split(",") if p.strip()]
+                    agents.extend(parts)
+            except Exception:
+                pass
+                
+        agents_str = ", ".join(agents)
+        
+        if agents:
+            mock_node_ids = "\n".join(f"- C_ADV_{i}_<MACRO_ID> (for {a})" for i, a in enumerate(agents))
+            mock_node_ids = f"[bold green]\n{mock_node_ids}[/bold green]"
+        else:
+            mock_node_ids = "[dim]<NODE_IDs>[/dim]"
+        
+        # Hydrate text
+        preview = augment_text.replace(
+            "{macro_id}", "[dim]<MACRO_ID>[/dim]"
+        ).replace(
+            "{agents}", f"[bold green]{agents_str}[/bold green]" if agents_str else "[dim]<AGENTS>[/dim]"
+        ).replace(
+            "{host}", f"[bold green]{host}[/bold green]" if host else "[dim]<HOST>[/dim]"
+        ).replace(
+            "{max_recursion}", "[bold green]3[/bold green]"
+        ).replace(
+            "{node_ids}", mock_node_ids
+        ).replace(
+            "{exclusionary_search}", "[bold green]2[/bold green]"
+        )
+        
+        info_text = (
+            "[bold cyan]Instruction Guide[/bold cyan]\n"
+            "Structural augments silently steer topology behavior. "
+            "You can inject these standard tokens anywhere:\n"
+            "- [bold]{macro_id}[/bold]: Unique execution ID\n"
+            "- [bold]{agents}[/bold]: Comma-separated list of assigned agents\n"
+            "- [bold]{host}[/bold]: The host/judge agent name\n"
+            "- [bold]{max_recursion}[/bold]: Retry/round limit\n"
+            "- [bold]{node_ids}[/bold]: Valid route targets\n"
+            "- [bold]{exclusionary_search}[/bold]: Max cascade loops\n\n"
+            "[bold cyan]Tool Catalog[/bold cyan]\n"
+            "[bold]Web / OSINT[/bold]\n"
+            "  - [dim]google_search[/dim]: Native Gemini live search grounding\n"
+            "  - [dim]search_web[/dim]: Brave API web search\n"
+            "  - [dim]read_url_content[/dim]: Scrape/read plain text from a URL\n"
+            "  - [dim]cascade_search[/dim]: Multi-pass exclusionary Brave search\n"
+            "  - [dim]execute_hybrid_synthesis[/dim]: Simultaneous Live Web + Local Vector DB search\n"
+            "[bold]Storage & Memory[/bold]\n"
+            "  - [dim]read_file / write_file[/dim]: Read and write local files\n"
+            "  - [dim]write_dynamic_context[/dim]: Append to session dynamic context\n"
+            "  - [dim]query_local_memory[/dim]: Semantic search the project's vector DB\n"
+            "  - [dim]ingest_document[/dim]: Vectorize a document into local memory\n"
+            "[bold]Execution & Render[/bold]\n"
+            "  - [dim]run_swarm / ignite_swarm[/dim]: Orchestrate sub-swarms\n"
+            "  - [dim]execute_render_pipeline[/dim]: Generate UI/Video/Audio assets\n"
+            "  - [dim]generate_telemetry_report[/dim]: Audit log analysis\n\n"
+            "[bold cyan]Live Preview[/bold cyan]\n"
+        )
+        
+        preview_panel.update(info_text + preview)
 

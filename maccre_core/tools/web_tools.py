@@ -192,54 +192,55 @@ def read_url_content(url: str) -> str:
         return f"[URL_ERROR] {exc!s} — {url}"
 
 
-def cascade_search(query: str, num_results: int = 10) -> str:
-    """Dual-index Brave search with automatic source exclusion.
+def cascade_search(query: str, num_results: int = 10, num_passes: int = 2) -> str:
+    """Multi-index Brave search with automatic source exclusion.
 
-    Pass 1 searches the query normally, then pass 2 re-searches with
-    ``-site:<domain>`` exclusions for every domain surfaced in pass 1.
+    Pass 1 searches the query normally, then subsequent passes re-search with
+    ``-site:<domain>`` exclusions for every domain surfaced in all previous passes.
     This surfaces diverse sources that would otherwise be buried under
     dominant domains.
 
     Args:
         query: The search query string.
         num_results: Number of results per pass (max 20). Default 10.
+        num_passes: Number of exclusionary passes to run (max 5). Default 2.
 
     Returns:
-        Combined results from both passes, clearly labeled.
+        Combined results from all passes, clearly labeled.
     """
     num_results = int(num_results)
+    num_passes = max(1, min(5, int(num_passes)))
 
-    # ── Pass 1: primary index ────────────────────────────────────────────
-    pass1 = search_web(query, num_results)
-
-    # ── Extract unique domains from pass-1 URLs ─────────────────────────
+    all_results = [f"=== CASCADE SEARCH: [{query}] ===\n"]
     domains: list[str] = []
     seen: set[str] = set()
-    for line in pass1.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("URL: "):
-            raw_url = stripped[5:].strip()
-            try:
-                host = urllib.parse.urlparse(raw_url).netloc
-                if host and host not in seen:
-                    seen.add(host)
-                    domains.append(host)
-            except Exception:  # noqa: BLE001
-                pass
 
-    # ── Pass 2: exclusionary index ───────────────────────────────────────
-    if domains:
-        exclusion_suffix = " ".join(f"-site:{d}" for d in domains)
-        exclusion_query = f"{query} {exclusion_suffix}"
-    else:
-        exclusion_query = query
+    for pass_num in range(1, num_passes + 1):
+        if domains:
+            exclusion_suffix = " ".join(f"-site:{d}" for d in domains)
+            current_query = f"{query} {exclusion_suffix}"
+        else:
+            current_query = query
 
-    pass2 = search_web(exclusion_query, num_results)
+        pass_result = search_web(current_query, num_results)
+        
+        # Label the pass appropriately
+        pass_name = "PRIMARY INDEX" if pass_num == 1 else f"EXCLUSIONARY INDEX (PASS {pass_num})"
+        all_results.append(f"=== {pass_name} ===\n{pass_result}\n")
 
-    logger.info("[web_tools] cascade_search: %d domains excluded for pass 2", len(domains))
-    return (
-        f"=== CASCADE SEARCH: [{query}] ===\n\n"
-        f"=== PASS 1: PRIMARY INDEX ===\n{pass1}\n\n"
-        f"=== PASS 2: EXCLUSIONARY INDEX ===\n{pass2}\n"
-    )
+        # Extract unique domains from this pass's URLs
+        for line in pass_result.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("URL: "):
+                raw_url = stripped[5:].strip()
+                try:
+                    host = urllib.parse.urlparse(raw_url).netloc
+                    if host and host not in seen:
+                        seen.add(host)
+                        domains.append(host)
+                except Exception:  # noqa: BLE001
+                    pass
+                    
+        logger.info(f"[web_tools] cascade_search pass {pass_num}: accumulated {len(domains)} total excluded domains")
 
+    return "\n".join(all_results)

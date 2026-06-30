@@ -148,6 +148,22 @@ class ToolExecutor(ToolDispatcherABC):
                             "[ToolExecutor] write_file auto-scoped: %s → %s",
                             _write_path, t_args['path'],
                         )
+                        pass
+                
+                # Sandbox write_file to the active session directory
+                if t_name == "write_file" and session_id:
+                    path = t_args.get("path", "")
+                    if not path.startswith(f"04_Code_Artifacts/{session_id}"):
+                        import pathlib
+                        if path.startswith("04_Code_Artifacts/"):
+                            # Agent forgot session_id
+                            fixed_path = f"04_Code_Artifacts/{session_id}/{path.split('04_Code_Artifacts/')[-1].lstrip('/')}"
+                        else:
+                            # Agent tried to write somewhere else, force into session folder
+                            basename = pathlib.Path(path).name
+                            fixed_path = f"04_Code_Artifacts/{session_id}/{basename}"
+                        t_args["path"] = fixed_path
+                        logger.info(f"[ToolExecutor] Sandboxed write_file path from '{path}' to '{fixed_path}'")
 
                 result = str(TOOL_DISPATCHER[t_name](**t_args))
 

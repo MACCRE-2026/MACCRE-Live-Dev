@@ -90,6 +90,7 @@ class _AgentSession:
             tools_str=self.tools_str,
             temperature=self.temperature,
             conversation_history=self.history if self.history else None,
+            expect_multiple_reads=True,
         )
         self.total_cost += cost
 

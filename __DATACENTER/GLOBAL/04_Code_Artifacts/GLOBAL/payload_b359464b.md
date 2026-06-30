@@ -1,0 +1,1 @@
+Lets look at Tulsi Gabbard, her tenure as the head of DNI, and the documents she released on her way out the door.

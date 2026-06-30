@@ -656,38 +656,6 @@ def canonize_project_to_global(project_name: str) -> str:
         return f"MERGE_FAILED: {exc}"
 
 
-# ── Triune Database Architecture ────────────────────────────────────────────────
-
-def vectorize_thought(text: str, project_name: str, session_id: str, agent_id: str = "") -> str:
-    """Embeds an agent's <thought> scratchpad and stores it in the session's ephemeral agent_thoughts.db."""
-    try:
-        from maccre_core.memory.knowledge_store import get_knowledge_store, PinRecord
-        import uuid
-        
-        db_name = f"session_{session_id}_agent_thoughts.db"
-        store = get_knowledge_store(project_name, db_name=db_name)
-        
-        vector = get_gemini_embedding(text, task_type="RETRIEVAL_DOCUMENT")
-        doc_id = f"thought_{uuid.uuid4().hex[:8]}"
-        
-        safe_meta = {
-            "project": project_name,
-            "session_id": session_id,
-            "agent_id": agent_id,
-            "type": "agent_thought",
-            "ingested_at": datetime.datetime.utcnow().isoformat(),
-        }
-        
-        store.upsert("swarm_memory", PinRecord(
-            doc_id=doc_id,
-            text=text,
-            vector=vector,
-            metadata=safe_meta,
-        ))
-        return f"[VECTOR_SUCCESS] Thought logged to ephemeral {db_name}"
-    except Exception as e:
-        return f"[VECTOR_FAULT] {e!s}"
-
 def vectorize_ledger(text: str, project_name: str, session_id: str, agent_id: str = "") -> str:
     """Embeds an agent's final response and stores it in the session's ephemeral agent_ledgers.db."""
     try:
@@ -735,7 +703,6 @@ def canonize_session(session_id: str, project_name: str) -> str:
 
     # ── Phase 1: Merge session ephemeral vectors into canon ──────────────────
     databases = [
-        ("agent_thoughts", f"session_{session_id}_agent_thoughts.db", "agent_thoughts.db"),
         ("agent_ledgers", f"session_{session_id}_agent_ledgers.db", "agent_ledgers.db"),
     ]
 
@@ -781,54 +748,21 @@ def canonize_session(session_id: str, project_name: str) -> str:
         except Exception as e:
             results.append(f"[{db_type}] Error: {e!s}")
 
-    # ── Phase 2: Vectorize knowledge triplets into canon thought_pins.db ─────
-    # Raw triplet JSON files live in 02_Dynamic_Context/memory_pins/pin_{node}_{session_id}.json
-    # This is the ONLY code path that pays the embedding cost for thought-pins.
+    # ── Phase 2: Vectorize knowledge triplets into SovereignPinStore (SQLite) ─────
     try:
-        import json as _json
-        import uuid as _uuid
-        import datetime as _dt
-        from maccre_core.memory.knowledge_store import PinRecord
-
-        pins_dir = get_datacenter_path("02_Dynamic_Context", "memory_pins")
-        tp_store = get_knowledge_store(project_name, db_name="thought_pins.db")
-        pin_files = sorted(pins_dir.glob(f"pin_*_{session_id}.json")) if pins_dir.exists() else []
-        pin_count = 0
-
-        for pin_file in pin_files:
-            try:
-                triplets = _json.loads(pin_file.read_text(encoding="utf-8"))
-                if not triplets:
-                    continue
-                concept_text = _json.dumps(triplets)
-                vector = get_gemini_embedding(concept_text, task_type="RETRIEVAL_DOCUMENT")
-                doc_id = f"pin_{pin_file.stem}_{_uuid.uuid4().hex[:8]}"
-                safe_meta = {
-                    "project": project_name,
-                    "session_id": session_id,
-                    "agent_id": pin_file.stem.split("_")[1] if "_" in pin_file.stem else "unknown",
-                    "type": "thought_pin",
-                    "ingested_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
-                }
-                tp_store.upsert("swarm_memory", PinRecord(
-                    doc_id=doc_id,
-                    text=concept_text,
-                    vector=vector,
-                    metadata=safe_meta,
-                ))
-                pin_count += 1
-            except Exception as pin_err:
-                results.append(f"[thought_pins] Failed to vectorize {pin_file.name}: {pin_err}")
-
-        if pin_count:
-            results.append(f"[thought_pins] Vectorized {pin_count} triplet file(s) into canon thought_pins.db.")
-        elif pin_files:
-            results.append("[thought_pins] Triplet files found but none contained data.")
+        from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
+        
+        unified_ledger_path = get_datacenter_path("04_Code_Artifacts", session_id, "unified_session_ledger.md")
+        if unified_ledger_path.exists():
+            engine = CognitiveMemoryEngine()
+            engine.extract_from_canonized_ledger(str(unified_ledger_path), session_id)
+            results.append("[thought_pins] Extracted pins from unified ledger into SovereignPinStore.")
         else:
-            results.append("[thought_pins] No raw triplet files found for this session.")
+            results.append("[thought_pins] unified_session_ledger.md not found, skipping extraction.")
+            
     except Exception as tp_err:
-        results.append(f"[thought_pins] Canonization error: {tp_err}")
-
+        results.append(f"[thought_pins] Extraction error: {tp_err!s}")
+        
     return "\n".join(results)
 
 
@@ -837,7 +771,7 @@ def query_session_memory(session_id: str, db_type: str, query: str, n_results: i
     Forensic tool: Queries an ephemeral session database (usually for a failed swarm) to salvage or analyze vectors.
     db_type must be one of: 'agent_thoughts', 'agent_ledgers'.
     """
-    valid_types = ['agent_thoughts', 'agent_ledgers']
+    valid_types = ['agent_ledgers']
     if db_type not in valid_types:
         return f"Invalid db_type. Must be one of: {valid_types}"
         

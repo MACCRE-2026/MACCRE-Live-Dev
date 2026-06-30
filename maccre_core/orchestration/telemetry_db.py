@@ -23,7 +23,6 @@ Silo layout (all under B:/MACCREv2/__DATACENTER/telemetry/):
   system_logs.db      — agent actions, topology hops, FinOps cost events
   user_interactions.db — Architect / API inputs and their context tags
   terminal_logs.db    — live venv subprocess commands and their output
-  thoughts.db         — raw <scratchpad> extracts (RBAC-restricted)
 
 Definitions silo (B:/MACCREv2/__DATACENTER/telemetry/):
   definitions.db      — topology_library: proven topologies promoted from CSV
@@ -126,15 +125,6 @@ def init_all_silos() -> None:
             )
         """)
 
-    # 4. thoughts (RBAC-restricted — write via log_thought, read via telemetry_tools)
-    with _wal_conn(get_db_path("thoughts.db")) as conn:
-        conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS thoughts (
-                {_UNIVERSAL_HEADER},
-                scratchpad_content TEXT NOT NULL DEFAULT ''
-            )
-        """)
-
     # 5. definitions — topology_library (8-column parity with topology.csv)
     with _wal_conn(get_db_path("definitions.db")) as conn:
         conn.execute(f"""
@@ -219,23 +209,6 @@ def log_terminal_command(
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (session_id, project_id, agent_id, source_node, _now(),
              command_run, std_output, 1 if is_error else 0),
-        )
-
-
-def log_thought(
-    scratchpad_content: str,
-    session_id: str = "",
-    project_id: str = "",
-    agent_id: str = "",
-    source_node: str = "",
-) -> None:
-    """Log a raw <scratchpad> extract to thoughts.db (RBAC-restricted silo)."""
-    with _wal_conn(get_db_path("thoughts.db")) as conn:
-        conn.execute(
-            "INSERT INTO thoughts "
-            "(session_id, project_id, agent_id, source_node, timestamp, scratchpad_content) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, project_id, agent_id, source_node, _now(), scratchpad_content),
         )
 
 

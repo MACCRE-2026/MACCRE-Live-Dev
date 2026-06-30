@@ -105,12 +105,26 @@ class TemplateDefinition:
 
 _CASCADE_SEARCH_AUGMENT = """
 [CASCADE DUAL-INDEX SEARCH PROTOCOL]
-You have access to two search indexes. For EVERY research turn you MUST execute both:
-1. PASS 1 — Call `cascade_search` with your research query. This tool automatically
-   performs a primary web search and then a secondary search that EXCLUDES all domains
-   found in the primary results, giving you two non-overlapping source sets.
-2. Combine BOTH result sets into your report. Cite and tag every source.
+You have access to a specialized web search tool. For EVERY research turn you MUST:
+1. Call `cascade_search` with your research query and explicitly set `num_passes={exclusionary_search}`.
+   This tells the tool to perform a primary web search followed by exclusionary searches 
+   that omit all domains found in previous passes, giving you completely unique, non-overlapping source sets.
+2. Combine ALL result sets into your report. Cite and tag every source.
 Do NOT skip the cascade search. The dual-index protocol is your primary research method.
+"""
+
+_HOLOGRAM_SYNTHESIS_AUGMENT = """
+[HOLOGRAM SYNTHESIS PROTOCOL]
+You are the central synthesizer {host}. You will receive independent analysis from 
+the following facet agents: {agents}.
+Synthesize their disparate views into a cohesive, singular output.
+"""
+
+_CHORD_RECURSION_AUGMENT = """
+[CHORD RECURSION PROTOCOL]
+You are the central host {host}. The following participant agents have responded: {agents}.
+Synthesize their inputs and send a refined prompt back to them for the next round.
+Maximum rounds remaining: {max_recursion}.
 """
 
 _CRUCIBLE_JUDGE_AUGMENT = """
@@ -120,12 +134,19 @@ professional standards and criteria as defined in your role.
 
 ROUTING COMMANDS (you MUST output exactly one per evaluation):
 - If an Advocate's submission does NOT meet your standards, output on its own line:
-  ROUTE_TO:{node_id} — followed by your detailed critique and revision directives.
+ROUTE_TO:Agent_Name — followed by your detailed critique and revision directives.
 - If ALL submissions meet your standards, output on its own line:
   ROUTE_TO:ACCEPTED — followed by your synthesis or approval statement.
 
-You may only route to ONE Advocate at a time. Address the weakest submission first.
+Valid Agent Names to route back to are:
+{node_ids}
+
+You may route to ONE Advocate at a time, or MULTIPLE Advocates concurrently by separating their names with commas (e.g. ROUTE_TO:Agent_A,Agent_B).
+Address the weakest submissions first.
 Maximum revision rounds remaining: {max_recursion}.
+
+***CRITICAL FINAL INSTRUCTION***
+Because you are an automated judge inside a CI/CD pipeline, you MUST end your evaluation by explicitly outputting the ROUTE_TO: command on its own line at the very bottom of your response. If you just write a memo and forget the ROUTE_TO tag, the pipeline will break!
 """
 
 
@@ -163,6 +184,16 @@ TEMPLATE_CASCADE = TemplateDefinition(
             name="agent_order", param_type="str",
             description="Pipe-separated agent ordering (e.g. 'OSINT_Analyst|Regular_Joe')",
         ),
+        ConfigSpec(
+            name="exclusionary_search", param_type="int",
+            description="Number of total search passes (1 primary + N exclusionary)",
+            default=2, min_val=1, max_val=5,
+        ),
+        ConfigSpec(
+            name="structural_augment", param_type="str",
+            description="Agent directive injected into the first agent's system prompt",
+            default=_CASCADE_SEARCH_AUGMENT.strip(),
+        ),
     ],
 )
 
@@ -187,7 +218,13 @@ TEMPLATE_HOLOGRAM = TemplateDefinition(
             max_agents=1,
         ),
     ],
-    config=[],
+    config=[
+        ConfigSpec(
+            name="structural_augment", param_type="str",
+            description="Synthesizer directive injected into the host's system prompt",
+            default=_HOLOGRAM_SYNTHESIS_AUGMENT.strip(),
+        ),
+    ],
 )
 
 TEMPLATE_CHORD = TemplateDefinition(
@@ -217,6 +254,11 @@ TEMPLATE_CHORD = TemplateDefinition(
             name="loop_count", param_type="int",
             description="Number of host→participants→host cycles",
             default=3, min_val=1, max_val=20,
+        ),
+        ConfigSpec(
+            name="structural_augment", param_type="str",
+            description="Recursion directive injected into the host's system prompt",
+            default=_CHORD_RECURSION_AUGMENT.strip(),
         ),
     ],
 )
@@ -256,7 +298,12 @@ TEMPLATE_CRUCIBLE = TemplateDefinition(
             name="variation", param_type="choice",
             description="Post-acceptance topology mode",
             default="synthesis",
-            choices=["synthesis", "debate", "panel"],
+            choices=["synthesis", "synthesis-blind", "debate", "panel"],
+        ),
+        ConfigSpec(
+            name="structural_augment", param_type="str",
+            description="Judge evaluation protocol/augment injected into system prompt",
+            default=_CRUCIBLE_JUDGE_AUGMENT.strip(),
         ),
     ],
 )
@@ -304,7 +351,20 @@ def _build_cascade_topology(
 
     # The host gets the search augment injected into its system prompt
     host_system = str(host_profile.get("system_prompt", ""))
-    augmented_system = host_system + "\n" + _CASCADE_SEARCH_AUGMENT
+    
+    augment_template = config.get("structural_augment")
+    if not augment_template:
+        augment_template = _CASCADE_SEARCH_AUGMENT
+        
+    augmented_system = host_system + "\n" + augment_template.replace(
+        "{macro_id}", macro_id
+    ).replace(
+        "{agents}", ", ".join(ordered)
+    ).replace(
+        "{host}", host_name
+    ).replace(
+        "{exclusionary_search}", str(config.get("exclusionary_search", 2))
+    )
 
     # Build the tools string: host gets cascade_search + whatever it already has
     host_tools = str(host_profile.get("tools_allowed", "none"))
@@ -385,10 +445,23 @@ def _build_hologram_topology(
         })
 
     # Synthesizer waits for all facets
+    augment_template = config.get("structural_augment")
+    if not augment_template:
+        augment_template = _HOLOGRAM_SYNTHESIS_AUGMENT
+        
+    synth_system = str(synth_profile.get("system_prompt", ""))
+    synth_system += "\n\n" + augment_template.replace(
+        "{macro_id}", macro_id
+    ).replace(
+        "{agents}", ", ".join(facets)
+    ).replace(
+        "{host}", synthesizer_name
+    )
+    
     rows.append({
         "Node_ID": synth_id,
         "Agent_Name": synthesizer_name,
-        "System_Instruction": str(synth_profile.get("system_prompt", "")),
+        "System_Instruction": synth_system,
         "Next_Node": "END",
         "Temperature": "0.3",  # Low temp for synthesis
         "Output_Format": None,
@@ -425,11 +498,26 @@ def _build_chord_topology(
 
     macro_id = str(uuid.uuid4())[:8]
     node_id = f"CHORD_{macro_id}"
+    
+    augment_template = config.get("structural_augment")
+    if not augment_template:
+        augment_template = _CHORD_RECURSION_AUGMENT
+        
+    host_system = str(host_profile.get("system_prompt", ""))
+    host_system += "\n\n" + augment_template.replace(
+        "{macro_id}", macro_id
+    ).replace(
+        "{agents}", ", ".join(participants)
+    ).replace(
+        "{host}", host_name
+    ).replace(
+        "{max_recursion}", str(loop_count)
+    )
 
     return [{
         "Node_ID": node_id,
         "Agent_Name": host_name,
-        "System_Instruction": str(host_profile.get("system_prompt", "")),
+        "System_Instruction": host_system,
         "Next_Node": "END",
         "Temperature": str(host_profile.get("temperature", "0.7")),
         "Output_Format": None,
@@ -487,6 +575,7 @@ def _build_crucible_topology(
             "Fallback_Node": "FAILED",
             "Max_Retries": max_recursion,
             "Payload_Path": None,
+            "Payload_Mode": "Crucible Blind" if variation == "synthesis-blind" else "Unified Ledger",
             "Is_End_Node": "FALSE",
             "Timeout_Sec": 0,
             "Dialogue_Partner": None,
@@ -496,9 +585,14 @@ def _build_crucible_topology(
         })
 
     # ── Build node-id map for the routing augment ─────────────────────────────
-    adv_id_map = ", ".join(f"{aid} ({advocates[i]})" for i, aid in enumerate(advocate_ids))
-    judge_augment = _CRUCIBLE_JUDGE_AUGMENT.format(
-        node_id="{" + adv_id_map + "}",
+    adv_id_map = "\n".join(f"- {advocates[i]}" for i in range(len(advocate_ids)))
+    
+    augment_template = config.get("structural_augment")
+    if not augment_template:
+        augment_template = _CRUCIBLE_JUDGE_AUGMENT
+        
+    judge_augment = augment_template.format(
+        node_ids=adv_id_map,
         max_recursion=max_recursion,
     )
     judge_system = str(judge_profile.get("system_prompt", "")) + "\n" + judge_augment
@@ -659,7 +753,27 @@ def build_from_template(
         if cfg.param_type == "choice" and cfg.choices and val not in cfg.choices:
             raise ValueError(f"Config '{cfg.name}' must be one of {cfg.choices}, got '{val}'.")
 
-    return builder(agent_mapping, config, roster)
+    rows = builder(agent_mapping, config, roster)
+    
+    # ── Apply slot_tools overrides ────────────────────────────────────────────
+    slot_tools = config.get("slot_tools", {})
+    if slot_tools:
+        agent_to_slot = {}
+        for slot_name, agents in agent_mapping.items():
+            for a in agents:
+                agent_to_slot[a] = slot_name
+                
+        for row in rows:
+            a_name = row.get("Agent_Name")
+            if a_name:
+                slot = agent_to_slot.get(a_name)
+                specific_key = f"{slot}_{a_name}"
+                if specific_key in slot_tools:
+                    row["Tools_Allowed"] = slot_tools[specific_key]
+                elif slot and slot in slot_tools:
+                    row["Tools_Allowed"] = slot_tools[slot]
+                    
+    return rows
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

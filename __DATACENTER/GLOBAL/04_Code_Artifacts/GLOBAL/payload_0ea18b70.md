@@ -1,0 +1,1 @@
+Lets examine the latest declassifications by Tulsi Gabbard and other disclosures and declassifications by DNI during her tenure as director.

@@ -266,18 +266,6 @@ class UniversalSwarmWorker:
                                 with open(thought_path, "a", encoding="utf-8") as f:
                                     f.write(json.dumps(thought_entry) + "\n")
 
-                                # ── Triple DB: Vectorize thought into session-scoped agent_thoughts.db ──
-                                try:
-                                    from maccre_core.tools.rag_tools import vectorize_thought  # noqa: PLC0415
-                                    vectorize_thought(
-                                        text=thought_text,
-                                        project_name=self.project_name,
-                                        session_id=job_id,
-                                        agent_id=current_node,
-                                    )
-                                except Exception as _vec_err:  # noqa: BLE001
-                                    logger.warning(f"[{current_node}] [VECTOR_WARN] thought vectorization failed (non-fatal): {_vec_err}")
-
                             chat_payload = {
                                 "job_id": job_id,
                                 "agent_name": current_node,
@@ -466,6 +454,22 @@ class UniversalSwarmWorker:
                     pass
 
             # ── Session-Scoped Artifact Directory ──────────────────────────────
+            # ARCHITECTURE NOTE: Routing Paths (Explicit vs Implicit)
+            # Currently, MACCREv2 uses Explicit Routing via Sentinels ({SESSION_ID}).
+            # This explicitly constructs absolute paths in the instructions, allowing
+            # the agent to write files outside of its immediate isolated working
+            # directory by passing the resolved path into tools like write_file.
+            # 
+            # Alternative: Implicit Routing.
+            # In an Implicit model, the LLM is only given relative paths (e.g. `04_Code_Artifacts/out.py`).
+            # The tool interceptor (`maccre_router.py`) would dynamically map these
+            # relative paths to the correct active unified session ledger directory.
+            # This would improve security and portability but requires intercepting
+            # all I/O bound tools and maintaining active session state inside the router.
+            # 
+            # We maintain Explicit Routing for now to guarantee tool execution
+            # transparency and avoid masking path errors behind router logic.
+            
             # Create 04_Code_Artifacts/{job_id}/ once per node execution.
             # {SESSION_ID} tokens in Instruction_Override and Artifact_Path are
             # substituted with the actual job_id at runtime. This guarantees
@@ -479,7 +483,7 @@ class UniversalSwarmWorker:
 
             # ── Global Datacenter & Tool Knowledge Injection ──────────────────
             _GLOBAL_ARCHITECTURE = """
-[SYSTEM REGISTRY: MACCREv2 DATACENTER ARCHITECTURE & TOOL AWARENESS]
+[SYSTEM REGISTRY: MACCREv2 DATACENTER ARCHITECTURE]
 You are operating within the MACCREv2 5-Tier Datacenter architecture.
 All file paths must strictly resolve to these five silos:
   - 01_Raw_Source: External, read-only documents and inputs.
@@ -487,9 +491,6 @@ All file paths must strictly resolve to these five silos:
   - 03_Agent_Ledgers: Your thoughts, debug logs, and intermediate text generation.
   - 04_Code_Artifacts: Final source code, markdown outputs, and structured JSON results.
   - 05_Rendered_Media: Audio/video generated assets.
-  
-You have access to specific functional tools (if declared in your active configuration).
-You do NOT need to ask for permission to use them. If your instructions require external data, code execution, or file generation, you MUST use the provided tools.
 """
             swarm_memories = self._load_memory_pins()
             system_prompt = base_prompt + _GLOBAL_ARCHITECTURE + swarm_memories
@@ -518,6 +519,19 @@ You do NOT need to ask for permission to use them. If your instructions require 
             #   [SOURCE DOCUMENT] — the original user input (unchanged through all hops)
             #   [PREVIOUS NODE OUTPUT] — the ledger written by the prior agent
             # For the first node (INGEST), these are the same file; we skip the duplicate block.
+            # ── Crucible Blind Payload Generation ─────────────────────────────
+            _payload_mode = str(node_config.get("payload_mode", "Unified Ledger"))
+            if _payload_mode == "Crucible Blind":
+                try:
+                    from maccre_core.orchestration.flow_engine import generate_crucible_blind_ledger
+                    _judge_node = str(node_config.get("next_node_success", node_config.get("Next_Node", ""))).split(",")[0].strip()
+                    _cb_path = generate_crucible_blind_ledger(job_id, current_node, _judge_node)
+                    if _cb_path:
+                        payload_path = _cb_path
+                        logger.info(f"[{AGENT_ID}] Loaded Crucible Blind Ledger: {payload_path}")
+                except Exception as e:
+                    logger.warning(f"[{AGENT_ID}] Failed to generate Crucible Blind Ledger: {e}")
+
             logger.info(f"[{AGENT_ID}] Reading payload: {payload_path}")
             ledger_content = self._read_local_payload(payload_path)
             source_content = self._read_local_payload(source_payload_path)
@@ -547,23 +561,38 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     try:
                         _pred_cfg = self.topology.get_node_config(_pred_node) if self.topology else {}
                         _pred_art_rel: str = str(_pred_cfg.get("artifact_path", "") or "")
-                        if not _pred_art_rel:
-                            continue
-                        # Resolve {SESSION_ID} token in the predecessor's artifact_path
-                        _pred_art_rel = _pred_art_rel.replace("{SESSION_ID}", job_id)
-                        # Inject job_id subfolder if not already scoped
-                        _ART_PFX = "04_Code_Artifacts/"
-                        if _pred_art_rel.startswith(_ART_PFX) and job_id not in _pred_art_rel:
-                            _pred_art_rel = f"{_ART_PFX}{job_id}/{_pred_art_rel[len(_ART_PFX):]}"
-                        _pred_art_abs = get_datacenter_path(*_pred_art_rel.split("/"))
-                        if _pred_art_abs.exists():
-                            _art_content = _pred_art_abs.read_text(encoding="utf-8")
+                        _art_content = None
+                        _resolved_path_str = ""
+
+                        if _pred_art_rel:
+                            # Resolve {SESSION_ID} token in the predecessor's artifact_path
+                            _pred_art_rel = _pred_art_rel.replace("{SESSION_ID}", job_id)
+                            # Inject job_id subfolder if not already scoped
+                            _ART_PFX = "04_Code_Artifacts/"
+                            if _pred_art_rel.startswith(_ART_PFX) and job_id not in _pred_art_rel:
+                                _pred_art_rel = f"{_ART_PFX}{job_id}/{_pred_art_rel[len(_ART_PFX):]}"
+                            _pred_art_abs = get_datacenter_path(*_pred_art_rel.split("/"))
+                            if _pred_art_abs.exists():
+                                _art_content = _pred_art_abs.read_text(encoding="utf-8")
+                                _resolved_path_str = _pred_art_rel
+
+                        if _art_content is None:
+                            # Fallback to the predecessor's agent ledger
+                            import glob  # noqa: PLC0415
+                            _ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+                            _ledger_pattern = str(_ledger_dir / f"{_pred_node}_*.md")
+                            _matches = glob.glob(_ledger_pattern)
+                            if _matches:
+                                _art_content = Path(_matches[0]).read_text(encoding="utf-8")
+                                _resolved_path_str = f"03_Agent_Ledgers/{job_id}/{Path(_matches[0]).name}"
+
+                        if _art_content is not None:
                             _gathered_blocks.append(
                                 f"[GATHERED ARTIFACT: {_pred_node}]\n{_art_content}\n[END ARTIFACT: {_pred_node}]"
                             )
-                            logger.info(f"[{AGENT_ID}] Injected artifact from {_pred_node}: {_pred_art_rel}")
+                            logger.info(f"[{AGENT_ID}] Injected artifact from {_pred_node}: {_resolved_path_str}")
                         else:
-                            logger.warning(f"[{AGENT_ID}] WARNING: artifact not found for {_pred_node}: {_pred_art_abs}")
+                            logger.warning(f"[{AGENT_ID}] WARNING: artifact/ledger not found for {_pred_node}")
                     except Exception as _exc:  # noqa: BLE001
                         logger.warning(f"[{AGENT_ID}] WARNING: could not inject artifact for {_pred_node}: {_exc}")
                 if _gathered_blocks:
@@ -604,16 +633,23 @@ You do NOT need to ask for permission to use them. If your instructions require 
 
             if not _is_dialogue_node:
                 try:
-                    _extras_path = get_datacenter_path("02_Dynamic_Context", "agent_extras.json")
-                    if _extras_path.exists():
-                        _extras: dict[str, Any] = json.loads(_extras_path.read_text(encoding="utf-8"))
-                        _agent_name = agent_name
-                        _agent_extra = _extras.get(_agent_name, {})
-                        if _agent_extra.get("search_grounding") and "google_search" not in tools_str:
+                    from maccre_core.agent_library import get_agent_store  # noqa: PLC0415
+                    store = get_agent_store("GLOBAL")
+                    _agent_profile = store.get(agent_name)
+                    if _agent_profile:
+                        ai_options = _agent_profile.get("ai_studio_options", {})
+                        if ai_options.get("grounding_google_search") and "google_search" not in tools_str:
                             tools_str = f"{tools_str}|google_search" if tools_str.lower() != "none" else "google_search"
-                            logger.info(f"[{AGENT_ID}] Search grounding enabled for '{_agent_name}' via agent_extras.")
+                            logger.info(f"[{AGENT_ID}] Search grounding enabled for '{agent_name}' via agent_library.")
                 except Exception:  # noqa: BLE001
                     pass  # Non-fatal — grounding simply won't activate
+
+            if tools_str and tools_str.lower() != "none":
+                system_prompt += (
+                    "\n\n[TOOL AWARENESS]\n"
+                    "You have access to specific functional tools. You do NOT need to ask for permission to use them. "
+                    "If your instructions require external data, code execution, or file generation, you MUST use the provided tools."
+                )
 
             # ── Execution Mode Dispatch ─────────────────────────────────────────
             # Three modes, checked in priority order:
@@ -649,7 +685,6 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 # Lookup priority: roster CSV → .json card → defaults.
                 # Reads all known persona key variants: PERSONA, persona,
                 # system_prompt, instructions (the key used by real agent cards).
-                import csv as _csv  # noqa: PLC0415
                 import json as _json  # noqa: PLC0415
                 from maccre_core.orchestration.dialogue_runner import (  # noqa: PLC0415
                     DialogueRunner,
@@ -679,26 +714,32 @@ You do NOT need to ask for permission to use them. If your instructions require 
                                 _tls = "google_search"
                         except Exception:
                             pass
-                    from maccre_core.utils.path_resolver import get_maccre_root
-                    _roster = get_maccre_root() / "__DATACENTER" / "GLOBAL" / "agent_roster.csv"
-                    if _roster.exists():
-                        with _roster.open(encoding="utf-8") as _rf:
-                            for _row in _csv.DictReader(_rf):
-                                # CSV headers: Agent_Name, Model, Tools_Allowed, System_Prompt, Description
-                                _agent_name_val = _row.get("Agent_Name", "") or _row.get("AGENT_NAME", "")
-                                if _agent_name_val.strip() == name:
-                                    _sys = str(
-                                        _row.get("System_Prompt", "")
-                                        or _row.get("PERSONA", "")
-                                        or _row.get("instructions", "")
-                                        or ""
-                                    )
-                                    _mdl = str(_row.get("Model", "") or _row.get("MODEL", "") or _mdl)
-                                    _tmp = float(_row.get("Temperature", "") or _row.get("TEMPERATURE", "") or _tmp)
-                                    _tls_val = str(_row.get("Tools_Allowed", "") or _row.get("TOOLS_ALLOWED", ""))
-                                    if _tls_val:
-                                        _tls = _tls_val
-                                    break
+                    from maccre_core.agent_library import get_agent_store
+                    try:
+                        _store = get_agent_store("GLOBAL")
+                        for _p in _store.load_all():
+                            _agent_name_val = str(_p.get("agent_name", "") or _p.get("AGENT_NAME", ""))
+                            if _agent_name_val.strip() == name:
+                                _sys = str(
+                                    _p.get("system_prompt", "")
+                                    or _p.get("PERSONA", "")
+                                    or _p.get("instructions", "")
+                                    or ""
+                                )
+                                _mdl = str(_p.get("model", "") or _p.get("MODEL", "") or _mdl)
+                                _tmp = float(_p.get("temperature", "") or _p.get("TEMPERATURE", "") or _tmp)
+                                _tls_val = str(_p.get("tools_allowed", "") or _p.get("TOOLS_ALLOWED", ""))
+                                if _tls_val:
+                                    _tls = _tls_val
+                                
+                                # Pull AI Studio toggle for grounding
+                                _ai_opts = _p.get("ai_studio_options", {})
+                                if _ai_opts.get("grounding_google_search", False):
+                                    if "google_search" not in _tls:
+                                        _tls = f"{_tls}|google_search" if _tls.lower() != "none" else "google_search"
+                                break
+                    except Exception as e:
+                        logger.warning(f"[{AGENT_ID}] Failed to load agent {name} from DB: {e}")
                     if not _sys:
                         _card = get_datacenter_path("02_Dynamic_Context", f"{name}.json")
                         if _card.exists():
@@ -905,9 +946,9 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     if _fired_terminal:
                         t_name, t_args = self.tool_executor._parse(output_text)
                         if t_args and "data" in t_args:
-                            final_output_text = str(t_args["data"])
+                            final_output_text = f"{output_text}\n\n[FILE CONTENT]:\n{t_args['data']}"
                         elif t_args and "content" in t_args:
-                            final_output_text = str(t_args["content"])
+                            final_output_text = f"{output_text}\n\n[FILE CONTENT]:\n{t_args['content']}"
                         else:
                             final_output_text = output_text
                             
@@ -935,7 +976,15 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     final_output_text = output_text  # fallback if loop exits unexpectedly
 
             task_cost = total_cost
-            raw_model_output = final_output_text
+            
+            # ── Prose Purge ──────────────────────────────────────────────────────────
+            import re as _re  # noqa: PLC0415
+            _scratchpad_pattern = _re.compile(r"<scratchpad[^>]*>(.*?)</scratchpad>", _re.DOTALL)
+
+            # Strip thoughts from the main ledger output so it remains clean prose
+            raw_model_output = _scratchpad_pattern.sub("", final_output_text).strip()
+            
+            # NOTE: We do NOT strip from tool_audit_lines, so the sidecar gets the thoughts inline!
 
             logger.info(f"[{AGENT_ID}] Generation complete. Billed Cost: ${task_cost:.6f}")
 
@@ -943,26 +992,24 @@ You do NOT need to ask for permission to use them. If your instructions require 
             with open(ledger_path, "w", encoding="utf-8") as f:
                 f.write(ledger_content_out)
 
-            # ── Forensic Tool Audit Sidecar ───────────────────────────────────
+            # ── Forensic Thoughts and Tools Sidecar ───────────────────────────────────
             # Written alongside the ledger whenever tools fired during the loop.
             # Captures every tool call + result verbatim for effectiveness auditing.
             if tool_audit_lines:
                 from datetime import datetime, timezone  # noqa: PLC0415
-                audit_path = Path(ledger_path).parent / f"tool_audit_{current_node}_{row_id}.md"
+                audit_path = Path(ledger_path).parent / f"thoughts_and_tools_{current_node}_{row_id}.md"
                 audit_ts = datetime.now(tz=timezone.utc).isoformat()
-                audit_header = f"# Tool Audit — {current_node} | {job_id} | {audit_ts}\n\n"
+                audit_header = f"# Thoughts and Tools Ledger — {current_node} | {job_id} | {audit_ts}\n\n"
                 audit_body = "\n\n".join(tool_audit_lines) + f"\n\n## FINAL OUTPUT\n{final_output_text}"
                 with open(audit_path, "w", encoding="utf-8") as af:
                     af.write(audit_header + audit_body)
-                logger.info(f"[{AGENT_ID}] Tool audit sidecar: {audit_path}")
+                logger.info(f"[{AGENT_ID}] Thoughts and tools sidecar: {audit_path}")
 
             # ── LIVE STREAMING ACOUSTICS ──────────────────────────────────────
             # Trigger real-time conversational streaming for non-director nodes
             if "director" not in AGENT_ID.lower():
                 # live_stream_audio(ledger_content_out, AGENT_ID, job_id, current_node)
                 pass
-
-            self.memory_engine.extract_and_store(ledger_content_out, current_node, job_id)
 
             next_node: str = str(node_config.get("next_node_success", node_config.get("Next_Node", "END")))
 
@@ -976,19 +1023,19 @@ You do NOT need to ask for permission to use them. If your instructions require 
             #  2. Target must be a valid string (not a terminal sentinel)
             #  3. The current node's max_recursion already bounds total re-queues
             import re as _re  # noqa: PLC0415
-            _ROUTE_TO_PATTERN = _re.compile(r"ROUTE_TO:([A-Za-z][A-Za-z0-9_]*)", _re.IGNORECASE)
+            _ROUTE_TO_PATTERN = _re.compile(r"ROUTE_TO:\s*([A-Za-z0-9_,\s\[\]{}]+)", _re.IGNORECASE)
             _route_match = _ROUTE_TO_PATTERN.search(raw_model_output or "")
             if _route_match:
-                _candidate = _route_match.group(1).strip()
-
+                _candidate = _route_match.group(1).replace("[", "").replace("]", "").replace("{", "").replace("}", "").strip()
+                
                 # ACCEPTED means "all gates passed — proceed to static next_node"
                 if _candidate.upper() == "ACCEPTED":
                     logger.info(
                         f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:ACCEPTED — "
                         f"proceeding to static next_node '{next_node}'"
                     )
-                elif _candidate.upper() not in {"STOP", "DONE", "TERMINATE", "FAILED"}:
-                    # Check main topology first, then ephemeral macros
+                elif _candidate and _candidate.upper() not in {"STOP", "DONE", "TERMINATE", "FAILED"}:
+                    # Handle comma-separated routes by resolving each individually against Node IDs or Agent Names
                     _topology_map = self.topology.get_topology() if self.topology else {}
                     try:
                         from maccre_core.macronode_registry import get_macronode_store  # noqa: PLC0415
@@ -996,16 +1043,37 @@ You do NOT need to ask for permission to use them. If your instructions require 
                     except Exception:  # noqa: BLE001
                         _ephemeral_map = {}
 
-                    if _candidate in _topology_map or _candidate in _ephemeral_map:
+                    combined_map = {**_topology_map, **_ephemeral_map}
+                    
+                    resolved_targets = []
+                    for cand_part in _candidate.split(","):
+                        cand_part = cand_part.strip()
+                        if not cand_part:
+                            continue
+                            
+                        # Find exact Node ID match OR Agent Name match
+                        matched_node_id = None
+                        if cand_part in combined_map:
+                            matched_node_id = cand_part
+                        else:
+                            for t_node, t_cfg in combined_map.items():
+                                if str(t_cfg.get("agent_name", "")).strip().lower() == cand_part.lower():
+                                    matched_node_id = t_node
+                                    break
+                                    
+                        if matched_node_id:
+                            resolved_targets.append(matched_node_id)
+                            
+                    if resolved_targets:
+                        next_node = ",".join(resolved_targets)
                         logger.info(
-                            f"[{AGENT_ID}] CONDITIONAL ROUTE: '{next_node}' overridden by "
-                            f"ROUTE_TO:{_candidate} (model-directed)"
+                            f"[{AGENT_ID}] CONDITIONAL ROUTE: overridden by "
+                            f"ROUTE_TO:{next_node} (model-directed)"
                         )
-                        next_node = _candidate
                     else:
                         logger.info(
                             f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:{_candidate} ignored "
-                            f"(target not in topology or ephemeral macros)"
+                            f"(targets not found in topology or ephemeral macros)"
                         )
 
             ops_log.node_routed(
@@ -1065,7 +1133,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 payload_mode = "Unified Ledger"
                 if self.topology:
                     try:
-                        tgt_cfg = self.topology.get_node_config(next_node)
+                        tgt_cfg = self.topology.get_node_config(next_node.split(",")[0].strip())
                         payload_mode = str(tgt_cfg.get("payload_mode", "Unified Ledger"))
                     except Exception:
                         pass
@@ -1119,6 +1187,7 @@ You do NOT need to ask for permission to use them. If your instructions require 
                 new_payload_path=payload_path,
                 actual_cost=0.0,
                 source_payload_path=source_payload_path,
+                status="failed",
             )
         finally:
             sys.stdout = orig_stdout

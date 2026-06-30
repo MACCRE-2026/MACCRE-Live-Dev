@@ -150,9 +150,8 @@ class TopologyEngine(TopologyProvider):
                     final_model: str = topo_model if topo_model else base_model
 
                     base_tools: str = roster_profile.get("Tools_Allowed", roster_profile.get("tools_allowed", "none"))
-                    # Tool routing is exclusively owned by the roster's Tools_Allowed.
-                    # Auto_Tool has been retired — roster is the single source of truth.
-                    final_tools: str = base_tools
+                    topo_tools: str = str(row_upper.get('TOOLS_ALLOWED', '')).strip()
+                    final_tools: str = topo_tools if topo_tools else base_tools
 
                     try:
                         max_rec = int(row_upper.get('MAX_RECURSION', 3))

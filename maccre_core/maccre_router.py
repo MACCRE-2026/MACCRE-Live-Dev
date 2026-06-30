@@ -28,7 +28,7 @@ Exposes two surfaces:
       High-level Flet GUI interface.
       Enforces the AgentResponse Pydantic schema in BOTH pipelines:
         {"scratchpad": "...", "final_response": "..."}
-      Extracts scratchpad → writes to thoughts.db via telemetry_db.log_thought().
+      Extracts scratchpad and discards it since we no longer log thoughts.
       Returns only final_response to the caller.
 
 Pipeline routing:
@@ -58,7 +58,6 @@ from maccre_core._net.gemini_client import (
 from maccre_core._net.model_registry import get_registry, ModelRegistry
 
 from maccre_core.orchestration.universal_vault import get_provider_credential
-from maccre_core.orchestration.telemetry_db import log_thought
 from maccre_core.tools.tool_registry import get_tools_from_sheet, generate_universal_json_schema
 from maccre_core.orchestration.cache_manager import CacheManager
 
@@ -298,17 +297,24 @@ class UniversalRouter:
 
                     # ── Evaluate Context Caching ───────────────────────────────────────
                     _cached_uri = None
-                    if expect_multiple_reads and self.gemini_client:
+                    _req_contents = contents
+                    if expect_multiple_reads and self.gemini_client and len(contents) > 1:
+                        _cache_contents = contents[:-1]
+                        # Compute total characters across all turns in the context window
+                        _total_chars = sum(len(str(part.get("text", ""))) for turn in _cache_contents for part in turn.get("parts", []))
+                        
                         # Heuristic: 120,000 chars roughly equals ~30k tokens. Threshold is 32k.
-                        if len(payload) >= 120_000:
-                            logger.info("[ROUTER] Payload exceeds 120k chars and expects multiple reads. Evaluating Cache...")
+                        if _total_chars >= 120_000:
+                            logger.info("[ROUTER] Context window exceeds 120k chars (%d) and expects multiple reads. Evaluating Cache...", _total_chars)
                             _cached_uri = self._cache_manager.get_or_create_cache(
                                 client=self.gemini_client,
                                 model=_attempt_model,
-                                contents=contents,
+                                contents=_cache_contents,
                                 system_instruction=system_prompt if system_prompt else None,
                                 ttl_seconds=3600
                             )
+                            if _cached_uri:
+                                _req_contents = [contents[-1]]
 
                     import time as _t0  # noqa: PLC0415
                     _t0_start = _t0.monotonic()
@@ -321,12 +327,6 @@ class UniversalRouter:
                         {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                     ]
-                    
-                    # NOTE: If we use context caching, the contents array must be EMPTY or only contain 
-                    # new delta tokens. Since we cache the entire contents block here, we pass empty contents.
-                    # Wait, the Gemini API requires the exact contents matched. If we pass the full payload to cache,
-                    # the prompt to generateContent must be empty except for the cachedContent URI.
-                    _req_contents = [] if _cached_uri else contents
                     
                     response: GeminiResponse = self.gemini_client.generate_content(
                         model=_attempt_model,
@@ -374,6 +374,7 @@ class UniversalRouter:
 
                     # Check if the model returned a function call
                     fc = response.function_call
+                    
                     if fc is not None:
                         fc_name, fc_args = fc
                         try:
@@ -716,25 +717,15 @@ class AgentRouter:
             parsed = dict_to_dataclass(AgentResponse, data_dict)
         except Exception:
             # JSON failed entirely — log raw as a thought fragment and return it
-            log_thought(
-                scratchpad_content=f"[PARSE_FAILURE] raw={raw_json[:500]}",
-                session_id=session_id,
-                agent_id=agent_name,
-            )
+            import logging
+            logging.getLogger(__name__).warning(f"[PARSE_FAILURE] raw={raw_json[:500]}")
             return raw_json
 
         import os
         project_name = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
 
-        # Persist scratchpad to the restricted thoughts.db silo
+        # Triune Architecture: Vectorize the thought to ephemeral session DB
         if parsed.scratchpad:
-            log_thought(
-                scratchpad_content=parsed.scratchpad,
-                session_id=session_id,
-                agent_id=agent_name,
-                source_node="AgentRouter.chat",
-            )
-            # Triune Architecture: Vectorize the thought to ephemeral session DB
             try:
                 from maccre_core.tools.rag_tools import vectorize_thought
                 vectorize_thought(parsed.scratchpad, project_name, session_id, agent_name)

@@ -70,14 +70,15 @@ class GeminiResponse(InferenceResponse):
 
     @property
     def text(self) -> str:
-        """First text part from first candidate, with appended search grounding citations if available."""
+        """Text parts from the first candidate, ignoring thought blocks, with appended search grounding citations."""
         try:
             candidate = self._body["candidates"][0]
-            base_text = ""
+            texts = []
             for part in candidate["content"]["parts"]:
-                if "text" in part:
-                    base_text = str(part["text"])
-                    break
+                if "text" in part and not part.get("thought"):
+                    texts.append(str(part["text"]))
+            
+            base_text = "\n".join(texts)
                     
             grounding = candidate.get("groundingMetadata", {})
             chunks = grounding.get("groundingChunks", [])
@@ -91,6 +92,20 @@ class GeminiResponse(InferenceResponse):
                     base_text += f"[{i}] {title}\n    {uri}\n"
                     
             return base_text
+        except (KeyError, IndexError, TypeError):
+            pass
+        return ""
+
+    @property
+    def scratchpad_thought(self) -> str:
+        """Extracts native 'thought' blocks from Gemini 2.0 Thinking models."""
+        try:
+            candidate = self._body["candidates"][0]
+            thoughts = []
+            for part in candidate["content"]["parts"]:
+                if "text" in part and part.get("thought"):
+                    thoughts.append(str(part["text"]))
+            return "\n\n".join(thoughts)
         except (KeyError, IndexError, TypeError):
             pass
         return ""

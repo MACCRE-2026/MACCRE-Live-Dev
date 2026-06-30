@@ -95,6 +95,11 @@ ENABLE_DEBUG_LOGGING: bool = True
 
 # ── Logger Factories ──────────────────────────────────────────────────────────
 
+class DynamicStreamHandler(logging.StreamHandler):
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stdout
+        super().emit(record)
+
 def setup_maccre_logger(name: str) -> logging.Logger:
     """
     Singleton-style pre-startup logger instantiation.
@@ -108,7 +113,7 @@ def setup_maccre_logger(name: str) -> logging.Logger:
 
     _logger.setLevel(logging.DEBUG)
 
-    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler = DynamicStreamHandler()
     stdout_handler.setFormatter(JSONFormatter())
     _logger.addHandler(stdout_handler)
 
@@ -131,7 +136,6 @@ def setup_session_loggers(project_id: str, session_id: str) -> None:
     Called by SwarmWorker immediately upon parsing the requested Workbook.
     Isolates telemetry natively into Datacenter Op-logs and Bug-logs.
     """
-    from maccre_core.utils.path_resolver import get_datacenter_path
     from maccre_core.logger import ops_log
     
     # 1. Purge the default global fallback file handler
@@ -141,7 +145,8 @@ def setup_session_loggers(project_id: str, session_id: str) -> None:
             handler.close()
 
     # Ensure paths exist
-    dc_root = get_datacenter_path() / project_id
+    from maccre_core.utils.path_resolver import get_maccre_root
+    dc_root = get_maccre_root() / "__DATACENTER" / project_id
     op_dir = dc_root / "Op-logs"
     bug_dir = dc_root / "Bug-logs"
     
@@ -375,46 +380,6 @@ class OperationsLogger:
             )
         except Exception as tdb_err:
             self._emit(logging.WARNING, f"[OPS_LOG] telemetry_db write failed: {tdb_err}", {})
-
-    def agent_thought(
-        self,
-        scratchpad_content: str,
-        session_id: str = "",
-        project_id: str = "",
-        agent_id: str = "",
-        source_node: str = "",
-    ) -> None:
-        """Capture a raw <scratchpad> extract into thoughts.db (RBAC-restricted silo).
-
-        Channel A write is intentionally suppressed for thoughts — scratchpad
-        content never touches stdout to prevent context leakage in shared logs.
-
-        Args:
-            scratchpad_content: Raw extracted text between <scratchpad> tags.
-            session_id: Active session identifier.
-            project_id: Active project identifier.
-            agent_id: Calling agent identifier.
-            source_node: Topology node that generated the thought.
-        """
-        # Channel A — emit a sanitised signal only (no content on console)
-        self._emit(
-            logging.DEBUG,
-            "[AGENT_THOUGHT] scratchpad captured",
-            {"chars": len(scratchpad_content), "session_id": session_id, "source_node": source_node},
-        )
-
-        # Channel B — full content into the restricted thoughts silo
-        try:
-            from maccre_core.orchestration.telemetry_db import log_thought
-            log_thought(
-                scratchpad_content=scratchpad_content,
-                session_id=session_id,
-                project_id=project_id,
-                agent_id=agent_id,
-                source_node=source_node,
-            )
-        except Exception as tdb_err:
-            self._emit(logging.WARNING, f"[OPS_LOG] thoughts.db write failed: {tdb_err}", {})
 
     def user_input(
         self,

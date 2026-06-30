@@ -1,0 +1,1 @@
+The Department of War has released 3 tranches of documents under PURSUE since May of 2026. Lets examine the events detailed in the tranches and put together a timeline of events. Lets cross reference this timeline of events with historical reports of UFO and UAP activity since the 1930s.

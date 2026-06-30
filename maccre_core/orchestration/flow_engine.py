@@ -40,15 +40,16 @@ logger = logging.getLogger(__name__)
 
 class FlowStep:
     """A single step in a Linear Flow, pointing to a MacroNode."""
-    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger", custom_instructions: str = "") -> None:
+    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger", custom_instructions: str = "", agent_tools_overrides: dict[str, str] | None = None) -> None:
         self.macronode_name = macronode_name
         self.agent_mapping = agent_mapping or {}
         self.payload_mode = payload_mode
         self.custom_instructions = custom_instructions
+        self.agent_tools_overrides = agent_tools_overrides or {}
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON persistence in flow_history."""
-        return {"macronode_name": self.macronode_name, "agent_mapping": self.agent_mapping, "payload_mode": self.payload_mode, "custom_instructions": self.custom_instructions}
+        return {"macronode_name": self.macronode_name, "agent_mapping": self.agent_mapping, "payload_mode": self.payload_mode, "custom_instructions": self.custom_instructions, "agent_tools_overrides": self.agent_tools_overrides}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FlowStep":
@@ -57,7 +58,8 @@ class FlowStep:
             macronode_name=d.get("macronode_name", ""),
             agent_mapping=d.get("agent_mapping", {}),
             payload_mode=d.get("payload_mode", "Unified Ledger"),
-            custom_instructions=d.get("custom_instructions", "")
+            custom_instructions=d.get("custom_instructions", ""),
+            agent_tools_overrides=d.get("agent_tools_overrides", {})
         )
 
 
@@ -221,7 +223,7 @@ class FlowRunner:
             # ── (c) Topology schema validation ────────────────────────────────
             topo_rows: list[dict[str, Any]] = macro_def.get('topology_rows', [])
             if topo_rows:
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping)
+                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
                 try:
                     build_topology(hydrated_lists)
                     topo_engine = TopologyEngine()
@@ -282,9 +284,11 @@ class FlowRunner:
         )
         return report
 
-    def _hydrate_topology(self, topology_rows: list[dict[str, Any]], agent_mapping: dict[str, str], payload_mode: str = "Unified Ledger", custom_instructions: str = "", step_index: int = 0) -> list[list[str]]:
+    def _hydrate_topology(self, topology_rows: list[dict[str, Any]], agent_mapping: dict[str, str], payload_mode: str = "Unified Ledger", custom_instructions: str = "", step_index: int = 0, agent_tools_overrides: dict[str, str] | None = None) -> list[list[str]]:
         """Convert a list of topology dictionaries into lists of strings (for CSV) and inject agent overrides."""
         hydrated: list[list[str]] = []
+        agent_tools_overrides = agent_tools_overrides or {}
+        
         for row_dict in topology_rows:
             agent_name = str(row_dict.get("Agent_Name", ""))
             
@@ -312,9 +316,12 @@ class FlowRunner:
 
             instr = str(row_dict.get("Instruction_Override", ""))
             if custom_instructions:
-                instr = f"{instr}\n{custom_instructions}".strip()
+                wrapped_instructions = f"\n\n[NODE DIRECTIVES]\n{custom_instructions}\n[MAINTAIN CORE PERSONA WHILE EXECUTING DIRECTIVES]\n"
+                instr = f"{instr}{wrapped_instructions}".strip()
+                
+            tools_allowed = agent_tools_overrides.get(agent_name, "")
 
-            # Standard order: Node_ID, Agent_Name, Model_Override, Next_Node, Temp, Instr, Wait, Fail, MaxRec, Artifact, Live, Partner, Rounds
+            # Standard order: Node_ID, Agent_Name, Model_Override, Next_Node, Temp, Instr, Wait, Fail, MaxRec, Artifact, Live, Partner, Rounds, Payload_Mode, Tools_Allowed
             row_list = [
                 node_id,
                 agent_name,
@@ -330,6 +337,7 @@ class FlowRunner:
                 str(row_dict.get("Dialogue_Partner", "")),
                 str(row_dict.get("Dialogue_Rounds", "0")),
                 payload_mode,
+                tools_allowed,
             ]
             hydrated.append(row_list)
         return hydrated
@@ -439,7 +447,7 @@ class FlowRunner:
                         return current_payload
                         
                 topo_rows = macro_def.get("topology_rows", [])
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, step.payload_mode)
+                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, step.payload_mode, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
                 build_topology(hydrated_lists)
                 
                 # Check if tasks exist for this job_id and any node in this topology.
@@ -615,7 +623,7 @@ class FlowRunner:
                 
                 # 2. Hydrate Agent Slots
                 topo_rows = macro_def.get("topology_rows", [])
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, getattr(step, "payload_mode", "Unified Ledger"), getattr(step, "custom_instructions", ""), step_index=idx)
+                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, getattr(step, "payload_mode", "Unified Ledger"), getattr(step, "custom_instructions", ""), step_index=idx, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
             
                 # 3. Write to topology.csv
                 build_res = build_topology(hydrated_lists)
@@ -824,6 +832,88 @@ class FlowRunner:
 
         return current_payload
 
+
+def generate_crucible_blind_ledger(job_id: str, advocate_node: str, judge_node: str) -> str:
+    """Assemble a Crucible Blind ledger for an advocate during recursion.
+    - Includes the initial OSINT payload (anything before the advocate's first turn).
+    - Includes the advocate's own drafts.
+    - Includes the judge's critiques ONLY if they route back to this advocate.
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415
+    import sqlite3  # noqa: PLC0415
+    import re  # noqa: PLC0415
+    
+    ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+    artifact_dir = get_datacenter_path("04_Code_Artifacts", job_id)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    output_path = artifact_dir / f"blind_ledger_{advocate_node}.md"
+    
+    node_meta: list[dict[str, Any]] = []
+    try:
+        db_path = str(get_datacenter_path("swarm_queue.db"))
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, current_node, completed_at FROM task_queue WHERE job_id = ? AND lock_status='completed' ORDER BY id",
+                (job_id,)
+            ).fetchall()
+            for r in rows:
+                node_meta.append(dict(r))
+    except Exception:  # noqa: BLE001
+        pass
+        
+    ledger_entries: list[tuple[Path, float]] = []
+    if ledger_dir.exists():
+        for f in ledger_dir.iterdir():
+            if f.suffix == ".md" and "thoughts_and_tools" not in f.name and "tool_audit" not in f.name:
+                ledger_entries.append((f, f.stat().st_mtime))
+                
+    def get_sort_key(item: tuple[Path, float]) -> str:
+        fpath, mtime = item
+        for m in node_meta:
+            if m.get("current_node", "") in fpath.stem:
+                return m.get("completed_at", "") or ""
+        return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        
+    ledger_entries.sort(key=get_sort_key)
+    
+    parts = [f"# Crucible Blind Ledger for {advocate_node}", ""]
+    
+    # Identify the timestamp/ID of the advocate's first turn
+    advocate_first_idx = len(ledger_entries)
+    for i, (fpath, _) in enumerate(ledger_entries):
+        if advocate_node in fpath.stem:
+            advocate_first_idx = i
+            break
+            
+    for i, (fpath, _) in enumerate(ledger_entries):
+        c_node = fpath.stem.rsplit("_", 1)[0]  # strip the _id
+        
+        # Rule 1: Setup phase (before advocate's first turn)
+        if i < advocate_first_idx:
+            content = fpath.read_text(encoding="utf-8")
+            parts.append(f"## [SETUP PHASE: {c_node}]\n{content}\n")
+            continue
+            
+        # Rule 2: The Advocate's Voice
+        if advocate_node in c_node:
+            content = fpath.read_text(encoding="utf-8")
+            parts.append(f"## [YOUR PREVIOUS DRAFT]\n{content}\n")
+            continue
+            
+        # Rule 3: The Judge's Critique
+        if judge_node in c_node:
+            content = fpath.read_text(encoding="utf-8")
+            # Check if this critique was routed to this advocate
+            if re.search(r"ROUTE_TO:.*" + advocate_node, content, re.IGNORECASE):
+                parts.append(f"## [JUDGE CRITIQUE]\n{content}\n")
+                
+        # Rule 4: Discard everything else
+        
+    unified_text = "\n".join(parts)
+    output_path.write_text(unified_text, encoding="utf-8")
+    return str(output_path)
+
 def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) -> str:
     """Assemble a unified session ledger from all agent turns in the flow.
 
@@ -862,13 +952,10 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
 
     # ── Collect ledger files ──────────────────
     ledger_entries: list[tuple[Path, float]] = []
-    tool_audits: list[tuple[Path, float]] = []
     if ledger_dir.exists():
         for f in ledger_dir.iterdir():
-            if f.suffix == ".md" and "tool_audit" not in f.name:
+            if f.suffix == ".md" and "thoughts_and_tools" not in f.name and "tool_audit" not in f.name:
                 ledger_entries.append((f, f.stat().st_mtime))
-            elif f.suffix == ".md" and "tool_audit" in f.name:
-                tool_audits.append((f, f.stat().st_mtime))
                 
     def get_ledger_sort_key(item: tuple[Path, float]) -> str:
         fpath, mtime = item
@@ -880,7 +967,6 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
         return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         
     ledger_entries.sort(key=get_ledger_sort_key)
-    tool_audits.sort(key=get_ledger_sort_key)
 
     # ── Collect memory pins ───────────────────────────────────────────────
     memory_pins: list[dict[str, Any]] = []
@@ -952,9 +1038,15 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
                 cost = m.get("actual_cost", 0.0)
                 break
 
+        # Strip out embedded tool calls and system responses from pure output
+        import re
+        content = re.sub(r'\[TOOL CALL REQUESTED:.*?\]', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'\[SYSTEM_TOOL_CALLBACK.*?\]', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'\[SYSTEM\]:.*', '', content, flags=re.IGNORECASE)
+        
         parts.append(f"### {node_name}")
         parts.append(f"*Written: {ts_str} | Cost: ${cost:.6f}*\n")
-        parts.append(content)
+        parts.append(content.strip())
         parts.append("\n---\n")
 
     # Tool Call Audits are intentionally excluded from the unified session ledger

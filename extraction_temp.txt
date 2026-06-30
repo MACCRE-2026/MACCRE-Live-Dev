@@ -1,0 +1,65 @@
+class FlowExecutionPanel(Vertical):
+    def compose(self) -> ComposeResult:
+        # Flow Execution Top Panel
+        with Vertical(classes="panel-section", id="flow-execution-top"):
+            yield Label("Flow Execution", classes="pane-title")
+            with Horizontal(classes="flow-controls"):
+                yield Button("Launch Flow", variant="success", id="btn-launch-flow")
+                yield Button("Stop Flow", variant="error", id="btn-stop-flow", disabled=True)
+                yield Button("Resume Flow", variant="success", id="btn-resume-flow", disabled=True)
+                yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
+                yield Button("Create Payload", variant="primary", id="btn-create-payload")
+                yield Button("Linear Flow Editor", variant="warning", id="btn-flow-editor")
+
+            yield Label("Active Flow Sequence")
+            with Horizontal(id="active-flow-sequence", classes="flow-controls"):
+                yield Static("No flow loaded.", classes="flow-seq-text")
+
+        # Flow Monitor Panel
+        with Vertical(classes="panel-section", id="flow-monitor-section"):
+            with Horizontal(id="flow-monitor-header-row"):
+                yield Label("Flow Monitor", classes="pane-title")
+                yield Button("Copy", id="btn-copy-monitor")
+            yield Label("Stage: [dim]Idle[/dim]", id="flow-stage-readout", classes="flow-stage-readout")
+            yield RichLog(id="flow-execution-log", wrap=True, highlight=True, markup=True)
+
+            # VCR Transport + Instruction Panel
+            with Horizontal(id="vcr-transport-row"):
+                yield Button("⏸", id="btn-vcr", classes="vcr-btn vcr-btn--idle", disabled=True)
+                yield Static(
+                    "[dim]While paused: click a node → ○ radios appear → "
+                    "left = inject before (+ Live Chat) · right = inject after (fork) → "
+                    "orange arrow = open injection modal → ▶ to resume[/dim]",
+                    id="vcr-instructions",
+                    classes="vcr-instructions",
+                )
+
+            # Pre-flight override (hidden by default, shown on validation failure)
+            yield Button(
+                "⚠ Proceed Anyway", id="btn-proceed-anyway",
+                variant="warning", classes="btn-proceed-anyway hidden",
+            )
+
+            with Horizontal(classes="input-row"):
+                yield Input(placeholder="Inject context to flow...", id="fe-input")
+                yield Button("↗", id="btn-expand-input", variant="primary", classes="btn-icon")
+
+===================
+def _refresh_active_flow_sequence(self) -> None:
+        """Refresh the active flow sequence display with clickable nodes."""
+        container = self.query_one("#active-flow-sequence", Horizontal)
+        for child in list(container.children):
+            child.remove()
+        
+        if not self.active_flow_steps:
+            container.mount(Static("No flow loaded.", classes="flow-seq-text"))
+            return
+            
+        for i, step in enumerate(self.active_flow_steps):
+            if i > 0:
+                container.mount(Static(" → ", classes="flow-arrow-dim"))
+            name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
+            btn = Button(name, id=f"anode-{i}", classes="active-node-btn")
+            container.mount(btn)
+
+===================
