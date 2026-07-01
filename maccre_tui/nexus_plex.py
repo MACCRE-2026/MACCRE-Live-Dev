@@ -38,6 +38,8 @@ from textual.widgets import (
     DataTable,
 )
 
+from maccre_tui.widgets.session_manager_modal import SessionManagerModal
+from maccre_tui.widgets.project_canon_modal import ProjectCanonModal
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_project_names, load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -465,6 +467,11 @@ class FileCabinetModalScreen(ModalScreen[dict]):
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Close", variant="error", id="close-btn")
                 yield Button("Create & Ingest", variant="success", id="ingest-btn")
+                yield Button("Project Canon & Memory", variant="warning", id="btn-project-canon")
+
+    @on(Button.Pressed, "#btn-project-canon")
+    def open_canon(self):
+        self.dismiss({"action": "project_canon"})
 
     @on(Button.Pressed, "#close-btn")
     def close(self):
@@ -1349,6 +1356,8 @@ class FlowExecutionPanel(Vertical):
         # Flow Execution Top Panel
         with Vertical(classes="panel-section", id="flow-execution-top"):
             yield Label("Flow Execution", classes="pane-title")
+            with Horizontal(id="main-flow-load-row", classes="flow-controls"):
+                yield Select([], prompt="Load Flow from Registry...", id="main-flow-load-select")
             with Horizontal(id="flow-select-row"):
                 with Vertical(classes="flow-select-group"):
                     yield Label("MacroNode")
@@ -1378,15 +1387,16 @@ class FlowExecutionPanel(Vertical):
                 yield Button("Resume Flow", variant="success", id="btn-resume-flow", disabled=True)
                 yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
                 yield Button("Create Payload", variant="primary", id="btn-create-payload")
+                yield Button("Session Manager", variant="primary", id="btn-session-manager")
 
-            yield Label("Active Flow Sequence")
+            yield Label("Active Flow Sequence", id="active-flow-sequence-label")
             with Horizontal(id="active-flow-sequence", classes="flow-controls"):
                 yield Static("No flow loaded.", classes="flow-seq-text")
                 
             with Horizontal(classes="flow-controls", id="flow-line-actions"):
                 yield Button("Remove Last Node", variant="warning", id="btn-remove-last")
                 yield Button("Clear Flow", variant="error", id="btn-clear-flow")
-                yield Button("Flow Registry", variant="primary", id="btn-flow-registry")
+                yield Input(placeholder="Name Session...", id="main-name-session-input", disabled=True)
 
         # Flow Monitor Panel
         with Vertical(classes="panel-section", id="flow-monitor-section"):
@@ -1532,6 +1542,7 @@ class NexusPlex(App[None]):
             special_sel = self.query_one("#special-select", Select)
             if special_sel:
                 special_sel.set_options([(s, s) for s in special])
+            self._populate_flow_registry_dropdown()
         except Exception as e:
             self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
             
@@ -2298,10 +2309,163 @@ class NexusPlex(App[None]):
             self.active_flow_steps.pop()
             self._refresh_active_flow_sequence()
 
+    def _populate_flow_registry_dropdown(self) -> None:
+        try:
+            from maccre_core.flow_registry import FlowRegistryStore
+            store = FlowRegistryStore()
+            names = store.list_flow_names()
+            opts = [(n, n) for n in names]
+            sel = self.query_one("#main-flow-load-select", Select)
+            if sel:
+                sel.set_options(opts)
+        except Exception as e:
+            self.write_agent_log(f"[red]Error loading Flow Registry dropdown: {e}[/red]")
+
+    @on(Select.Changed, "#main-flow-load-select")
+    def on_main_flow_load(self, event: Select.Changed) -> None:
+        val = event.value
+        if not val or val == Select.BLANK:
+            return
+        try:
+            import json
+            from maccre_core.flow_registry import FlowRegistryStore
+            from maccre_core.orchestration.flow_engine import FlowStep
+            store = FlowRegistryStore()
+            flow = store.load_flow(str(val))
+            raw_steps = json.loads(flow["steps_json"])
+            
+            self.active_flow_steps = []
+            for s in raw_steps:
+                if isinstance(s, dict):
+                    self.active_flow_steps.append(FlowStep.from_dict(s))
+                elif isinstance(s, str):
+                    import ast
+                    try:
+                        d = ast.literal_eval(s)
+                        if isinstance(d, dict):
+                            self.active_flow_steps.append(FlowStep.from_dict(d))
+                        else:
+                            self.active_flow_steps.append(s)
+                    except Exception:
+                        self.active_flow_steps.append(s)
+                else:
+                    self.active_flow_steps.append(s)
+                    
+            self._refresh_active_flow_sequence()
+            self.notify(f"Loaded Flow: {flow['name']}")
+            self._current_job_id = None
+            self.query_one("#active-flow-sequence-label", Label).update("Active Flow Sequence [Unsaved]")
+        except Exception as e:
+            self.notify(f"Load failed: {e}", severity="error")
+
     @on(Button.Pressed, "#btn-clear-flow")
     def clear_flow_sequence(self) -> None:
         self.active_flow_steps.clear()
         self._refresh_active_flow_sequence()
+        # Disable main session naming since no flow is active
+        name_input = self.query_one("#main-name-session-input", Input)
+        name_input.disabled = True
+        name_input.value = ""
+
+    @on(Input.Submitted, "#main-name-session-input")
+    def handle_main_session_name(self, event: Input.Submitted) -> None:
+        job_id = getattr(self, "_current_job_id", None)
+        new_name = event.value.strip()
+        if job_id and new_name and job_id != new_name:
+            from maccre_core.orchestration.local_broker import LocalMessageBroker
+            try:
+                LocalMessageBroker().rename_session(job_id, new_name)
+                self._current_job_id = new_name
+                self.notify(f"Session renamed to {new_name}")
+            except Exception as e:
+                self.notify(f"Rename failed: {e}", severity="error")
+
+    @on(Button.Pressed, "#btn-session-manager")
+    def handle_session_manager(self, event: Button.Pressed) -> None:
+        def handle_sm_result(result: dict | None) -> None:
+            if not result:
+                return
+            action = result.get("action")
+            job_id = result.get("job_id")
+            if not action or not job_id:
+                return
+
+            if action == "resume":
+                self.notify(f"Resuming flow for {job_id}...")
+                self.is_session_active = True
+                self.query_one("#btn-launch-flow", Button).disabled = True
+                self.query_one("#btn-stop-flow", Button).disabled = False
+                self.query_one("#btn-create-payload", Button).disabled = True
+                
+                self._flow_cancel_event = threading.Event()
+                self._flow_pause_event = threading.Event()
+                self._flow_pause_event.set()
+                self._node_payloads = []
+                self._set_vcr_state("running")
+                self._readout_timer = self.set_interval(1.0, self._update_flow_stage_readout)
+                
+                self.resume_linear_flow_background(job_id)
+
+            elif action == "canonize":
+                try:
+                    from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
+                    from maccre_core.orchestration.local_broker import LocalMessageBroker
+                    from maccre_core.utils.path_resolver import get_datacenter_path
+                    import sqlite3
+                    import json
+
+                    broker = LocalMessageBroker()
+                    broker.mark_canonized(job_id)
+
+                    conn = broker._get_conn()
+                    conn.row_factory = sqlite3.Row
+                    row = conn.execute("SELECT topology_csv FROM job_sessions WHERE job_id = ?", (job_id,)).fetchone()
+                    if row and row["topology_csv"]:
+                        from maccre_core.flow_registry import FlowRegistryStore
+                        store = FlowRegistryStore()
+                        store.save_flow(f"{job_id}-CanonFlow", "Canonized Flow", row["topology_csv"])
+                        self._populate_flow_registry_dropdown()
+
+                    # Fix canonize arguments
+                    ledger_path = str(get_datacenter_path("03_Agent_Ledgers", job_id, "unified_session_ledger.md"))
+                    self.notify(f"Extracting memory pins for {job_id}...")
+                    self.run_worker(self._async_canonize(ledger_path, job_id), thread=True)
+                except Exception as e:
+                    self.notify(f"Canonize failed: {e}", severity="error")
+
+            elif action == "save_registry":
+                try:
+                    from maccre_core.orchestration.local_broker import LocalMessageBroker
+                    import sqlite3
+                    import json
+                    conn = LocalMessageBroker()._get_conn()
+                    conn.row_factory = sqlite3.Row
+                    row = conn.execute("SELECT topology_csv FROM job_sessions WHERE job_id = ?", (job_id,)).fetchone()
+                    if row and row["topology_csv"]:
+                        from maccre_core.flow_registry import FlowRegistryStore
+                        store = FlowRegistryStore()
+                        store.save_flow(job_id, "Saved from Session Manager", row["topology_csv"])
+                        self.notify(f"Flow {job_id} saved to registry.")
+                        self._populate_flow_registry_dropdown()
+                except Exception as e:
+                    self.notify(f"Save failed: {e}", severity="error")
+
+            elif action == "nexus_deadflow":
+                self.focus_nexus()
+                chat_input = self.query_one("#fe-input", Input)
+                chat_input.value = f"Nexus, please inspect the DeadFlow for session '{job_id}' and propose a fix."
+                chat_input.focus()
+
+        self.app.push_screen(SessionManagerModal(), handle_sm_result)
+
+    async def _async_canonize(self, ledger_path: str, job_id: str) -> None:
+        try:
+            from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
+            mem = CognitiveMemoryEngine()
+            mem.extract_from_canonized_ledger(ledger_path, job_id)
+            self.call_from_thread(self.notify, f"Session {job_id} canonized successfully!")
+        except Exception as e:
+            self.call_from_thread(self.notify, f"Canonize failed: {e}", severity="error")
 
     @on(Button.Pressed, "#btn-flow-registry")
     def action_flow_registry(self) -> None:
@@ -2743,6 +2907,65 @@ class NexusPlex(App[None]):
             """Capture the active job ID for SQLite unrolling queries."""
             self._current_job_id = job_id
 
+    @work(thread=True)
+    def resume_linear_flow_background(self, job_id: str) -> None:
+        import logging
+        import threading
+        class RichLogHandler(logging.Handler):
+            def __init__(self, tui_app):
+                super().__init__()
+                self.tui_app = tui_app
+            def emit(self, record):
+                try:
+                    self.tui_app.write_agent_log(record.getMessage())
+                except Exception:
+                    pass
+
+        tui_handler = RichLogHandler(self)
+        root_logger = logging.getLogger()
+        original_level = root_logger.level
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(tui_handler)
+        
+        from maccre_core.orchestration.flow_engine import FlowRunner
+        runner = FlowRunner(self.active_project)
+        
+        def _on_step_complete(step_index: int, output_path: str) -> None:
+            while len(self._node_payloads) <= step_index:
+                self._node_payloads.append("")
+            self._node_payloads[step_index] = output_path
+
+        def _on_hitl_pause(step_index: int, hitl_job_id: str, payload: str) -> None:
+            self._hitl_job_id = hitl_job_id
+            self.call_from_thread(self._surface_hitl_pause, step_index, hitl_job_id, payload)
+
+        def _on_job_started(started_job_id: str) -> None:
+            self._current_job_id = started_job_id
+
+        try:
+            self.write_agent_log(f"\n[bold cyan]--- Resuming Linear Flow Execution ({job_id}) ---[/bold cyan]")
+            result_path = runner.resume_flow(
+                job_id,
+                cancel_event=self._flow_cancel_event,
+                pause_event=self._flow_pause_event,
+                step_callback=_on_step_complete,
+                hitl_callback=_on_hitl_pause,
+                job_started_callback=_on_job_started
+            )
+            if self._flow_cancel_event.is_set():
+                self.write_agent_log("[yellow]Flow execution was cancelled by user.[/yellow]")
+            else:
+                self.write_agent_log(f"\n[bold green]✓ Flow Resume Complete![/bold green]\nFinal Output: {result_path}")
+        except Exception as e:
+            self.write_agent_log(f"\n[bold red]Flow Resume Failed:[/bold red] {e}")
+            import traceback
+            self.write_agent_log(f"[dim]{traceback.format_exc()}[/dim]")
+        finally:
+            self.is_session_active = False
+            self.call_from_thread(self._finish_flow_execution)
+            root_logger.removeHandler(tui_handler)
+            root_logger.setLevel(original_level)
+
         try:
             final_artifact = runner.execute_flow(
                 self.active_flow_steps,
@@ -2881,17 +3104,23 @@ class NexusPlex(App[None]):
     def action_file_cabinet(self) -> None:
         def handle_file_cabinet_result(result: dict | None):
             if result:
-                name = result["name"]
-                project = result["project"]
-                files = result["files"]
-                # For now, we will just log it. Backend logic will follow in notebook_registry.py implementation.
-                self.write_nexus_log(f"[green]File Cabinet:[/green] Queued {len(files)} files for Notebook '{name}' in {project}.")
-                from maccre_core.notebook_registry import ingest_to_notebook
-                try:
-                    ingest_to_notebook(name, project, files)
-                    self.write_nexus_log("[green]File Cabinet:[/green] Ingestion complete.")
-                except Exception as e:
-                    self.write_nexus_log(f"[red]File Cabinet Error:[/red] {e}")
+                action = result.get("action")
+                if action == "project_canon":
+                    from maccre_tui.widgets.project_canon_modal import ProjectCanonModal
+                    self.push_screen(ProjectCanonModal())
+                    return
+                
+                name = result.get("name")
+                project = result.get("project")
+                files = result.get("files", [])
+                if name and project:
+                    self.write_nexus_log(f"[green]File Cabinet:[/green] Queued {len(files)} files for Notebook '{name}' in {project}.")
+                    from maccre_core.notebook_registry import ingest_to_notebook
+                    try:
+                        ingest_to_notebook(name, project, files)
+                        self.write_nexus_log("[green]File Cabinet:[/green] Ingestion complete.")
+                    except Exception as e:
+                        self.write_nexus_log(f"[red]File Cabinet Error:[/red] {e}")
 
         self.push_screen(FileCabinetModalScreen(), handle_file_cabinet_result)
 

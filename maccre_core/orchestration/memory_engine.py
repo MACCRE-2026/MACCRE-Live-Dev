@@ -81,6 +81,44 @@ class SovereignPinStore:
                     (job_id, ledger_path, t.get("subject"), t.get("predicate"), t.get("object"), t.get("significance"))
                 )
 
+    def get_pins_by_job(self, job_id: str) -> List[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM memory_pins WHERE job_id = ? ORDER BY id", (job_id,))
+            return [dict(row) for row in cursor.fetchall()]
+            
+    def get_all_jobs(self) -> List[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT DISTINCT job_id FROM memory_pins ORDER BY created_at DESC")
+            return [row[0] for row in cursor.fetchall()]
+
+    def update_pin(self, pin_id: int, subject: str, predicate: str, obj: str, significance: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE memory_pins SET subject=?, predicate=?, object=?, significance=? WHERE id=?",
+                (subject, predicate, obj, significance, pin_id)
+            )
+
+    def rename_job(self, old_job_id: str, new_job_id: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE memory_pins SET job_id = ? WHERE job_id = ?", (new_job_id, old_job_id))
+            cursor = conn.execute("SELECT id, ledger_path FROM memory_pins WHERE job_id = ?", (new_job_id,))
+            for row in cursor.fetchall():
+                if row[1]:
+                    new_path = row[1].replace(old_job_id, new_job_id)
+                    conn.execute("UPDATE memory_pins SET ledger_path = ? WHERE id = ?", (new_path, row[0]))
+
+    def delete_pin(self, pin_id: int) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM memory_pins WHERE id=?", (pin_id,))
+
+    def add_pin(self, job_id: str, ledger_path: str, subject: str, predicate: str, obj: str, significance: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO memory_pins (job_id, ledger_path, subject, predicate, object, significance) VALUES (?, ?, ?, ?, ?, ?)",
+                (job_id, ledger_path, subject, predicate, obj, significance)
+            )
+
 
 # ── Engine ────────────────────────────────────────────────────────────────────
 
@@ -105,48 +143,47 @@ class CognitiveMemoryEngine:
         self.client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
         self.extractor_model = "gemini-2.5-flash"
 
+    def rename_pins(self, old_job_id: str, new_job_id: str) -> None:
+        self.store.rename_job(old_job_id, new_job_id)
+
     def extract_from_canonized_ledger(self, ledger_path: str, job_id: str) -> None:
-        """Silently extracts thought pins from a unified ledger and saves them to SQLite."""
-        try:
-            with open(ledger_path, "r", encoding="utf-8") as f:
-                agent_payload = f.read()
-                
-            if not agent_payload or len(agent_payload) < 100:
-                return
+        """Extracts thought pins from a unified ledger and saves them to SQLite. Raises exceptions on failure."""
+        with open(ledger_path, "r", encoding="utf-8") as f:
+            agent_payload = f.read()
+            
+        if not agent_payload or len(agent_payload) < 100:
+            return
 
-            schema_hint = (
-                '{"triplets": [{"subject": "...", "predicate": "...", "object": "...", "significance": "..."}]}'
-            )
-            system = (
-                "You are the MACCREv2 Cognitive Memory Engine. "
-                "Analyze the following session ledger output. Extract the most brilliant conceptual, mathematical, "
-                "or architectural relationships and output them as strict Knowledge Triplets. "
-                "Ignore conversational filler. Only pin high-value concepts. "
-                f"You MUST reply with ONLY valid JSON matching this schema exactly: {schema_hint}"
-            )
+        schema_hint = (
+            '{"triplets": [{"subject": "...", "predicate": "...", "object": "...", "significance": "..."}]}'
+        )
+        system = (
+            "You are the MACCREv2 Cognitive Memory Engine. "
+            "Analyze the following session ledger output. Extract the most brilliant conceptual, mathematical, "
+            "or architectural relationships and output them as strict Knowledge Triplets. "
+            "Ignore conversational filler. Only pin high-value concepts. "
+            f"You MUST reply with ONLY valid JSON matching this schema exactly: {schema_hint}"
+        )
 
-            response = self.client.generate_content(
-                model=self.extractor_model,
-                contents=[user_turn(agent_payload)],
-                system_instruction=system,
-                temperature=0.1,
-            )
+        response = self.client.generate_content(
+            model=self.extractor_model,
+            contents=[user_turn(agent_payload)],
+            system_instruction=system,
+            temperature=0.1,
+        )
 
-            raw = response.text.strip()
-            # Strip markdown fences if the model added them
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+        raw = response.text.strip()
+        # Strip markdown fences if the model added them
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
 
-            extraction: dict[str, object] = json.loads(raw)
-            triplets = cast(List[object], extraction.get("triplets", []))
+        extraction: dict[str, object] = json.loads(raw)
+        triplets = cast(List[object], extraction.get("triplets", []))
 
-            if not triplets:
-                return
+        if not triplets:
+            return
 
-            self.store.store_triplets(job_id, ledger_path, triplets)
-            logger.info(f"[Memory Engine] Extracted {len(triplets)} thought pins to SovereignPinStore.")
-
-        except Exception as e:
-            logger.info(f"[Memory Engine] Extraction skipped/failed: {e}")
+        self.store.store_triplets(job_id, ledger_path, triplets)
+        logger.info(f"[Memory Engine] Extracted {len(triplets)} thought pins to SovereignPinStore.")

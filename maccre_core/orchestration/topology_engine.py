@@ -62,6 +62,51 @@ class TopologyEngine(TopologyProvider):
         self._cached_graph = {}
         self._last_pull_time = 0.0
 
+    def patch_node(self, node_id: str, field: str, value: str) -> None:
+        """Rewrite a single cell in topology.csv and hot-reload."""
+        import csv
+        import tempfile
+        import shutil
+        import os
+
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, newline='', encoding='utf-8-sig')
+        field_upper = field.upper()
+        patched = False
+
+        with open(self.csv_path, mode='r', encoding='utf-8-sig') as infile, temp_file:
+            reader = csv.reader(infile)
+            writer = csv.writer(temp_file)
+            try:
+                headers = next(reader)
+            except StopIteration:
+                os.remove(temp_file.name)
+                return
+            
+            writer.writerow(headers)
+            header_map = {h.strip().upper(): i for i, h in enumerate(headers)}
+            
+            if field_upper not in header_map:
+                os.remove(temp_file.name)
+                raise KeyError(f"Column '{field}' not found in topology.csv")
+                
+            col_idx = header_map[field_upper]
+            node_id_idx = header_map.get("NODE_ID", -1)
+            
+            for row in reader:
+                if node_id_idx != -1 and len(row) > node_id_idx and row[node_id_idx].strip().upper() == node_id.upper():
+                    while len(row) <= col_idx:
+                        row.append("")
+                    row[col_idx] = value
+                    patched = True
+                writer.writerow(row)
+                
+        if patched:
+            shutil.move(temp_file.name, self.csv_path)
+            self.flush_cache()
+        else:
+            os.remove(temp_file.name)
+            raise ValueError(f"Node '{node_id}' not found in topology.csv")
+
     def _pull_from_csv(self) -> Dict[str, Any]:
         """Loads and parses the CSV into the engine dictionary."""
         from maccre_core.utils.secret_auth import is_topology_approved

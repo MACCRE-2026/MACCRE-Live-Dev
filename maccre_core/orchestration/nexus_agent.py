@@ -404,21 +404,32 @@ class NexusAgent:
                 pname = args["project_name"].strip().replace(" ", "_")
                 q = args["query"]
                 try:
-                    store = SovereignPinStore(pname, "thought_pins.db")
-                    try:
-                        v = self.client.embed_content(model="gemini-embedding-2", text=q).values
-                        results = store.query("canon", v, n=5)
-                        if not results:
-                            # fallback to FTS
-                            results = store.fts_query("canon", q, n=5)
-                        if not results:
-                            return f"No canon found in project '{pname}' for query."
-                        out = [f"=== PROJECT CANON: {pname} ==="]
-                        for r in results:
-                            out.append(f"[Score {r.distance:.2f}]: {r.text}")
-                        return "\n\n".join(out)
-                    finally:
-                        store.close()
+                    from maccre_core.utils.path_resolver import get_datacenter_path
+                    import sqlite3
+                    db_path = get_datacenter_path("02_Dynamic_Context", "memory_pins.db")
+                    # Force override for specific project if needed
+                    db_path = get_maccre_root() / "__DATACENTER" / pname / "02_Dynamic_Context" / "memory_pins.db"
+                    
+                    if not db_path.exists():
+                        return f"No canon found in project '{pname}'. Database does not exist."
+                        
+                    with sqlite3.connect(db_path) as conn:
+                        cursor = conn.cursor()
+                        q_like = f"%{q}%"
+                        cursor.execute(
+                            "SELECT job_id, subject, predicate, object, significance FROM memory_pins "
+                            "WHERE job_id LIKE ? OR subject LIKE ? OR predicate LIKE ? OR object LIKE ? LIMIT 10",
+                            (q_like, q_like, q_like, q_like)
+                        )
+                        rows = cursor.fetchall()
+                        
+                    if not rows:
+                        return f"No canon found in project '{pname}' for query."
+                        
+                    out = [f"=== PROJECT CANON: {pname} ==="]
+                    for row in rows:
+                        out.append(f"[{row[0]}] {row[1]} {row[2]} {row[3]} - {row[4]}")
+                    return "\n\n".join(out)
                 except Exception as e:
                     return f"Project canon search failed: {e}"
                     

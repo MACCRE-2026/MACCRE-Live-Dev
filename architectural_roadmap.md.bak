@@ -52,16 +52,6 @@ Our current swarm queue is stateless. If a crash occurs, tasks become permanentl
 
 ---
 
-## Phase 4.75: Deterministic Orchestration (The Engine Refactor)
-
-**Objective:** Build out the foundational deterministic control nodes to handle complex branching and aggregation, effectively removing hardcoded routing logic (e.g., Crucible templates) from the backend Python files and empowering the user to build loops visually.
-
-* **Deterministic Control Nodes:** Implement `DET_FAN_OUT`, `DET_FAN_IN`, and `DET_RECURSION` as first-class node types in `deterministic_nodes.py`.
-* **Flows as Macros:** Allow users to save an entire Flow Line (including DET nodes and nested logic) as a single reusable "MacroNode" in the registry. 
-* **Iteration-Aware Augments:** Implement the ability for `swarm_worker.py` to check the current loop count (`max_recursion`) and dynamically append specific `Iteration_Augments` to an agent's prompt during execution.
-
----
-
 ## Phase 5: Multimodal Ingestion (The Horizon Goal)
 
 **Objective:** Execute the Alphabet Oracle's design for semantic visual ingestion.

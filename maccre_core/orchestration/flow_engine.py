@@ -833,11 +833,12 @@ class FlowRunner:
         return current_payload
 
 
-def generate_crucible_blind_ledger(job_id: str, advocate_node: str, judge_node: str) -> str:
-    """Assemble a Crucible Blind ledger for an advocate during recursion.
-    - Includes the initial OSINT payload (anything before the advocate's first turn).
-    - Includes the advocate's own drafts.
-    - Includes the judge's critiques ONLY if they route back to this advocate.
+def generate_targeted_ledger(job_id: str, target_node: str, aggregator_node: str = "C_JUDGE") -> str | None:
+    """Assemble a Targeted Filter ledger for an agent during recursion.
+    It returns only the agent's own previous outputs and the aggregator's outputs.
+    - Includes the setup phase (anything before the target's first turn).
+    - Includes the target's own previous drafts.
+    - Includes the aggregator's reviews (ONLY if routed to this target, or unrouted).
     """
     from datetime import datetime, timezone  # noqa: PLC0415
     import sqlite3  # noqa: PLC0415
@@ -846,7 +847,7 @@ def generate_crucible_blind_ledger(job_id: str, advocate_node: str, judge_node: 
     ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
     artifact_dir = get_datacenter_path("04_Code_Artifacts", job_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    output_path = artifact_dir / f"blind_ledger_{advocate_node}.md"
+    output_path = artifact_dir / f"targeted_ledger_{target_node}.md"
     
     node_meta: list[dict[str, Any]] = []
     try:
@@ -877,36 +878,36 @@ def generate_crucible_blind_ledger(job_id: str, advocate_node: str, judge_node: 
         
     ledger_entries.sort(key=get_sort_key)
     
-    parts = [f"# Crucible Blind Ledger for {advocate_node}", ""]
+    parts = [f"# Targeted Filter Ledger for {target_node}", ""]
     
-    # Identify the timestamp/ID of the advocate's first turn
-    advocate_first_idx = len(ledger_entries)
+    # Identify the timestamp/ID of the target's first turn
+    target_first_idx = len(ledger_entries)
     for i, (fpath, _) in enumerate(ledger_entries):
-        if advocate_node in fpath.stem:
-            advocate_first_idx = i
+        if target_node in fpath.stem:
+            target_first_idx = i
             break
             
     for i, (fpath, _) in enumerate(ledger_entries):
         c_node = fpath.stem.rsplit("_", 1)[0]  # strip the _id
         
-        # Rule 1: Setup phase (before advocate's first turn)
-        if i < advocate_first_idx:
+        # Rule 1: Setup phase (before target's first turn)
+        if i < target_first_idx:
             content = fpath.read_text(encoding="utf-8")
             parts.append(f"## [SETUP PHASE: {c_node}]\n{content}\n")
             continue
             
-        # Rule 2: The Advocate's Voice
-        if advocate_node in c_node:
+        # Rule 2: The Target's Voice
+        if target_node in c_node:
             content = fpath.read_text(encoding="utf-8")
             parts.append(f"## [YOUR PREVIOUS DRAFT]\n{content}\n")
             continue
             
-        # Rule 3: The Judge's Critique
-        if judge_node in c_node:
+        # Rule 3: The Aggregator's Critique
+        if aggregator_node in c_node:
             content = fpath.read_text(encoding="utf-8")
-            # Check if this critique was routed to this advocate
-            if re.search(r"ROUTE_TO:.*" + advocate_node, content, re.IGNORECASE):
-                parts.append(f"## [JUDGE CRITIQUE]\n{content}\n")
+            # Check if this critique was routed to this target (or no explicit route)
+            if not re.search(r"ROUTE_TO:.*", content, re.IGNORECASE) or re.search(r"ROUTE_TO:.*" + target_node, content, re.IGNORECASE):
+                parts.append(f"## [AGGREGATOR REVIEW]\n{content}\n")
                 
         # Rule 4: Discard everything else
         

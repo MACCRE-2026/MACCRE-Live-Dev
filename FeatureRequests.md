@@ -143,3 +143,29 @@ The TUI needs a "Session Manager" interface (perhaps accessible from the project
 Add "Grounding with Local Memory" and "Grounding with Brave LLM Search" toggles to the Agent Builder right below Grounding with Google Search. 
 - **Hybrid Exclusionary Search**: If Google and Brave are both turned on at the same time, it automatically triggers logic to wait for the model to do its Google searches, the agent thinks about the Google search results and selects sources, and then uses what it's learned to do a Brave search that explicitly ignores results already discovered by the Google search, before continuing. If both are turned on, the agent *always* uses this hybrid exclusionary search logic. 
 - **Tri-Grounding Logic**: If all 3 Groundings (Google, Brave, Local Memory) are turned on, the agent's system prompt must be dynamically injected with context explaining *why* it would search its project memory and that it has the capability to do so. It must be explicitly instructed that project memory is only a source of truth if referencing the project and project-related contexts (to avoid hallucinating local data as global internet facts).
+
+***
+
+### Feature Name: Advanced Probabilistic Steering Language (Tabled for Future)
+**Abstract:** Expand the conditional routing parser to intercept a broader suite of LLM-generated routing commands (e.g., SPAWN_NODE, SKIP_TO, FORK).
+**Date/Time Entered:** 2026-06-29T22:33:42-04:00
+**Status:** Unfulfilled
+
+**Description:**
+Expand the regex parser in \swarm_worker.py\ to intercept a broader suite of LLM-generated routing commands (e.g., \SPAWN_NODE:[Agent_Name]\, \SKIP_TO:[Node_ID]\, \FORK:[Node_A],[Node_B]\).
+This enables highly-capable Supervisor or Director agents to dynamically build, derail, or restructure the flow topology in real-time based on the evolving context of their research or task, creating a hybrid deterministic/probabilistic DAG. 
+*Note: Deemed unnecessary and overly fragile for simple pipelines (like Writer_Pipe). Shelved for future advanced multi-agent orchestrations.*
+
+***
+
+### Feature Name: TUI State Container & Asynchronous Rendering Architecture
+**Abstract:** Decouple the TUI from direct synchronous SQLite queries by implementing an event-driven, in-memory State Container and leveraging Textual's Worker API to eliminate main-thread blocking.
+**Date/Time Entered:** 2026-06-30T17:58:20-04:00
+**Status:** Unfulfilled
+
+**Description:**
+As the Sovereign Datacenter expands and Nexus workflows grow in complexity, the Textual UI can experience rendering latency (frame stutter, slow modal mounts). This is primarily caused by synchronous blocking operations on the main event loop (e.g., massive JSON parsing, deep SQLite queries, or mounting thousands of DOM nodes at once). 
+**Proposed Enhancements:**
+1. **Polled Database State Objects (State Container):** Build an in-memory buffer (Python dictionaries) that loads SQLite tables in the background. The TUI reads exclusively from this instantaneous memory buffer. The buffer updates via background polling or event triggers when an agent modifies the database.
+2. **Textual Worker API (`@work(thread=True)`):** Push heavy processing off the main asyncio thread. Modals should mount instantly with loaders, dispatch a background worker to query data, and populate upon receiving a callback.
+3. **DOM Optimization:** Implement lazy-loading or pagination for massive files (like reading the `unified_session_ledger.md`) to prevent the Textual engine from recalculating layout syntax highlighting for thousands of nodes on a single tick.

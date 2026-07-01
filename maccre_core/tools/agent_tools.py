@@ -265,3 +265,35 @@ def request_scope_expansion(target_project: str, justification: str) -> str:
         "has been sent to the Architect. Proceed with your current task using only "
         "your active scope. Do not hallucinate missing data."
     )
+
+# ── Nexus Copilot DeadFlow & Topology Tools ──────────────────────────────────
+
+def inspect_deadflow(job_id: str) -> str:
+    """[NEXUS TOOL] Inspect a failed session to identify the failing node.
+    
+    Args:
+        job_id: The job ID of the failed session.
+    """
+    try:
+        from maccre_core.orchestration.local_broker import LocalMessageBroker
+        import json
+        broker = LocalMessageBroker()
+        errors = broker.get_task_errors(job_id)
+        return json.dumps(errors, indent=2)
+    except Exception as e:
+        return f"[ERROR] Failed to inspect DeadFlow: {e}"
+
+def patch_live_topology(node_id: str, field: str, value: str) -> str:
+    """[NEXUS TOOL] Patch a live running topology node's config.
+    
+    Args:
+        node_id: The ID of the node to patch.
+        field: The column name to patch (e.g. 'MODEL_OVERRIDE', 'INSTRUCTION_OVERRIDE').
+        value: The new value to set.
+    """
+    from maccre_core.orchestration.topology_engine import TopologyEngine
+    try:
+        TopologyEngine().patch_node(node_id, field, value)
+        return f"[TOPOLOGY PATCHED] Successfully updated {node_id}.{field} = {value}"
+    except Exception as e:
+        return f"[ERROR] Failed to patch topology: {e}"

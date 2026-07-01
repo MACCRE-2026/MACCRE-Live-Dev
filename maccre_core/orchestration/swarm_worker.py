@@ -519,18 +519,18 @@ All file paths must strictly resolve to these five silos:
             #   [SOURCE DOCUMENT] — the original user input (unchanged through all hops)
             #   [PREVIOUS NODE OUTPUT] — the ledger written by the prior agent
             # For the first node (INGEST), these are the same file; we skip the duplicate block.
-            # ── Crucible Blind Payload Generation ─────────────────────────────
+            # ── Targeted Filter Payload Generation ─────────────────────────────
             _payload_mode = str(node_config.get("payload_mode", "Unified Ledger"))
-            if _payload_mode == "Crucible Blind":
+            if _payload_mode == "Targeted Filter":
                 try:
-                    from maccre_core.orchestration.flow_engine import generate_crucible_blind_ledger
+                    from maccre_core.orchestration.flow_engine import generate_targeted_ledger  # noqa: PLC0415
                     _judge_node = str(node_config.get("next_node_success", node_config.get("Next_Node", ""))).split(",")[0].strip()
-                    _cb_path = generate_crucible_blind_ledger(job_id, current_node, _judge_node)
+                    _cb_path = generate_targeted_ledger(job_id, current_node, _judge_node)
                     if _cb_path:
                         payload_path = _cb_path
-                        logger.info(f"[{AGENT_ID}] Loaded Crucible Blind Ledger: {payload_path}")
-                except Exception as e:
-                    logger.warning(f"[{AGENT_ID}] Failed to generate Crucible Blind Ledger: {e}")
+                        logger.info(f"[{AGENT_ID}] Loaded Targeted Filter Ledger: {payload_path}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[{AGENT_ID}] Failed to generate Targeted Filter Ledger: {e}")
 
             logger.info(f"[{AGENT_ID}] Reading payload: {payload_path}")
             ledger_content = self._read_local_payload(payload_path)

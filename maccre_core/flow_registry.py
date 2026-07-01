@@ -44,6 +44,13 @@ class FlowRegistryStore:
             ''', (name.strip(), description.strip(), steps_json, now_str))
             conn.commit()
 
+    def rename_flow(self, old_name: str, new_name: str) -> None:
+        """Rename an existing flow in the registry."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE flows SET name = ? WHERE name = ?', (new_name, old_name))
+            conn.commit()
+
     def load_flow(self, name: str) -> dict[str, Any]:
         """Load a single flow by name."""
         with sqlite3.connect(self.db_path) as conn:
@@ -69,10 +76,19 @@ class FlowRegistryStore:
                 flows.append({
                     "name": row[0],
                     "description": row[1],
-                    "steps_json": row[2],
                     "created_at": row[3]
                 })
         return flows
+
+    def list_flow_names(self) -> list[str]:
+        """Return a list of all saved flow names without loading their heavy JSON payloads."""
+        names = []
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM flows ORDER BY created_at DESC")
+            for row in cursor.fetchall():
+                names.append(row[0])
+        return names
 
     def delete_flow(self, name: str) -> None:
         """Delete a flow from the registry."""

@@ -575,7 +575,7 @@ def _build_crucible_topology(
             "Fallback_Node": "FAILED",
             "Max_Retries": max_recursion,
             "Payload_Path": None,
-            "Payload_Mode": "Crucible Blind" if variation == "synthesis-blind" else "Unified Ledger",
+            "Payload_Mode": "Targeted Filter" if variation == "synthesis-blind" else "Unified Ledger",
             "Is_End_Node": "FALSE",
             "Timeout_Sec": 0,
             "Dialogue_Partner": None,

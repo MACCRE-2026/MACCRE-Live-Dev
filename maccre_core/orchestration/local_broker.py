@@ -207,9 +207,81 @@ class LocalMessageBroker(MessageBroker):
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM job_sessions WHERE status IN ('failed', 'paused', 'cancelled', 'active') ORDER BY updated_at DESC"
+            "SELECT * FROM job_sessions WHERE status IN ('failed', 'paused', 'cancelled', 'active', 'completed') ORDER BY updated_at DESC"
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def rename_session(self, old_job_id: str, new_job_id: str) -> None:
+        """Rename a session's datacenter folders and its DB references."""
+        from maccre_core.utils.path_resolver import get_datacenter_path
+        import os
+        
+        tiers = ["01_Raw_Source", "02_Dynamic_Context", "03_Agent_Ledgers", "04_Code_Artifacts", "05_Rendered_Media"]
+        for tier in tiers:
+            src = get_datacenter_path(tier, old_job_id)
+            if src.exists():
+                dst = get_datacenter_path(tier, new_job_id)
+                try:
+                    os.rename(src, dst)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Could not rename {src} to {dst}: {e}")
+                    
+        conn = self._get_conn()
+        conn.execute("UPDATE job_sessions SET job_id = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?", (new_job_id, old_job_id))
+        conn.execute("UPDATE task_queue SET job_id = ? WHERE job_id = ?", (new_job_id, old_job_id))
+        conn.execute("UPDATE interrupt_queue SET job_id = ? WHERE job_id = ?", (new_job_id, old_job_id))
+        
+        cursor = conn.execute("SELECT current_ledger_path FROM job_sessions WHERE job_id = ?", (new_job_id,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            new_path = row[0].replace(old_job_id, new_job_id)
+            conn.execute("UPDATE job_sessions SET current_ledger_path = ? WHERE job_id = ?", (new_path, new_job_id))
+        conn.commit()
+        
+        try:
+            from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
+            CognitiveMemoryEngine().rename_pins(old_job_id, new_job_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Could not rename pins in memory engine: {e}")
+            
+        try:
+            from maccre_core.flow_registry import FlowRegistryStore
+            store = FlowRegistryStore()
+            store.rename_flow(f"{old_job_id}-CanonFlow", f"{new_job_id}-CanonFlow")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Could not rename flow in registry: {e}")
+
+    def update_session_topology(self, job_id: str, topology_json: str) -> None:
+        """Patch the topology JSON string for a specific session."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE job_sessions SET topology_csv = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+            (topology_json, job_id)
+        )
+        conn.commit()
+
+    def mark_canonized(self, job_id: str) -> None:
+        """Mark a session as canonized, locking it from further reruns."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE job_sessions SET status = 'canonized', updated_at = CURRENT_TIMESTAMP WHERE job_id = ?",
+            (job_id,)
+        )
+        conn.commit()
+
+    def get_task_errors(self, job_id: str) -> dict[str, Any]:
+        """Fetch the last known states and errors for a failed session for Nexus to inspect."""
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT * FROM task_queue WHERE job_id = ? ORDER BY id DESC LIMIT 5",
+            (job_id,)
+        )
+        tasks = [dict(row) for row in cursor.fetchall()]
+        return {"job_id": job_id, "recent_tasks": tasks}
 
     # ── Worker Interface ──────────────────────────────────────────────────────
 
