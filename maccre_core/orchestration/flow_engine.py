@@ -1075,7 +1075,7 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
         f"{job_id}`  "
     )
     parts.append(
-        "Canonization will elevate memory pins → `thought_pins.db` vectors, "
+        "Canonization will elevate memory pins → `memory_pins.db` vectors, "
         "ledger vectors → project canon, and topology → `topology_library`.\n"
     )
 
@@ -1086,4 +1086,109 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
         "[FLOW_ENGINE] Unified Session Ledger: %d chars, %d turns, %d pins, $%.6f total.",
         len(unified_text), len(ledger_entries), len(memory_pins), total_cost,
     )
+    
+    # Also generate the thoughts ledger
+    try:
+        generate_unified_thoughts_ledger(job_id)
+    except Exception as e:
+        logger.warning(f"[FLOW_ENGINE] Failed to generate unified thoughts ledger: {e}")
+        
+    return str(output_path)
+
+def generate_unified_thoughts_ledger(job_id: str) -> str:
+    """Assemble a unified thoughts ledger from all agent logs in the flow.
+
+    Output: ``04_Code_Artifacts/<job_id>/unified_thoughts_ledger.md``
+
+    Contents:
+    - Session metadata (job_id, timestamps)
+    - Chronological agent turns with their raw thoughts and tool calls extracted from their .log files.
+    """
+    from datetime import datetime, timezone
+    import sqlite3
+    import re
+
+    ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+    artifact_dir = get_datacenter_path("04_Code_Artifacts", job_id)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    output_path = artifact_dir / "unified_thoughts_ledger.md"
+
+    # ── Collect per-node metadata from task_queue ─────────────────────────
+    node_meta: list[dict[str, Any]] = []
+    try:
+        db_path = str(get_datacenter_path("swarm_queue.db"))
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, current_node, lock_status, actual_cost, created_at, "
+                "completed_at, locked_by, payload_path "
+                "FROM task_queue WHERE job_id = ? ORDER BY id",
+                (job_id,),
+            ).fetchall()
+            for r in rows:
+                node_meta.append(dict(r))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── Collect log files ──────────────────
+    log_entries: list[tuple[Path, float]] = []
+    if ledger_dir.exists():
+        for f in ledger_dir.iterdir():
+            if f.suffix == ".log" and "_agent.log" in f.name:
+                log_entries.append((f, f.stat().st_mtime))
+                
+    def get_ledger_sort_key(item: tuple[Path, float]) -> str:
+        fpath, mtime = item
+        fname = fpath.stem.replace("_agent", "")
+        for m in node_meta:
+            if m.get("current_node", "") in fname:
+                return m.get("completed_at", "") or ""
+        # Fallback to mtime if not in db. Use SQLite datetime format so string-sort matches.
+        return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        
+    log_entries.sort(key=get_ledger_sort_key)
+
+    gen_ts = datetime.now(tz=timezone.utc).isoformat()
+
+    # ── Assemble document ─────────────────────────────────────────────────
+    parts: list[str] = []
+    parts.append("# Unified Thoughts Ledger\n")
+    parts.append(f"**Job ID:** `{job_id}`  ")
+    parts.append(f"**Generated:** {gen_ts}  \n")
+
+    # ── Agent Turns ───────────────────────────────────────────────────────
+    parts.append("## Agent Thoughts & Tool Executions (Chronological)\n")
+    for log_path, _mtime in log_entries:
+        node_name = log_path.stem.replace("_agent", "")
+        ts_str = datetime.fromtimestamp(_mtime, tz=timezone.utc).isoformat()
+        
+        try:
+            content = log_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        # Extract only thoughts and tools
+        thought_matches = re.finditer(r"<thought>(.*?)</thought>", content, re.DOTALL | re.IGNORECASE)
+        tool_matches = re.finditer(r"\[TOOL CALL REQUESTED:.*?\]", content, re.DOTALL | re.IGNORECASE)
+        
+        has_content = False
+        turn_parts = [f"### {node_name}", f"*Written: {ts_str}*\n"]
+        
+        for tm in thought_matches:
+            has_content = True
+            turn_parts.append("#### 🤔 Thought")
+            turn_parts.append(f"```\n{tm.group(1).strip()}\n```\n")
+            
+        for tm in tool_matches:
+            has_content = True
+            turn_parts.append("#### 🛠️ Tool Call")
+            turn_parts.append(f"```\n{tm.group(0).strip()}\n```\n")
+
+        if has_content:
+            parts.extend(turn_parts)
+            parts.append("\n---\n")
+
+    # ── Write ─────────────────────────────────────────────────────────────
+    unified_text = "\n".join(parts)
+    output_path.write_text(unified_text, encoding="utf-8")
     return str(output_path)

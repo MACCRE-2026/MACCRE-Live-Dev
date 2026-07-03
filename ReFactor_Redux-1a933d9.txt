@@ -1,0 +1,38 @@
+# ReFactor Redux: The Thinking Level Awakening
+Commit ID: 1a933d9
+Date: 2026-07-03
+
+## Executive Summary
+This document serves as a historical record and architectural justification for the "Thinking Level" massive refactor undertaken on Sovereign Edge (MACCREv2 / EXO_GANS). It details the origin of the discrepancy between expected agent behavior and actual system output, tracing the root cause back to a combination of user conceptual misalignment and persistent hallucinations by the Antigravity AI due to outdated training data.
+
+## The Origin of the Discrepancy
+The issue began when the user observed that the "Thinking Level" dropdown in the Agent Studio Chat modal was set to "None", yet the agents (such as OSINT_Analyst) were still producing detailed `<thought>` blocks in their outputs. 
+
+Conversely, the user also noted that during flow sessions and chat sessions, the agent's internal reasoning (which was vividly present during AI Studio calibrations) was often missing or lacking in depth when run natively through the Sovereign Edge framework, despite seemingly identical System Instructions.
+
+## The Dual-Nature of AI Reasoning
+The confusion stemmed from the conflation of two distinct mechanical processes:
+
+1. **Prompt-Based Reasoning (Chain-of-Thought):** 
+   This is the legacy method of forcing an LLM to think. By appending instructions like "Always use `<thought>` blocks before answering," the model is forced to output its reasoning as standard text. This is what Sovereign Edge's `swarm_worker` was designed to parse and log. 
+
+2. **API-Level Reasoning:**
+   This is the next-generation server-side reinforcement learning process where the model conducts hidden tree-searches before returning a response. This capability requires a specific API payload (`thinkingConfig`) to activate and returns its thoughts in a dedicated, separated payload (e.g., `parts[0].thought`).
+
+## The Antigravity Training Data Hallucination
+The critical failure in the system's architecture was the fault of the Antigravity engineering agent. Antigravity's internal heuristics and training data were heavily biased towards the 2024/2025 AI landscape (specifically the Gemini 1.5 Pro and Gemini 2.0 Flash Thinking Experimental eras). In that era, API-level thinking was a rare, experimental feature locked to a single model. 
+
+Because of this outdated worldview, Antigravity actively guided the user and wrote the `UniversalRouter` logic to completely ignore the `thinking_config` parameter. Antigravity falsely assumed that Prompt-Based Reasoning was the only viable path forward for the majority of the models being used.
+
+## The Breakthrough
+The breakthrough occurred when Antigravity was forced to directly probe the user's active Sovereign Edge API credentials. The probe revealed that in the modern 2026 ecosystem, virtually all current models (including `gemini-3.1-pro-preview`, `gemini-3.5-flash`, and `gemini-omni-flash-preview`) natively support API-level reasoning and return `'thinking': True` as a core capability.
+
+By relying on outdated heuristics, Antigravity had effectively hobbled the user's next-generation models, forcing them to rely on archaic Prompt-Based Reasoning and discarding the massive intelligence gains of native API thinking.
+
+## The Refactor Mandate
+To rectify this, the following architectural overhaul is mandated:
+1. **Payload Injection:** `gemini_client.py` must be updated to inject the `thinkingConfig` payload into the `generationConfig` when a user selects a Thinking Level (Low/High) in the UI.
+2. **Tuple Restructuring:** `UniversalRouter.generate()` must be aggressively refactored across the entire codebase to return a 3-item tuple: `(output_text, cost, api_thought)`. 
+3. **Telemetry Alignment:** `swarm_worker.py` and `live_session_manager.py` must be updated to intercept this new `api_thought` variable and actively inject it into the `.log` files alongside the existing prompt-based `<thought>` blocks, providing a unified, hybrid ledger of both native and explicit agent reasoning.
+
+This refactor ensures Sovereign Edge is fully compatible with the true capabilities of the Gemini 3.x family and future reasoning models.

@@ -135,21 +135,14 @@ def ingest_document(
             metadata=safe_meta,
         ))
 
-        # Dual-write to thought_pins legacy table (non-fatal)
+        # Dual-write to memory_pins legacy table (non-fatal)
         try:
             from maccre_core.orchestration.thought_pins import upsert_pin  # noqa: PLC0415
-            upsert_pin(
-                project_name=str(project),
-                doc_id=doc_id,
-                collection_name=collection_name,
-                text=text,
-                tags=str(safe_meta.get("tags", "")),
-                vector=vector,
-                metadata=safe_meta,
-                ingested_at=safe_meta["ingested_at"],
-            )
+            import uuid
+            tp_id = f"tp_{uuid.uuid4().hex[:8]}"
+            upsert_pin(str(project), tp_id, text, vector)
         except Exception as vec_e:  # noqa: BLE001
-            _log.warning("[DUAL-WRITE FAULT] thought_pins upsert: %s", vec_e)
+            _log.warning("[DUAL-WRITE FAULT] memory_pins upsert: %s", vec_e)
 
         return f"[RAG] Ingested '{doc_id}' into '{collection_name}'."
     except Exception as e:  # noqa: BLE001
@@ -274,7 +267,7 @@ def iterative_scoped_search(
 ) -> str:
     """Dynamically Scoped Infosphere Search (Two-Stage).
     
-    Step 1: Uses FTS on thought_pins.db to establish the semantic scope of the project.
+    Step 1: Uses FTS on memory_pins.db to establish the semantic scope of the project.
     Step 2: Uses Vector Similarity on the active project store (which includes canonized
             agent_ledgers and agent_thoughts) to find exact content.
     Step 3: Excludes any doc_id in excluded_ids to allow iterating deep into the DB.
@@ -695,7 +688,7 @@ def canonize_session(session_id: str, project_name: str) -> str:
          into their project-level canon databases, then deletes the ephemerals.
       2. Reads the raw knowledge-triplet JSON files from 02_Dynamic_Context/memory_pins/ for
          this session, vectorizes them, and upserts into the project canon
-         thought_pins.db.  This is the ONLY place thought-pins are vectorized,
+         memory_pins.db.  This is the ONLY place thought-pins are vectorized,
          keeping per-session cost to zero.
     """
     import os
@@ -756,12 +749,66 @@ def canonize_session(session_id: str, project_name: str) -> str:
         if unified_ledger_path.exists():
             engine = CognitiveMemoryEngine()
             engine.extract_from_canonized_ledger(str(unified_ledger_path), session_id)
-            results.append("[thought_pins] Extracted pins from unified ledger into SovereignPinStore.")
+            results.append("[memory_pins] Extracted pins from unified ledger into SovereignPinStore.")
         else:
-            results.append("[thought_pins] unified_session_ledger.md not found, skipping extraction.")
+            results.append("[memory_pins] unified_session_ledger.md not found, skipping extraction.")
             
     except Exception as tp_err:
-        results.append(f"[thought_pins] Extraction error: {tp_err!s}")
+        results.append(f"[memory_pins] Extraction error: {tp_err!s}")
+        
+    # ── Phase 3: Insert Unified Thoughts Ledger into thoughts.db ──────────────────
+    try:
+        thoughts_ledger_path = get_datacenter_path("04_Code_Artifacts", session_id, "unified_thoughts_ledger.md")
+        if thoughts_ledger_path.exists():
+            import sqlite3
+            import re
+            
+            telemetry_dir = get_datacenter_path("telemetry")
+            telemetry_dir.mkdir(parents=True, exist_ok=True)
+            thoughts_db_path = telemetry_dir / "thoughts.db"
+            
+            with sqlite3.connect(thoughts_db_path) as conn:
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS agent_thoughts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        job_id TEXT,
+                        agent TEXT,
+                        timestamp TEXT,
+                        entry_type TEXT,
+                        content TEXT
+                    )
+                ''')
+                
+                content = thoughts_ledger_path.read_text(encoding="utf-8")
+                
+                # Split by agent turns
+                turns = content.split("### ")
+                inserted = 0
+                for turn in turns[1:]:
+                    lines = turn.split("\n")
+                    agent_name = lines[0].strip()
+                    ts = ""
+                    ts_match = re.search(r"\*Written: (.*?)\*", turn)
+                    if ts_match:
+                        ts = ts_match.group(1).split(" |")[0].strip()
+                        
+                    blocks = turn.split("#### ")
+                    for block in blocks[1:]:
+                        entry_type = "Thought" if "🤔 Thought" in block else "Tool Call"
+                        code_match = re.search(r"```(.*?)```", block, re.DOTALL)
+                        if code_match:
+                            entry_content = code_match.group(1).strip()
+                            conn.execute(
+                                "INSERT INTO agent_thoughts (job_id, agent, timestamp, entry_type, content) VALUES (?, ?, ?, ?, ?)",
+                                (session_id, agent_name, ts, entry_type, entry_content)
+                            )
+                            inserted += 1
+                
+                results.append(f"[thoughts_db] Canonized {inserted} thought/tool records into telemetry/thoughts.db")
+        else:
+            results.append("[thoughts_db] unified_thoughts_ledger.md not found, skipping thoughts telemetry.")
+    except Exception as t_err:
+        results.append(f"[thoughts_db] Error canonizing thoughts: {t_err!s}")
         
     return "\n".join(results)
 
@@ -771,7 +818,7 @@ def query_session_memory(session_id: str, db_type: str, query: str, n_results: i
     Forensic tool: Queries an ephemeral session database (usually for a failed swarm) to salvage or analyze vectors.
     db_type must be one of: 'agent_thoughts', 'agent_ledgers'.
     """
-    valid_types = ['agent_ledgers']
+    valid_types = ['agent_ledgers', 'agent_thoughts']
     if db_type not in valid_types:
         return f"Invalid db_type. Must be one of: {valid_types}"
         

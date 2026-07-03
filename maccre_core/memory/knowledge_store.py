@@ -137,7 +137,7 @@ _instances: dict[str, KnowledgeStore] = {}
 
 def get_knowledge_store(
     project_name: str, 
-    db_name: str = "thought_pins.db",
+    db_name: str = "memory_pins.db",
     scope: str = "project",
     session_id: str = ""
 ) -> KnowledgeStore:

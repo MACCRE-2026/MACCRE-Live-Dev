@@ -332,7 +332,7 @@ ModalScreen {
     max-width: 140;
 }
 .chat-config-row {
-    height: 10;
+    height: 15;
     margin-bottom: 1;
 }
 .agent-selector-pane {
@@ -363,6 +363,116 @@ ModalScreen {
 }
 .chat-buttons {
     margin-top: 1;
+}
+
+/* ── 3-Panel Agent Studio Chat ───────────────────────────────────────────── */
+
+AgentStudioChatScreen {
+    align: center middle;
+    width: 100%;
+    height: 100%;
+}
+
+#studio-chat-layout {
+    width: 100%;
+    height: 100%;
+    layout: horizontal;
+    background: $background;
+}
+
+ChatDashboardPane {
+    width: 30%;
+    height: 100%;
+    border-right: solid #30363d;
+    padding: 1;
+    overflow-y: auto;
+}
+
+ChatBuilderPane {
+    width: 30%;
+    height: 100%;
+    border-left: solid #30363d;
+    padding: 1;
+    overflow-y: auto;
+}
+
+ChatArenaPane {
+    width: 1fr;
+    height: 100%;
+    padding: 1;
+    layout: vertical;
+}
+
+#chat-arena-header {
+    height: 3;
+    layout: horizontal;
+    margin-bottom: 1;
+}
+
+#chat-rename-input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#chat-finops-readout {
+    width: auto;
+    content-align: right middle;
+    padding: 0 1;
+    color: #3fb950;
+    text-style: bold;
+}
+
+#chat-arena-log {
+    height: 1fr;
+    background: #0d1117;
+    border: solid #30363d;
+    margin-bottom: 1;
+}
+
+#chat-arena-footer {
+    height: auto;
+    layout: vertical;
+}
+
+#chat-arena-input {
+    height: 3;
+}
+
+#chat-arena-input.-expanded {
+    height: 10;
+}
+
+.chat-arena-controls {
+    height: auto;
+    layout: horizontal;
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+#chat-notebook-list {
+    height: 10;
+    border: solid #30363d;
+}
+
+ChatBuilderPane Input, ChatBuilderPane Select, ChatDashboardPane Select {
+    margin-bottom: 1;
+}
+
+ChatBuilderPane Label, ChatDashboardPane Label {
+    color: #c9d1d9;
+    margin-bottom: 1;
+}
+
+#studio-select-agents, #studio-configure-agent {
+    height: 10;
+    margin-bottom: 1;
+    border: solid #30363d;
+}
+
+#studio-history-list {
+    height: 1fr;
+    border: solid #30363d;
+    margin-bottom: 1;
 }
 
 /* ── Buttons global ───────────────────────────────────────────────────────── */
@@ -573,13 +683,21 @@ FlowExecutionPanel {
 }
 
 
+#triple-index-box, #studio-triple-index-box {
+    height: auto;
+    min-height: 20;
+    border: round $primary;
+    padding: 1 2;
+    margin-bottom: 1;
+}
 
-
-
-
-
-
-
+#search-info-panel, #studio-search-info-panel {
+    height: auto;
+    min-height: 4;
+    max-height: 10;
+    border: solid $panel;
+    background: $surface;
+}
 
 
 

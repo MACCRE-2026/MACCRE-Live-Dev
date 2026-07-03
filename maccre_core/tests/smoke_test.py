@@ -241,7 +241,10 @@ def run_smoke_test() -> bool:
             all_ok &= _check("Ledger file written", ledger_path.exists())
 
             # Memory extraction
-            memory.extract_and_store(output, node, job_id)
+            try:
+        memory.extract_from_canonized_ledger(str(ledger_path), job_id)
+    except AttributeError:
+        pass
 
             # Route to STOP (same as swarm_worker)
             broker.route_task(

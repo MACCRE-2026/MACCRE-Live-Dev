@@ -148,168 +148,306 @@ class UniversalSwarmWorker:
             logger.warning(f"[{AGENT_ID}] WARNING: Could not read payload at {payload_path}: {e}")
             return "NO PAYLOAD DATA."
 
-    async def _run_live_session(self, model_id: str, system_prompt: str, current_payload: str, job_id: str, current_node: str) -> str:
-        """Stream 4a Alternative: High-speed REST streaming with manual barge-in."""
-        # SOVEREIGNTY EXCEPTION: Live API WebSocket protocol has no REST equivalent
-        from google import genai
-        # SOVEREIGNTY EXCEPTION: Live API WebSocket protocol has no REST equivalent
-        from google.genai import types
-        from maccre_core.orchestration.universal_vault import get_provider_credential
+    def _run_interactive_diamond_loop(self, model_id: str, system_prompt: str, current_payload: str, job_id: str, current_node: str, ai_options: dict | None = None, temperature: float = 1.0, tools_str: str = "none") -> str:
+        """Synchronous Diamond Loop implementation for Agent Studio Chat"""
         from maccre_core.orchestration.queues import JsonFileQueue
+        import threading
+        import time
         import asyncio
-
-        api_key = str(get_provider_credential("MACCRE_Sovereign") or "").strip()
-        client = genai.Client(api_key=api_key)
+        import json
         
         message_bus = JsonFileQueue("live_session_bus")
-        gathered_text: list[str] = []
-        
-        # Maintain local history across the session
-        history = [
-            types.Content(role="user", parts=[types.Part.from_text(text=current_payload)])
-        ]
-        
-        interrupt_event = asyncio.Event()
         override_text = []
-
-        async def queue_listener() -> None:
-            while True:
+        
+        def listener_thread():
+            while not self._shutdown_flag:
                 try:
-                    messages = message_bus.poll(["MACCRE.INTERRUPT", f"MACCRE.ROUTE.{current_node}"])
+                    messages = message_bus.poll([f"MACCRE.ROUTE.{current_node}"])
                     for topic_str, payload in messages:
-                        if topic_str == "MACCRE.INTERRUPT" and payload.get("job_id") == job_id:
-                            logger.info(f"\n[{current_node}] ⚡ LIVE INTERRUPT: Manager triggered barge-in.")
-                            override_text.append(f"[User Barge-in]: {payload.get('override_text')}")
-                            interrupt_event.set()
-                            
-                        elif topic_str == f"MACCRE.ROUTE.{current_node}" and payload.get("job_id") == job_id:
-                            speaker = payload.get("speaker")
-                            text = payload.get("text")
+                        if payload.get("job_id") == job_id:
+                            speaker = payload.get("speaker", "User")
+                            text = payload.get("text", "")
                             override_text.append(f"[{speaker}]: {text}")
-                            interrupt_event.set()
                             
-                    await asyncio.sleep(0.1)
-                except asyncio.CancelledError:
-                    break
+                    time.sleep(0.1)
                 except Exception as e:
                     logger.error(f"[Queue Listener Error] {e}")
-                    await asyncio.sleep(1)
-
-        listener_task = asyncio.create_task(queue_listener())
-        logger.info(f"[{current_node}] Live Session Bound to {model_id} (REST Streaming).")
+                    time.sleep(1)
+                    
+        self._shutdown_flag = False
+        t = threading.Thread(target=listener_thread, daemon=True)
+        t.start()
         
-        live_directive = f"\n\n[LIVE SESSION OVERRIDE]: You are in a multi-agent chat. Your specific identity and role is '{current_node}'. You must respond naturally as this entity. Do NOT mistake other agents' messages (e.g. [OtherAgent]: ...) as the user. Treat them as other AI agents working with you. The user is the one assigning tasks, while you collaborate with the swarm. IMPORTANT: Do NOT prefix your own response with your name (e.g. do not output '[{current_node}]:'). The system will automatically add your name prefix to the chat logs. CRITICAL: In this live conversational mode, tool execution is DISABLED. You must rely purely on your conversational knowledge. Do NOT attempt to output tool calls, JSON blocks, or state that you are executing a tool.\n\nFORMAT DIRECTIVE:\nBefore you respond, you MUST output a `<thought>` block containing your internal monologue, evaluating your persona, the topic, and what you should say. After your thought block, you MUST output a `<chat>` block containing the actual message you will send to the group. Example:\n<thought>\nI am the OSINT Analyst. I should provide objective data here.\n</thought>\n<chat>\nHere is the data on that topic...\n</chat>\nDo NOT output any text outside of these blocks."
+        logger.info(f"[{current_node}] Studio Session Bound to {model_id} (Diamond Loop).")
         
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt + live_directive,
-            temperature=1.0
-        )
+        # Load local .dict profile if it exists (Agent Studio overrides)
+        custom_dict_path = os.environ.get("MACCRE_CUSTOM_DICT", "")
+        if custom_dict_path and os.path.exists(custom_dict_path):
+            try:
+                with open(custom_dict_path, "r", encoding="utf-8") as f:
+                    chat_profile = json.load(f)
+                    agent_config = chat_profile.get(current_node, {})
+                    if agent_config:
+                        system_prompt = agent_config.get("system_prompt", system_prompt)
+                        model_id = agent_config.get("model", model_id)
+                        temperature = float(agent_config.get("temperature", temperature))
+                        tools_str = agent_config.get("tools_allowed", tools_str)
+                        if ai_options is not None:
+                            ai_options.update(agent_config.get("ai_studio_options", {}))
+                        else:
+                            ai_options = agent_config.get("ai_studio_options", {})
+            except Exception as e:
+                logger.error(f"Failed to load chat .dict: {e}")
+                
+        # For the interactive loop, the payload keeps growing
+        session_history = f"[SYSTEM_PAYLOAD]\n{current_payload}\n[/SYSTEM_PAYLOAD]\n\n"
         
         is_first_turn = True
+        total_session_cost = 0.0
+        agent_turn = False
         
         try:
             while True:
-                interrupt_event.clear()
-                
                 if override_text:
                     for text in override_text:
-                        history.append(types.Content(role="user", parts=[types.Part.from_text(text=text)]))
+                        session_history += f"\n{text}\n"
                     override_text.clear()
-                
-                if is_first_turn and current_payload == "[SYSTEM] WAIT_FOR_USER":
+                    agent_turn = True
+                    
+                if is_first_turn and "WAIT_FOR_USER" in current_payload:
                     logger.info(f"\n[{current_node}] Initialized in WAIT mode. Awaiting stimulus...")
                     is_first_turn = False
-                else:
-                    is_first_turn = False
-                    try:
-                        chat_payload = {
-                            "job_id": job_id,
-                            "agent_name": current_node,
-                            "text": "",
-                            "is_typing": True
-                        }
-                        message_bus.publish("MACCRE.CHAT", chat_payload)
-                        
-                        stream = await client.aio.models.generate_content_stream(
-                            model=model_id,
-                            contents=history,
-                            config=config
+                    time.sleep(0.5)
+                    continue
+                    
+                if is_first_turn:
+                    agent_turn = True
+                    
+                is_first_turn = False
+                
+                if agent_turn:
+                    
+                    # RUN DIAMOND LOOP!
+                    logger.info(f"[{current_node}] Executing Diamond Loop cycle...")
+                    
+                    final_response = ""
+                    current_loop_cost = 0.0
+                    
+                    max_tool_turns = 10
+                    loop_payload = session_history
+                    
+                    for turn_idx in range(max_tool_turns + 1):
+                        prompt = (
+                            f"{system_prompt}\n\n"
+                            f"CURRENT SESSION HISTORY:\n{loop_payload}\n\n"
                         )
                         
-                        turn_text = []
-                        async for chunk in stream:
-                            if interrupt_event.is_set():
-                                logger.info(f"\n[{current_node}] Stream interrupted by incoming signal.")
+                        try:
+                            # Run synchronous generation
+                            # Since this is an async worker originally, we wrap synchronous router 
+                            # Or we just call the router since router IS sync!
+                            raw_response, loop_cost = self.router.generate(
+                                model_name=model_id,
+                                payload=loop_payload,
+                                system_prompt=system_prompt,
+                                tools_str=tools_str,
+                                temperature=temperature,
+                                expect_multiple_reads=True
+                            )
+                            current_loop_cost += loop_cost
+                            
+                            # Parse tools
+                            did_fire, new_payload = self.tool_executor.run(
+                                response_text=raw_response,
+                                current_prompt=loop_payload,
+                                project_id=self.project_name,
+                                session_id=job_id,
+                                agent_id=current_node
+                            )
+                            if did_fire:
+                                loop_payload = new_payload
+                                # Keep iterating
+                            else:
+                                final_response = raw_response
                                 break
                                 
-                            if chunk.text:
-                                turn_text.append(chunk.text)
-                                gathered_text.append(chunk.text)
-                                print(chunk.text, end="", flush=True)  # noqa: T201 — live streaming output
-                                
-                        if turn_text:
-                            full_text = "".join(turn_text)
-                            import re
-                            import time
-                            import json
-                            from maccre_core.utils.path_resolver import get_datacenter_path
+                        except Exception as e:
+                            logger.error(f"[Diamond Loop Error] {e}")
+                            final_response = f"Error during loop execution: {e}"
+                            break
                             
-                            thought_match = re.search(r"<thought>(.*?)</thought>", full_text, re.DOTALL)
-                            chat_match = re.search(r"<chat>(.*?)</chat>", full_text, re.DOTALL)
-                            
-                            thought_text = thought_match.group(1).strip() if thought_match else ""
-                            chat_text = chat_match.group(1).strip() if chat_match else full_text
-                            
-                            if thought_text:
-                                thought_path = get_datacenter_path("03_Agent_Ledgers", f"{current_node}_thoughts.json")
-                                thought_entry = {"time": time.time(), "job_id": job_id, "agent": current_node, "thought": thought_text}
-                                with open(thought_path, "a", encoding="utf-8") as f:
-                                    f.write(json.dumps(thought_entry) + "\n")
-
-                            chat_payload = {
-                                "job_id": job_id,
-                                "agent_name": current_node,
-                                "text": chat_text,
-                                "is_typing": False
-                            }
-                            message_bus.publish("MACCRE.CHAT", chat_payload)
-
-                            # ── Triple DB: Vectorize chat response into session-scoped agent_ledgers.db ──
-                            if chat_text:
-                                try:
-                                    from maccre_core.tools.rag_tools import vectorize_ledger  # noqa: PLC0415
-                                    vectorize_ledger(
-                                        text=chat_text,
-                                        project_name=self.project_name,
-                                        session_id=job_id,
-                                        agent_id=current_node,
-                                    )
-                                except Exception as _vec_err:  # noqa: BLE001
-                                    logger.warning(f"[{current_node}] [VECTOR_WARN] ledger vectorization failed (non-fatal): {_vec_err}")
-
-                            history.append(types.Content(role="model", parts=[types.Part.from_text(text=full_text)]))
-                            
-                    except Exception as e:
-                        logger.error(f"\n[{current_node}] Generation Error: {e}")
-                    finally:
-                        chat_payload = {
-                            "job_id": job_id,
-                            "agent_name": current_node,
-                            "text": "",
-                            "is_typing": False
-                        }
-                        message_bus.publish("MACCRE.CHAT", chat_payload)
-
+                    # Finished Loop! Append to history
+                    total_session_cost += current_loop_cost
+                    session_history += f"\n[{current_node}]: {final_response}\n"
+                    
+                    # Log thoughts/tools to agent.log instead of ledger (handled by dual-logger)
+                    
+                    # Publish final message to TUI
+                    chat_payload = {
+                        "job_id": job_id,
+                        "agent_name": current_node,
+                        "content": final_response,
+                        "cost": current_loop_cost
+                    }
+                    message_bus.publish("MACCRE.CHAT", chat_payload)
+                    agent_turn = False
+                    
+                time.sleep(0.5)
                 
-                logger.info(f"\n[{current_node}] Turn finished. Awaiting next stimulus...")
-                await interrupt_event.wait()
-
+        except KeyboardInterrupt:
+            self._shutdown_flag = True
         finally:
-            listener_task.cancel()
+            self._shutdown_flag = True
             
-        return "".join(gathered_text)
+        return session_history
 
-    # ── Main Loop ─────────────────────────────────────────────────────────────
+
+    def _apply_triple_index_search(self, current_payload: str, ai_opts: dict, model_id: str, agent_id: str, tools_str: str, system_prompt: str = "") -> tuple[str, float, str]:
+        total_cost = 0.0
+        try:
+            if ai_opts:
+                is_exc = ai_opts.get("exclusionary_search", False)
+                is_funnel = ai_opts.get("funnel_search", False)
+                use_brave = ai_opts.get("grounding_brave_search", False)
+                use_local = ai_opts.get("grounding_local_memory", False)
+                
+                if is_exc or is_funnel or use_brave or use_local:
+                    from maccre_core.tools.search_tools import run_search
+                    from maccre_core.tools.hybrid_search import _query_local_sovereign
+                    from maccre_core.orchestration.universal_vault import get_provider_credential
+                    import json
+                    import os
+                    
+                    if "SEARCH_API_KEY" not in os.environ:
+                        brave_key = get_provider_credential("BRAVE_SEARCH_API_KEY")
+                        if brave_key:
+                            os.environ["SEARCH_API_KEY"] = brave_key
+                            
+                    if is_exc:
+                        # EXCLUSIONARY SEARCH PIPELINE (Adversarial)
+                        logger.info(f"[{agent_id}] Executing Exclusionary Search pipeline...")
+                        import datetime
+                        today = datetime.datetime.now().strftime("%Y-%m-%d")
+                        prompt = (
+                            "Research the following topic using Google Search and extract the 3 most prominent "
+                            "domains and 3 most common keywords representing the mainstream consensus. "
+                            f"The current date is {today}. "
+                            "Return ONLY valid JSON in this exact format: {\"domains\": [\"domain1.com\"], \"keywords\": [\"word1\"]}"
+                        )
+                        out, cst = self.router.generate(
+                            model_name=model_id,
+                            payload=current_payload,
+                            system_prompt=prompt,
+                            tools_str="google_search",
+                            temperature=0.1
+                        )
+                        total_cost += cst
+                        
+                        try:
+                            start = out.find('{')
+                            end = out.rfind('}') + 1
+                            if start != -1 and end != 0:
+                                parsed = json.loads(out[start:end])
+                                domains = parsed.get("domains", [])
+                                keywords = parsed.get("keywords", [])
+                                
+                                # Extract a base query
+                                q_out, q_cst = self.router.generate(
+                                    model_name=model_id, 
+                                    payload=current_payload, 
+                                    system_prompt=f"{system_prompt}\n\n[TASK] Extract a concise 1-sentence search query for this topic. Return ONLY the query string, no quotes.", 
+                                    tools_str="none", 
+                                    temperature=0.1
+                                )
+                                total_cost += q_cst
+                                base_query = q_out.strip().replace('"', '')
+                                
+                                adv_query = base_query
+                                for d in domains:
+                                    adv_query += f" -site:{d}"
+                                for k in keywords:
+                                    adv_query += f" -{k}"
+                                
+                                logger.info(f"[{agent_id}] Exclusionary query generated: {adv_query}")
+                                brave_res = run_search(adv_query, count=10)
+                                if brave_res.get("results"):
+                                    current_payload = f"[EXCLUSIONARY ORTHOGONAL CONTEXT]\n{json.dumps(brave_res, indent=2)}\n\n" + current_payload
+                                    # DISABLE NATIVE GOOGLE GROUNDING
+                                    if "google_search" in tools_str:
+                                        tools_str = tools_str.replace("google_search", "").replace("||", "|").strip("|")
+                                        if not tools_str:
+                                            tools_str = "none"
+                                        logger.info(f"[{agent_id}] Disabled Native Google Grounding to prevent re-contamination.")
+                                else:
+                                    logger.warning(f"[{agent_id}] Exclusionary search yielded 0 results. Falling back to Additive.")
+                        except Exception as e:
+                            logger.error(f"[{agent_id}] Exclusionary Search parsing failed: {e}")
+                    
+                    elif is_funnel:
+                        # FUNNEL SEARCH PIPELINE (Iterative Batching)
+                        logger.info(f"[{agent_id}] Executing Funnel Search pipeline...")
+                        import datetime
+                        today = datetime.datetime.now().strftime("%Y-%m-%d")
+                        prompt = (
+                            f"{system_prompt}\n\n[TASK] Research this topic and extract 5 highly specific, niche entities (e.g., obscure hardware, specific people, subsidiaries) related to it. "
+                            f"The current date is {today}. "
+                            "Return ONLY valid JSON in this format: {\"entities\": [\"Entity 1\"]}"
+                        )
+                        out, cst = self.router.generate(
+                            model_name=model_id,
+                            payload=current_payload,
+                            system_prompt=prompt,
+                            tools_str="google_search",
+                            temperature=0.1
+                        )
+                        total_cost += cst
+                        try:
+                            start = out.find('{')
+                            end = out.rfind('}') + 1
+                            if start != -1 and end != 0:
+                                parsed = json.loads(out[start:end])
+                                entities = parsed.get("entities", [])
+                                funnel_results = []
+                                for ent in entities:
+                                    res = run_search(f'"{ent}"', count=3)
+                                    funnel_results.append({ent: res.get("results", [])})
+                                
+                                current_payload = f"[FUNNEL BATCH CONTEXT]\n{json.dumps(funnel_results, indent=2)}\n\n" + current_payload
+                        except Exception as e:
+                            logger.error(f"[{agent_id}] Funnel Search parsing failed: {e}")
+                            
+                    else:
+                        # ADDITIVE MERGING (Parallel pre-injection)
+                        if use_brave or use_local:
+                            logger.info(f"[{agent_id}] Executing Additive Pre-injection...")
+                            import datetime
+                            today = datetime.datetime.now().strftime("%Y-%m-%d")
+                            q_out, q_cst = self.router.generate(
+                                model_name=model_id, 
+                                payload=current_payload, 
+                                system_prompt=f"{system_prompt}\n\n[TASK] Extract a concise 1-sentence search query to fulfill the user's request based on your persona. The current date is {today}. Return ONLY the query string.", 
+                                tools_str="none", 
+                                temperature=0.1
+                            )
+                            total_cost += q_cst
+                            base_query = q_out.strip().replace('"', '')
+                            
+                            if use_brave:
+                                try:
+                                    brave_res = run_search(base_query, count=5)
+                                    current_payload = f"[BRAVE SEARCH CONTEXT]\n{json.dumps(brave_res, indent=2)}\n\n" + current_payload
+                                except Exception as e:
+                                    logger.error(f"[{agent_id}] Brave injection failed: {e}")
+                            if use_local:
+                                try:
+                                    loc_res = _query_local_sovereign(base_query)
+                                    current_payload = f"[LOCAL MEMORY CONTEXT]\n{loc_res}\n\n" + current_payload
+                                except Exception as e:
+                                    logger.error(f"[{agent_id}] Local Memory injection failed: {e}")
+        except Exception as e:
+            logger.error(f"[{agent_id}] Triple Index Search pre-injection fault: {e}")
+            
+        return current_payload, total_cost, tools_str
 
     def execute_cycle(
         self, 
@@ -362,10 +500,17 @@ class UniversalSwarmWorker:
         source_payload_path: str = str(task.get("source_payload_path") or payload_path)
 
         # ── Project-Scoped Job Directory ─────────────────────────────────────
-        job_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
-        job_dir.mkdir(parents=True, exist_ok=True)
-        ledger_path = str(job_dir / f"{current_node}_{row_id}.md")
-        agent_log_path = str(job_dir / f"{current_node}_{row_id}_agent.log")
+        custom_ledger = os.environ.get("MACCRE_CUSTOM_LEDGER", "")
+        if custom_ledger:
+            ledger_path = custom_ledger
+            agent_log_path = custom_ledger.replace(".md", "_agent.log")
+            job_dir = Path(ledger_path).parent
+            job_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            job_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+            job_dir.mkdir(parents=True, exist_ok=True)
+            ledger_path = str(job_dir / f"{current_node}_{row_id}.md")
+            agent_log_path = str(job_dir / f"{current_node}_{row_id}_agent.log")
 
         # ── Dual-Stream File Logger ───────────────────────────────────────────
         import sys
@@ -449,6 +594,7 @@ class UniversalSwarmWorker:
                             _ag_tools = str(_ag_row.get("tools_allowed") or _ag_row.get("TOOLS_ALLOWED", ""))
                             if _ag_tools:
                                 node_config["tools_allowed"] = _ag_tools
+                            node_config["temperature"] = float(_ag_row.get("temperature", 1.0))
                             break
                 except Exception:
                     pass
@@ -631,13 +777,17 @@ All file paths must strictly resolve to these five silos:
             _dialogue_rounds_peek: int = int(node_config.get("dialogue_rounds", 0) or 0)
             _is_dialogue_node: bool = bool(_dialogue_partner_peek and _dialogue_rounds_peek > 0)
 
+            ai_options = node_config.get("ai_studio_options", {})
+            _is_live_node = str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes") or os.environ.get("MACCRE_LIVE_OVERRIDE") == "1"
             if not _is_dialogue_node:
                 try:
                     from maccre_core.agent_library import get_agent_store  # noqa: PLC0415
                     store = get_agent_store("GLOBAL")
-                    _agent_profile = store.get(agent_name)
+                    _agent_profile = next((r for r in store.load_all() if r.get("agent_name") == agent_name), {})
                     if _agent_profile:
-                        ai_options = _agent_profile.get("ai_studio_options", {})
+                        _ai_opts = _agent_profile.get("ai_studio_options", {})
+                        if _ai_opts:
+                            ai_options = _ai_opts
                         if ai_options.get("grounding_google_search") and "google_search" not in tools_str:
                             tools_str = f"{tools_str}|google_search" if tools_str.lower() != "none" else "google_search"
                             logger.info(f"[{AGENT_ID}] Search grounding enabled for '{agent_name}' via agent_library.")
@@ -658,6 +808,15 @@ All file paths must strictly resolve to these five silos:
             #   3. Standard agentic tool loop (default)
             current_payload: str = payload_content
             total_cost: float = 0.0
+
+            # ── TRIPLE INDEX SEARCH PRE-INJECTION PIPELINES ───────────────────
+            if not _is_dialogue_node and not _is_live_node:
+                if current_payload.strip() != "[SYSTEM] WAIT_FOR_USER":
+                    _ai_opts = locals().get("ai_options", {})
+                    current_payload, _ti_cost, tools_str = self._apply_triple_index_search(current_payload, _ai_opts, model_id, AGENT_ID, tools_str, system_prompt=system_prompt)
+                    total_cost += _ti_cost
+            # ───────────────────────────────────────────────────────────────────────────
+
             final_output_text: str = ""
             tool_audit_lines: list[str] = []
 
@@ -865,11 +1024,11 @@ All file paths must strictly resolve to these five silos:
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
 
-            elif str(node_config.get("live_profile", "")).lower() in ("true", "1", "yes") or os.environ.get("MACCRE_LIVE_OVERRIDE") == "1":
+            elif _is_live_node:
 
                 import asyncio
                 logger.info(f"[{AGENT_ID}] Executing via STREAM 4 LIVE SESSION.")
-                final_output_text = asyncio.run(self._run_live_session(model_id, system_prompt, current_payload, job_id, current_node))
+                final_output_text = self._run_interactive_diamond_loop(model_id, system_prompt, current_payload, job_id, current_node, locals().get("ai_options", {}), float(node_config.get("temperature", 1.0)), tools_str)
                 task_cost = 0.0
                 total_cost = 0.0
             else:

@@ -164,7 +164,7 @@ def scout_archive_epochs(ingestion_project_name: str) -> str:
 
 def execute_epoch_ingestion(ingestion_project_name: str, categories: list[str]) -> str:
     """
-    Executes the Triune ingestion pipeline, routing into epoch_[cat].db and thought_pins_[cat].db.
+    Executes the Triune ingestion pipeline, routing into epoch_[cat].db and memory_pins_[cat].db.
     """
     if not categories:
         return "[INGESTION_FAULT] You must provide a valid list of epoch categories."
@@ -220,11 +220,11 @@ def execute_epoch_ingestion(ingestion_project_name: str, categories: list[str]) 
                 metadata=safe_meta,
             ))
             
-            # 3. Embed and Store Triplets in thought_pins_{cat}.db
+            # 3. Embed and Store Triplets in memory_pins_{cat}.db
             if triplets:
                 pin_text = json.dumps(triplets)
                 pin_vector = get_gemini_embedding(pin_text, task_type="RETRIEVAL_DOCUMENT")
-                pin_db_name = f"thought_pins_{cat.replace('epoch_', '')}.db"
+                pin_db_name = f"memory_pins_{cat.replace('epoch_', '')}.db"
                 pin_store = get_knowledge_store(f"GLOBAL/{ingestion_project_name}", db_name=pin_db_name)
                 pin_store.upsert("swarm_memory", PinRecord(
                     doc_id=f"pin_{doc_id}",

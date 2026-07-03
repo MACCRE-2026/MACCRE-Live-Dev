@@ -1,0 +1,1 @@
+Lets talk about the latest SCOTUS opinions and how the public views the opinions.

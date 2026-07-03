@@ -262,25 +262,18 @@ def check_status() -> None:
 
 
 def canonize_session(project: str, session: str) -> None:
-    """Executes the L1 → L2 memory promotion."""
+    """Executes the complete session canonization."""
     logger.info("[CANONIZE] Promoting Session '%s' → Project '%s'...", session, project)
     print(f"[CANONIZE] Promoting Session '{session}' → Project '{project}'...")
     try:
-        csv_path = export_and_purge_thoughts(
-            session_id=session, project_id=project, purge=True
-        )
-        logger.info("[CANONIZE] L1 thoughts exported to: %s", csv_path)
-        print(f" ✓ L1 thoughts exported to: {csv_path}")
-    except RuntimeError as exc:
-        logger.warning("[CANONIZE] Thoughts export skipped: %s", exc)
-        print(f" ⚠  Thoughts export skipped: {exc}")
+        from maccre_core.tools.rag_tools import canonize_session as rt_canonize_session  # noqa: PLC0415
+        merge_res = rt_canonize_session(session, project)
+        logger.info("[CANONIZE] Complete. Result:\n%s", merge_res)
+        print(f"{merge_res}")
+        print("[CANONIZE] Complete.")
     except Exception as exc:  # noqa: BLE001
-        logger.error("[CANONIZE] Thoughts purge failed: %s", exc)
-        print(f" ⚠  Thoughts purge failed: {exc}")
-    merge_res = merge_session_to_project(session_name=session, project_name=project)
-    logger.info("[CANONIZE] Complete. Result: %s", merge_res)
-    print(f" ✓ {merge_res}")
-    print("[CANONIZE] Complete.")
+        logger.error("[CANONIZE] Canonization failed: %s", exc)
+        print(f" ⚠  Canonization failed: {exc}")
 
 
 def canonize_project(project: str) -> None:

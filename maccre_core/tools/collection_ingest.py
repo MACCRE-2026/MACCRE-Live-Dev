@@ -155,7 +155,7 @@ def scout_archive_themes(ingestion_project_name: str) -> str:
 def execute_archive_ingestion(ingestion_project_name: str, categories: list[str]) -> str:
     """
     Executes the heavy Triune ingestion pipeline. Takes a list of categories decided by the Agent.
-    Categorizes each file, extracts triplets, and routes them into the corresponding concept_[cat].db and thought_pins_[cat].db.
+    Categorizes each file, extracts triplets, and routes them into the corresponding concept_[cat].db and memory_pins_[cat].db.
     """
     if not categories:
         return "[INGESTION_FAULT] You must provide a valid list of categories."
@@ -209,11 +209,11 @@ def execute_archive_ingestion(ingestion_project_name: str, categories: list[str]
                 metadata=safe_meta,
             ))
             
-            # 3. Embed and Store Triplets in thought_pins_{cat}.db
+            # 3. Embed and Store Triplets in memory_pins_{cat}.db
             if triplets:
                 pin_text = json.dumps(triplets)
                 pin_vector = get_gemini_embedding(pin_text, task_type="RETRIEVAL_DOCUMENT")
-                pin_store = get_knowledge_store(f"GLOBAL/{ingestion_project_name}", db_name=f"thought_pins_{cat}.db")
+                pin_store = get_knowledge_store(f"GLOBAL/{ingestion_project_name}", db_name=f"memory_pins_{cat}.db")
                 pin_store.upsert("swarm_memory", PinRecord(
                     doc_id=f"pin_{doc_id}",
                     text=pin_text,

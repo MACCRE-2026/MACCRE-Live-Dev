@@ -39,7 +39,6 @@ from textual.widgets import (
 )
 
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
-from maccre_tui.widgets.project_canon_modal import ProjectCanonModal
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_project_names, load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -519,174 +518,474 @@ class AgentChatInputModalScreen(ModalScreen[str]):
         self.dismiss(text)
 
 
-class AgentChatModalScreen(ModalScreen):
+class ChatDashboardPane(Vertical):
+    def compose(self) -> ComposeResult:
+        yield Label("Chat Dashboard", classes="pane-title")
+        yield Label("Select a Previous Chat")
+        yield SelectionList(id="studio-history-list")
+        yield Button("Load Chat", variant="primary", id="btn-load-studio-chat")
+
+class ChatBuilderPane(Vertical):
+    def compose(self) -> ComposeResult:
+        yield Label("Chat Builder", classes="pane-title")
+        yield Label("Select Agents for Chat")
+        yield SelectionList(id="studio-select-agents")
+        yield Label("Configure Agent")
+        yield SelectionList(id="studio-configure-agent")
+        
+        # Copied from AgentBuilderPanel logic
+        yield Label("Agent Profile Overrides", classes="pane-title")
+        yield Label("Model")
+        yield Select([], id="studio-model")
+        yield Label("System Instructions")
+        yield Button("Edit System Instructions (Saved)", variant="primary", id="btn-studio-edit-instructions")
+        
+        yield Label("Temperature")
+        yield Input(value="1.0", id="studio-temp")
+        
+        yield Label("Thinking level", classes="form-group-title")
+        yield Select([("None", "none"), ("Low", "low"), ("High", "high")], value="high", id="studio-thinking")
+        
+        yield Label("Tools", classes="form-group-title")
+        with Horizontal(classes="form-row"):
+            yield Label("Structured outputs")
+            yield Switch(value=False, id="studio-structured")
+        with Horizontal(classes="form-row"):
+            yield Label("Code execution")
+            yield Switch(value=False, id="studio-code")
+        with Horizontal(classes="form-row"):
+            yield Label("Function calling")
+            yield Switch(value=False, id="studio-function")
+        with Vertical(id="studio-triple-index-box", classes="form-group-box"):
+            yield Label("Triple Index Search", classes="form-group-title")
+            with Horizontal(classes="form-row"):
+                yield Label("Grounding with Google Search")
+                yield Switch(value=True, id="studio-gsearch")
+            with Horizontal(classes="form-row"):
+                yield Label("Grounding with Brave Search")
+                yield Switch(value=False, id="studio-bsearch")
+            with Horizontal(classes="form-row"):
+                yield Label("Grounding with Local Memory")
+                yield Switch(value=False, id="studio-msearch")
+            with Horizontal(classes="form-row"):
+                yield Label("Exclusionary Search")
+                yield Switch(value=False, id="studio-exclusionary", disabled=True)
+            with Horizontal(classes="form-row"):
+                yield Label("Funnel Search")
+                yield Switch(value=False, id="studio-funnel", disabled=True)
+            yield Label("Information")
+            yield RichLog(id="studio-search-info-panel", wrap=True, highlight=True, markup=True)
+            
+        with Horizontal(classes="form-row"):
+            yield Label("Grounding with Google Maps")
+            yield Switch(value=False, id="studio-gmaps")
+        with Horizontal(classes="form-row"):
+            yield Label("URL context")
+            yield Switch(value=False, id="studio-url")
+
+        yield Label("Advanced settings", classes="form-group-title")
+        yield Label("Media resolution")
+        yield Select([("Default", "default"), ("Low", "low"), ("High", "high")], value="default", id="studio-media")
+        
+        with Horizontal(classes="form-row"):
+            yield Label("Add stop sequence")
+            yield Input(placeholder="Add stop...", id="studio-stop")
+        with Horizontal(classes="form-row"):
+            yield Label("Output length")
+            yield Input(value="65536", id="studio-output-len")
+        with Horizontal(classes="form-row"):
+            yield Label("Top P")
+            yield Input(value="0.95", id="studio-top-p")
+        
+        yield Button("Start Chat", variant="success", id="btn-start-studio-chat", classes="top-edit-btn")
+
+class ChatArenaPane(Vertical):
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="chat-arena-header"):
+            yield Input(placeholder="Name Chat (Optional)", id="chat-rename-input")
+            yield Label("Tokens: 0 | Cost: $0.000", id="chat-finops-readout")
+            yield Button("Close Chat", variant="error", id="btn-close-studio-chat")
+            
+        yield RichLog(id="chat-arena-log", wrap=True, highlight=True, markup=True)
+        
+        with Vertical(id="chat-arena-footer"):
+            yield Label("", id="chat-typing-indicator", classes="dim")
+            yield TextArea(id="chat-arena-input")
+            with Horizontal(classes="chat-arena-controls"):
+                yield Button("Expand", variant="primary", id="btn-expand-input")
+                yield Button("Paste from Clipboard", variant="default", id="btn-paste-clipboard")
+                yield Button("Send (Ctrl+Enter)", variant="success", id="btn-send-studio")
+            yield Label("Select Notebook (KnowledgeStore Grounding)")
+            yield SelectionList(id="chat-notebook-list")
+
+class AgentStudioChatScreen(ModalScreen):
     BINDINGS = [("ctrl+j", "submit_chat", "Send Chat (Ctrl+Enter)")]
     
     def compose(self) -> ComposeResult:
-        with Container(classes="dialog agent-chat-dialog"):
-            yield Label("Agent Chat Session")
-            
-            with Horizontal(classes="chat-config-row"):
-                with Vertical(classes="agent-selector-pane"):
-                    yield Label("Select Agents")
-                    yield SelectionList(id="agent-selection-list")
-                with Vertical(classes="mode-selector-pane"):
-                    yield Label("Session Mode")
-                    with RadioSet(id="chat-mode-radio"):
-                        yield RadioButton("Sequential", value=True, id="mode-sequential")
-                        yield RadioButton("Live with Physics", id="mode-physics")
-                    with Horizontal(classes="chat-buttons"):
-                        yield Button("Start Session", variant="success", id="btn-start-chat")
-                        yield Button("Stop Session", variant="error", id="btn-stop-chat", disabled=True)
-                        yield Button("Close", variant="default", id="btn-close-chat")
-
-            yield RichLog(id="agent-chat-log", wrap=True, highlight=True, markup=True)
-            
-            with Horizontal(id="agent-chat-input-container"):
-                with Horizontal(classes="chat-input-row"):
-                    yield TextArea(id="agent-chat-input")
-                    yield Button("Enter", id="btn-agent-chat-send", variant="primary")
-            yield Label(id="typing-indicator", classes="dim")
-
+        with Horizontal(id="studio-chat-layout"):
+            yield ChatDashboardPane()
+            yield ChatArenaPane()
+            yield ChatBuilderPane()
+        
     def on_mount(self) -> None:
+        self.active_chat_name = "New_Session"
+        self.local_profiles = {}
         self.session_task = None
-        self.session_task = None
-        self.session_manager = None
-        self.active_workers = {}
         self.roster = []
+        
+        # Initialize dictionary immediately
+        self._save_dict_profile()
+        
         try:
-            from maccre_core.workbook_data import load_agent_names_from_library
+            from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
+            
+            # Populate Models
+            sel_model = self.query_one("#studio-model", Select)
+            models = load_model_ids()
+            sel_model.set_options([(m, m) for m in models])
+            
             roster = load_agent_names_from_library(self.app.active_project)
             if self.app.active_project != "GLOBAL":
                 roster.extend(load_agent_names_from_library("GLOBAL"))
             self.roster = list(set(roster))
-            self._build_agent_list()
+            
+            sel_agents = self.query_one("#studio-select-agents", SelectionList)
+            for agent in sorted(self.roster):
+                sel_agents.add_option((agent, agent))
+                
+            self._refresh_history_list()
+        except Exception:
+            pass
+            
+        self._poll_timer = self.set_interval(0.5, self._poll_chat_bus)
+        
+    def _poll_chat_bus(self):
+        if not getattr(self, "active_job_id", None) or not getattr(self, "message_bus", None):
+            return
+            
+        try:
+            messages = self.message_bus.poll(["MACCRE.CHAT"])
+            if messages:
+                for topic, payload in messages:
+                    if payload.get("job_id") == self.active_job_id:
+                        agent_name = payload.get("agent_name", "Agent")
+                        content = payload.get("content", "")
+                        
+                        log = self.query_one("#chat-arena-log", RichLog)
+                        log.write(f"\n[bold blue]{agent_name}:[/bold blue] {content}")
+                        
+                        indicator = self.query_one("#chat-typing-indicator", Label)
+                        indicator.update("")
         except Exception:
             pass
 
-    def _build_agent_list(self, tensions: dict[str, float] = None) -> None:
-        self._is_rebuilding = True
-        if tensions is None:
-            tensions = {}
-        sel_list = self.query_one("#agent-selection-list", SelectionList)
-        selected = list(sel_list.selected)
-        
-        all_agents = sorted(self.roster)
-        ordered_agents = [a for a in all_agents if a in selected] + [a for a in all_agents if a not in selected]
-        
-        highlighted = getattr(sel_list, "highlighted", None)
-        sel_list.clear_options()
-        
-        from rich.text import Text
-        for agent in ordered_agents:
-            tension = tensions.get(agent, 0.0)
-            bar_len = 10
-            filled = int(tension * bar_len)
-            empty = bar_len - filled
-            
-            if tension < 0.2:
-                color = "blue"
-            elif tension < 0.4:
-                color = "cyan"
-            elif tension < 0.6:
-                color = "yellow"
-            elif tension < 0.8:
-                color = "orange"
-            else:
-                color = "bright_red"
+    def _refresh_history_list(self) -> None:
+        try:
+            import os
+            from maccre_core.utils.path_resolver import get_datacenter_path
+            ledgers_dir = get_datacenter_path("03_Agent_Ledgers", "live_sessions")
+            if not ledgers_dir.exists():
+                return
                 
-            bar_text = "█" * filled + "░" * empty
+            sel_hist = self.query_one("#studio-history-list", SelectionList)
+            sel_hist.clear_options()
             
-            if agent in selected and self.session_task:
-                label = Text(f"{agent} ")
-                label.append(f"[{bar_text}]", style=color)
-            else:
-                label = Text(agent)
+            for file in ledgers_dir.glob("*.md"):
+                sel_hist.add_option((file.stem, str(file)))
+        except Exception:
+            pass
+            
+    @on(SelectionList.SelectedChanged, "#studio-select-agents")
+    def on_agents_selected(self, event: SelectionList.SelectedChanged) -> None:
+        sel_config = self.query_one("#studio-configure-agent", SelectionList)
+        sel_config.clear_options()
+        
+        from maccre_core.agent_library import get_agent_store
+        
+        for agent in event.selection_list.selected:
+            sel_config.add_option((agent, agent))
+            if agent not in self.local_profiles:
+                # Load from DB initially
+                store = get_agent_store(self.app.active_project)
+                all_agents = store.load_all()
+                profile = next((a for a in all_agents if a.get("agent_name") == agent or a.get("AGENT_NAME") == agent), None)
+                if not profile:
+                    store = get_agent_store("GLOBAL")
+                    all_agents = store.load_all()
+                    profile = next((a for a in all_agents if a.get("agent_name") == agent or a.get("AGENT_NAME") == agent), None)
+                self.local_profiles[agent] = profile or {}
                 
-            sel_list.add_option((label, agent, agent in selected))
+        self._save_dict_profile()
+                
+    @on(SelectionList.SelectedChanged, "#studio-configure-agent")
+    def on_configure_agent_selected(self, event: SelectionList.SelectedChanged) -> None:
+        if not event.selection_list.selected:
+            return
             
-        if highlighted is not None and highlighted < len(ordered_agents):
-            try:
-                sel_list.highlighted = highlighted
-            except Exception:
-                pass
-        self._is_rebuilding = False
+        agent = event.selection_list.selected[-1] # Enforce single select
+        sel_config = self.query_one("#studio-configure-agent", SelectionList)
+        
+        # Stop event loop recursion
+        if len(sel_config.selected) != 1 or sel_config.selected[0] != agent:
+            with sel_config.prevent(SelectionList.SelectedChanged):
+                sel_config.deselect_all()
+                sel_config.select(agent)
+        
+        profile = self.local_profiles.get(agent, {})
+        if profile:
+            # Prevent handlers from triggering save while loading
+            with self.prevent(Select.Changed, Input.Changed, Switch.Changed):
+                self.query_one("#studio-temp", Input).value = str(profile.get("temperature", 1.0))
+                model_val = profile.get("model")
+                if model_val:
+                    try:
+                        self.query_one("#studio-model", Select).value = model_val
+                    except Exception:
+                        pass
+                
+                ai_options = profile.get("ai_studio_options", {})
+                
+                thinking_val = ai_options.get("thinking_level", "high")
+                try:
+                    self.query_one("#studio-thinking", Select).value = thinking_val
+                except Exception:
+                    pass
+                    
+                media_val = ai_options.get("media_resolution", "default")
+                try:
+                    self.query_one("#studio-media", Select).value = media_val
+                except Exception:
+                    pass
+                    
+                self.query_one("#studio-structured", Switch).value = ai_options.get("structured_outputs", False)
+                self.query_one("#studio-code", Switch).value = ai_options.get("code_execution", False)
+                self.query_one("#studio-function", Switch).value = ai_options.get("function_calling", False)
+                
+                self.query_one("#studio-gsearch", Switch).value = ai_options.get("triple_google", True)
+                self.query_one("#studio-bsearch", Switch).value = ai_options.get("triple_brave", False)
+                self.query_one("#studio-msearch", Switch).value = ai_options.get("triple_local", False)
+                self.query_one("#studio-exclusionary", Switch).value = ai_options.get("exclusionary", False)
+                self.query_one("#studio-funnel", Switch).value = ai_options.get("funnel", False)
+                self.query_one("#studio-gmaps", Switch).value = ai_options.get("google_maps", False)
+                self.query_one("#studio-url", Switch).value = ai_options.get("url_context", False)
+                
+                self.query_one("#studio-stop", Input).value = ai_options.get("stop_sequence", "")
+                self.query_one("#studio-output-len", Input).value = str(ai_options.get("output_length", "65536"))
+                self.query_one("#studio-top-p", Input).value = str(ai_options.get("top_p", "0.95"))
+            
+    @on(Select.Changed, "#studio-model")
+    def on_model_changed(self, event: Select.Changed) -> None:
+        if event.value != Select.BLANK:
+            self._update_local_profile("model", event.value)
+            
+    @on(Select.Changed, "#studio-thinking")
+    def on_thinking_changed(self, event: Select.Changed) -> None:
+        if event.value != Select.BLANK:
+            sel_config = self.query_one("#studio-configure-agent", SelectionList)
+            if sel_config.selected:
+                agent = sel_config.selected[0]
+                if agent in self.local_profiles:
+                    if "ai_studio_options" not in self.local_profiles[agent]:
+                        self.local_profiles[agent]["ai_studio_options"] = {}
+                    self.local_profiles[agent]["ai_studio_options"]["thinking_level"] = event.value
+                    self._save_dict_profile()
+                    
+    @on(Switch.Changed, "#studio-gsearch")
+    @on(Switch.Changed, "#studio-bsearch")
+    @on(Switch.Changed, "#studio-msearch")
+    @on(Switch.Changed, "#studio-exclusionary")
+    @on(Switch.Changed, "#studio-funnel")
+    @on(Switch.Changed, "#studio-gmaps")
+    @on(Switch.Changed, "#studio-url")
+    @on(Switch.Changed, "#studio-structured")
+    @on(Switch.Changed, "#studio-code")
+    @on(Switch.Changed, "#studio-function")
+    def on_studio_switch_changed(self, event: Switch.Changed) -> None:
+        sel_config = self.query_one("#studio-configure-agent", SelectionList)
+        if sel_config.selected:
+            agent = sel_config.selected[0]
+            if agent in self.local_profiles:
+                if "ai_studio_options" not in self.local_profiles[agent]:
+                    self.local_profiles[agent]["ai_studio_options"] = {}
+                    
+                s_id = event.switch.id
+                key_map = {
+                    "studio-structured": "structured_outputs",
+                    "studio-code": "code_execution",
+                    "studio-function": "function_calling",
+                    "studio-gsearch": "triple_google",
+                    "studio-bsearch": "triple_brave",
+                    "studio-msearch": "triple_local",
+                    "studio-exclusionary": "exclusionary",
+                    "studio-funnel": "funnel",
+                    "studio-gmaps": "google_maps",
+                    "studio-url": "url_context"
+                }
+                if s_id in key_map:
+                    self.local_profiles[agent]["ai_studio_options"][key_map[s_id]] = event.value
+                self._save_dict_profile()
 
-    def on_physics_update(self, payload: dict) -> None:
-        def do_update():
-            agent_tensions = payload.get("agent_tension", {})
-            self._build_agent_list(tensions=agent_tensions)
-        self.call_from_thread(do_update)
+    @on(Input.Changed, "#studio-stop")
+    @on(Input.Changed, "#studio-output-len")
+    @on(Input.Changed, "#studio-top-p")
+    def on_studio_adv_changed(self, event: Input.Changed) -> None:
+        sel_config = self.query_one("#studio-configure-agent", SelectionList)
+        if sel_config.selected:
+            agent = sel_config.selected[0]
+            if agent in self.local_profiles:
+                if "ai_studio_options" not in self.local_profiles[agent]:
+                    self.local_profiles[agent]["ai_studio_options"] = {}
+                
+                i_id = event.input.id
+                key_map = {
+                    "studio-stop": "stop_sequence",
+                    "studio-output-len": "output_length",
+                    "studio-top-p": "top_p"
+                }
+                if i_id in key_map:
+                    val = event.value
+                    if i_id == "studio-output-len":
+                        try:
+                            val = int(val)
+                        except: pass
+                    elif i_id == "studio-top-p":
+                        try:
+                            val = float(val)
+                        except: pass
+                    self.local_profiles[agent]["ai_studio_options"][key_map[i_id]] = val
+                self._save_dict_profile()
+                
+    @on(Select.Changed, "#studio-media")
+    def on_studio_media_changed(self, event: Select.Changed) -> None:
+        if event.value != Select.BLANK:
+            sel_config = self.query_one("#studio-configure-agent", SelectionList)
+            if sel_config.selected:
+                agent = sel_config.selected[0]
+                if agent in self.local_profiles:
+                    if "ai_studio_options" not in self.local_profiles[agent]:
+                        self.local_profiles[agent]["ai_studio_options"] = {}
+                    self.local_profiles[agent]["ai_studio_options"]["media_resolution"] = event.value
+                    self._save_dict_profile()
+            
+    @on(Input.Changed, "#studio-temp")
+    def on_temp_changed(self, event: Input.Changed) -> None:
+        self._update_local_profile("temperature", event.value)
+        
+    def _update_local_profile(self, key: str, value: str):
+        sel_config = self.query_one("#studio-configure-agent", SelectionList)
+        if sel_config.selected:
+            agent = sel_config.selected[0]
+            if agent in self.local_profiles:
+                if key == "temperature":
+                    try:
+                        self.local_profiles[agent][key] = float(value)
+                    except ValueError:
+                        pass
+                else:
+                    self.local_profiles[agent][key] = value
+                self._save_dict_profile()
 
-    @on(Button.Pressed, "#btn-close-chat")
-    def close(self):
-        self.stop_chat()
-        self.dismiss(None)
+    @on(Button.Pressed, "#btn-studio-edit-instructions")
+    def action_studio_edit_instructions(self) -> None:
+        sel_config = self.query_one("#studio-configure-agent", SelectionList)
+        if not sel_config.selected:
+            return
+        agent = sel_config.selected[0]
+        if agent not in self.local_profiles:
+            return
+            
+        current_text = self.local_profiles[agent].get("system_prompt", "")
+        def save_instructions(text: str | None):
+            if text is not None:
+                self.local_profiles[agent]["system_prompt"] = text
+                btn = self.query_one("#btn-studio-edit-instructions", Button)
+                btn.label = "Edit System Instructions (Saved)"
+                btn.variant = "success"
+                self._save_dict_profile()
+                
+        # Import SystemInstructionsModal from wherever it is defined
+        from maccre_tui.nexus_plex import SystemInstructionsModal
+        self.app.push_screen(SystemInstructionsModal(current_text), save_instructions)
+        
+    @on(Input.Submitted, "#chat-rename-input")
+    def on_chat_renamed(self, event: Input.Submitted) -> None:
+        new_name = event.value.strip()
+        if new_name:
+            self.active_chat_name = new_name
+            self.notify(f"Chat renamed to: {self.active_chat_name}")
+            self._save_dict_profile()
+            
+    def _save_dict_profile(self) -> str:
+        import json
+        from maccre_core.utils.path_resolver import get_datacenter_path
+        ledgers_dir = get_datacenter_path("03_Agent_Ledgers", f"studio_session_{self.active_chat_name}")
+        ledgers_dir.mkdir(parents=True, exist_ok=True)
+        
+        dict_path = ledgers_dir / f"{self.active_chat_name}-dictionary.dict"
+        try:
+            with open(dict_path, "w", encoding="utf-8") as f:
+                json.dump(self.local_profiles, f, indent=4)
+            return str(dict_path)
+        except Exception as e:
+            self.notify(f"Failed to save dictionary: {e}", severity="error")
+            return ""
 
-    def _inject_live_task(self, agent_name: str) -> None:
+    @on(Button.Pressed, "#btn-start-studio-chat")
+    def action_start_chat(self, event: Button.Pressed) -> None:
+        sel_agents = self.query_one("#studio-select-agents", SelectionList).selected
+        if not sel_agents:
+            self.notify("Select at least one agent to start chat.", severity="warning")
+            return
+            
+        dict_path = self._save_dict_profile()
+        agent_name = sel_agents[0]
+        
         import sqlite3
+        import os
+        import sys
+        import subprocess
         from pathlib import Path
         from maccre_core.utils.path_resolver import get_datacenter_path
         
-        job_id = "live_session"
+        job_id = f"studio_session_{self.active_chat_name}"
+        self.active_job_id = job_id
         payload_path = str(get_datacenter_path(f"02_Dynamic_Context/{job_id}_payload.txt"))
         Path(payload_path).parent.mkdir(parents=True, exist_ok=True)
         Path(payload_path).write_text("[SYSTEM] WAIT_FOR_USER", encoding="utf-8")
-            
-        active_proj = self.app.active_project
-        if active_proj == "GLOBAL":
-            db_path = get_datacenter_path("swarm_queue.db")
-        else:
-            db_path = get_datacenter_path(f"{active_proj}/swarm_queue.db")
-            
+        
+        os.environ["MACCRE_ACTIVE_PROJECT"] = self.app.active_project
+        db_path = get_datacenter_path("swarm_queue.db")
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         
         with sqlite3.connect(db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS task_queue (
-                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id               TEXT NOT NULL,
-                    payload_path         TEXT NOT NULL,
-                    source_payload_path  TEXT DEFAULT '',
-                    current_node         TEXT NOT NULL,
-                    lock_status          TEXT DEFAULT 'open',
-                    locked_by            TEXT,
-                    actual_cost          REAL DEFAULT 0.0,
-                    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(job_id, current_node)
+                    id INTEGER PRIMARY KEY,
+                    job_id TEXT,
+                    payload_path TEXT,
+                    source_payload_path TEXT DEFAULT '',
+                    current_node TEXT,
+                    lock_status TEXT DEFAULT 'open',
+                    locked_by TEXT,
+                    actual_cost REAL DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    loop_iteration_count INTEGER DEFAULT 0,
+                    completed_at TIMESTAMP
                 )
             """)
-            conn.execute("""
-                INSERT OR IGNORE INTO task_queue 
-                (job_id, payload_path, current_node, lock_status) 
-                VALUES (?, ?, ?, 'open')
-            """, (job_id, payload_path, agent_name))
-            
-            conn.execute("""
-                UPDATE task_queue SET lock_status = 'open' 
-                WHERE job_id = ? AND current_node = ?
-            """, (job_id, agent_name))
+            conn.execute(
+                "INSERT OR REPLACE INTO task_queue (job_id, current_node, payload_path, lock_status) VALUES (?, ?, ?, ?)",
+                (job_id, agent_name, payload_path, "open")
+            )
             conn.commit()
 
-    def _spawn_worker(self, agent_name: str, mode: str) -> None:
-        if agent_name in self.active_workers:
-            return
-            
-        self._inject_live_task(agent_name)
-        
-        import os
-        import sys
-        import subprocess
-        from pathlib import Path
         env = os.environ.copy()
         
-        # Ensure the project root is in PYTHONPATH so maccre_core can be imported
         root_dir = str(Path(__file__).parent.parent.resolve())
         env["PYTHONPATH"] = root_dir + (os.pathsep + env.get("PYTHONPATH", "") if "PYTHONPATH" in env else "")
-        
         env["MACCRE_ACTIVE_PROJECT"] = self.app.active_project
-        if mode == "Live with Physics":
-            env["MACCRE_LIVE_OVERRIDE"] = "1"
+        env["MACCRE_LIVE_OVERRIDE"] = "1"
+        env["MACCRE_CUSTOM_DICT"] = dict_path
             
         worker_script = str(Path(__file__).parent.parent / "maccre_core" / "orchestration" / "swarm_worker.py")
         proc = subprocess.Popen(
@@ -695,183 +994,75 @@ class AgentChatModalScreen(ModalScreen):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        self.active_workers[agent_name] = proc
-
-    def _kill_worker(self, agent_name: str) -> None:
-        proc = self.active_workers.pop(agent_name, None)
-        if proc:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+        self.session_task = proc
         
-    @on(Button.Pressed, "#btn-start-chat")
-    def start_chat(self):
-        log = self.query_one("#agent-chat-log", RichLog)
-        sel_list = self.query_one("#agent-selection-list", SelectionList)
-        selected_agents = sel_list.selected
-        if not selected_agents:
-            log.write("[red]System: Please select at least one agent.[/red]")
-            return
+        # Initialize persistent message bus for polling
+        from maccre_core.orchestration.queues import JsonFileQueue
+        self.message_bus = JsonFileQueue("live_session_bus")
+        # Fast forward cursor to end of file so we don't read old messages from previous sessions
+        try:
+            with open(self.message_bus.filepath, "r", encoding="utf-8") as f:
+                f.seek(0, 2)
+                self.message_bus.cursor = f.tell()
+        except FileNotFoundError:
+            pass
             
-        radio = self.query_one("#chat-mode-radio", RadioSet)
-        mode = "Sequential" if radio.pressed_button and radio.pressed_button.id == "mode-sequential" else "Live with Physics"
+        self.notify("Started Studio Chat!")
         
-        log.write(f"\n[bold cyan]--- Starting {mode} Session ---[/bold cyan]")
-        log.write(f"[bold cyan]Agents:[/bold cyan] {', '.join(selected_agents)}")
-        self.query_one("#btn-start-chat", Button).disabled = True
-        self.query_one("#btn-stop-chat", Button).disabled = False
+        log = self.query_one("#chat-arena-log", RichLog)
+        log.clear()
+        log.write(f"\n[italic dim]System: {agent_name} has entered the chat.[/italic dim]")
         
-        if mode == "Live with Physics":
-            from maccre_core.orchestration.live_session_manager import LiveSessionManager
-            import asyncio
-            self.session_manager = LiveSessionManager()
-            self.session_manager.register_callback("PHYSICS", self.on_physics_update)
-            self.session_manager.register_callback("CHAT", self.on_agent_chat)
-            self.session_task = asyncio.create_task(self.session_manager.listen_loop_async())
-            
-        for agent in selected_agents:
-            self._spawn_worker(agent, mode)
-            
-        self._build_agent_list()
-        sel_list.focus()
-
-    @on(Button.Pressed, "#btn-stop-chat")
-    def stop_chat(self):
-        if self.session_task:
-            self.session_task.cancel()
-            self.session_task = None
-        if getattr(self, "session_manager", None):
-            self.session_manager = None
-            
-        for agent in list(self.active_workers.keys()):
-            self._kill_worker(agent)
-            
-        log = self.query_one("#agent-chat-log", RichLog)
-        log.write("\n[bold yellow]--- Session Stopped ---[/bold yellow]")
-        self.query_one("#btn-start-chat", Button).disabled = False
-        self.query_one("#btn-stop-chat", Button).disabled = True
-        
-        self._build_agent_list()
-
-    @on(SelectionList.SelectedChanged, "#agent-selection-list")
-    def handle_selection_changed(self, event: SelectionList.SelectedChanged) -> None:
-        if getattr(self, "session_manager", None):
-            new_selection = set(event.selection_list.selected)
-            old_selection = self.session_manager.active_agents
-            
-            if old_selection != new_selection:
-                self.session_manager.active_agents = new_selection
-                
-                added = new_selection - old_selection
-                removed = old_selection - new_selection
-                
-                radio = self.query_one("#chat-mode-radio", RadioSet)
-                mode = "Sequential" if radio.pressed_button and radio.pressed_button.id == "mode-sequential" else "Live with Physics"
-                
-                for a in added:
-                    self._spawn_worker(a, mode)
-                for r in removed:
-                    self._kill_worker(r)
-                    
-                log = self.query_one("#agent-chat-log", RichLog)
-                log.write(f"[dim]Active Swarm Updated: {', '.join(new_selection) or 'None'}[/dim]")
-
     def action_submit_chat(self) -> None:
         self._send_chat_message()
 
-    @on(Button.Pressed, "#btn-agent-chat-send")
-    def handle_btn_send(self) -> None:
+    @on(Button.Pressed, "#btn-send-studio")
+    def handle_btn_send_studio(self, event: Button.Pressed) -> None:
         self._send_chat_message()
 
     def _send_chat_message(self):
-        inp = self.query_one("#agent-chat-input", TextArea)
+        inp = self.query_one("#chat-arena-input", TextArea)
         msg = inp.text.strip()
         if not msg:
             return
             
-        log = self.query_one("#agent-chat-log", RichLog)
+        log = self.query_one("#chat-arena-log", RichLog)
         log.write(f"\n[bold green]You:[/bold green] {msg}")
         inp.text = ""
-        if getattr(self, "session_manager", None):
-            self.session_manager.message_bus.publish("MACCRE.CHAT", {
-                "agent_name": "User",
-                "job_id": "live_session",
-                "text": msg
-            })
-            log.write("[dim]System: Message routed to active agents[/dim]")
-        else:
-            log.write("[yellow]System: Message routed to active agents (Backend not hooked up)[/yellow]")
-
-    def on_agent_chat(self, payload: dict) -> None:
-        try:
-            speaker = payload.get("agent_name", "System")
-            text = payload.get("text", "")
-            is_typing = payload.get("is_typing", False)
+        
+        sel_agents = self.query_one("#studio-select-agents", SelectionList).selected
+        if not sel_agents:
+            return
             
-            typing_lbl = self.query_one("#typing-indicator", Label)
-            if is_typing:
-                typing_lbl.update(f"[dim i]{speaker} is typing...[/dim i]")
-            else:
-                typing_lbl.update("")
-                if text and speaker != "User":
-                    log = self.query_one("#agent-chat-log")
-                    if log:
-                        log.write(f"[bold blue]{speaker}:[/bold blue] {text}")
-        except Exception:  # noqa: BLE001
-            pass
-
-    @on(Button.Pressed, "#btn-expand-agent-chat-input")
-    def action_expand_agent_chat_input(self) -> None:
-        def handle_chat_expanded(msg: str | None):
-            if msg:
-                log = self.query_one("#agent-chat-log", RichLog)
-                log.write(f"\n[bold green]You:[/bold green] {msg}")
-                if getattr(self, "session_manager", None):
-                    self.session_manager.message_bus.publish("MACCRE.CHAT", {
-                        "agent_name": "User",
-                        "job_id": "live_session",
-                        "text": msg
-                    })
-                    log.write("[dim]System: Message routed to active agents[/dim]")
-                else:
-                    log.write("[yellow]System: Message routed to active agents (Backend not hooked up)[/yellow]")
-        self.app.push_screen(AgentChatInputModalScreen(), handle_chat_expanded)
-
-class NexusInputModalScreen(ModalScreen[str]):
-    def compose(self) -> ComposeResult:
-        with Container(classes="dialog", id="nexus-input-dialog"):
-            yield Label("Nexus Chat Input")
-            yield TextArea(id="nexus-text-area")
-            with Horizontal(classes="dialog-buttons"):
-                yield Button("Cancel", variant="error", id="cancel-btn")
-                yield Button("Paste from Clipboard", variant="default", id="paste-btn")
-                yield Button("Send to Nexus", variant="success", id="send-btn")
-
-    @on(Button.Pressed, "#cancel-btn")
-    def cancel(self):
+        agent_name = sel_agents[0]
+        
+        indicator = self.query_one("#chat-typing-indicator", Label)
+        indicator.update(f"{agent_name} is typing...")
+        
+        from maccre_core.orchestration.queues import JsonFileQueue
+        import time
+        
+        message_bus = JsonFileQueue("live_session_bus")
+        payload = {
+            "job_id": getattr(self, "active_job_id", ""),
+            "speaker": "User",
+            "text": msg
+        }
+        message_bus.publish(f"MACCRE.ROUTE.{agent_name}", payload)
+        
+    @on(Button.Pressed, "#btn-close-studio-chat")
+    def action_close(self, event: Button.Pressed) -> None:
         self.dismiss(None)
-
-    @on(Button.Pressed, "#paste-btn")
-    def paste_clipboard(self):
-        try:
-            import pyperclip
-            text = pyperclip.paste()
-            if text:
-                ta = self.query_one("#nexus-text-area", TextArea)
-                ta.text = ta.text + "\n" + text if ta.text else text
-        except Exception:
-            pass
-
-    @on(Button.Pressed, "#send-btn")
-    def send(self):
-        text = self.query_one("#nexus-text-area", TextArea).text.strip()
-        self.dismiss(text)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CUSTOM WIDGETS
-# ══════════════════════════════════════════════════════════════════════════════
+        
+    @on(Button.Pressed, "#btn-expand-input")
+    def toggle_expand(self, event: Button.Pressed) -> None:
+        inp = self.query_one("#chat-arena-input", TextArea)
+        if inp.has_class("-expanded"):
+            inp.remove_class("-expanded")
+            event.button.label = "Expand"
+        else:
+            inp.add_class("-expanded")
+            event.button.label = "Collapse"
 
 class NexusChat(Vertical):
     def compose(self) -> ComposeResult:
@@ -891,7 +1082,6 @@ class ProjectControls(Horizontal):
         yield Button("Select Project", variant="primary", id="btn-select-project")
         yield Button("File Cabinet", variant="warning", id="btn-file-cabinet")
         yield Button("Agent Chat", variant="default", id="btn-agent-chat")
-
 
 class AgentBuilderPanel(Vertical):
     """Panel to define and mint new agents into the roster."""
@@ -927,9 +1117,26 @@ class AgentBuilderPanel(Vertical):
         with Horizontal(classes="form-row"):
             yield Label("Function calling")
             yield Switch(value=False, id="ab-function")
-        with Horizontal(classes="form-row"):
-            yield Label("Grounding with Google Search")
-            yield Switch(value=True, id="ab-gsearch")
+        with Vertical(id="triple-index-box", classes="form-group-box"):
+            yield Label("Triple Index Search", classes="form-group-title")
+            with Horizontal(classes="form-row"):
+                yield Label("Grounding with Google Search")
+                yield Switch(value=True, id="ab-gsearch")
+            with Horizontal(classes="form-row"):
+                yield Label("Grounding with Brave Search")
+                yield Switch(value=False, id="ab-bsearch")
+            with Horizontal(classes="form-row"):
+                yield Label("Grounding with Local Memory")
+                yield Switch(value=False, id="ab-msearch")
+            with Horizontal(classes="form-row"):
+                yield Label("Exclusionary Search")
+                yield Switch(value=False, id="ab-exclusionary", disabled=True)
+            with Horizontal(classes="form-row"):
+                yield Label("Funnel Search")
+                yield Switch(value=False, id="ab-funnel", disabled=True)
+            yield Label("Information")
+            yield RichLog(id="search-info-panel", wrap=True, highlight=True, markup=True)
+
         with Horizontal(classes="form-row"):
             yield Label("Grounding with Google Maps")
             yield Switch(value=False, id="ab-gmaps")
@@ -952,6 +1159,59 @@ class AgentBuilderPanel(Vertical):
             yield Input(value="0.95", id="ab-top-p")
 
         yield Button("Save to Roster", variant="success", id="btn-save-agent")
+
+    @on(Switch.Changed, "#ab-gsearch")
+    @on(Switch.Changed, "#ab-bsearch")
+    @on(Switch.Changed, "#ab-msearch")
+    @on(Switch.Changed, "#ab-exclusionary")
+    @on(Switch.Changed, "#ab-funnel")
+    def on_search_toggle_changed(self, event: Switch.Changed) -> None:
+        gsearch = self.query_one("#ab-gsearch", Switch).value
+        bsearch = self.query_one("#ab-bsearch", Switch).value
+        msearch = self.query_one("#ab-msearch", Switch).value
+        exc = self.query_one("#ab-exclusionary", Switch)
+        fun = self.query_one("#ab-funnel", Switch)
+        info = self.query_one("#search-info-panel", RichLog)
+
+        # Count active groundings
+        count = sum([gsearch, bsearch, msearch])
+
+        # Enable/Disable advanced mode based on count
+        if count < 2:
+            exc.disabled = True
+            exc.value = False
+            fun.disabled = True
+            fun.value = False
+        else:
+            exc.disabled = False
+            fun.disabled = False
+
+        # Mutually exclusive logic
+        if event.control.id == "ab-exclusionary" and event.value:
+            fun.value = False
+        elif event.control.id == "ab-funnel" and event.value:
+            exc.value = False
+
+        # Update Info Panel
+        info.clear()
+        if exc.value:
+            info.write("[bold red]Adversarial Topology Active (Exclusionary Search)[/bold red]")
+            info.write("Logic: Google establishes consensus. Brave finds non-overlapping, buried intelligence.")
+            info.write("FinOps: [bold yellow]High Cost[/bold yellow] (Multi-step sequential token burn).")
+            info.write("Fallback: If exclusion yields 0 results, safely falls back to Additive Merging.")
+        elif fun.value:
+            info.write("[bold cyan]Funnel Topology Active (Iterative Source Batching)[/bold cyan]")
+            info.write("Logic: Google finds broad sources. Entities are extracted and passed to Brave for deep-dives.")
+            info.write("FinOps: [bold yellow]High Cost[/bold yellow] (Entity extraction intermediate step).")
+        elif count >= 2:
+            info.write("[bold green]Additive Merging Active[/bold green]")
+            info.write("Logic: Parallel API calls are executed and merged into a single deduplicated context window.")
+            info.write("FinOps: Medium-High Cost (Parallel API fees and wider context window).")
+        elif count == 1:
+            info.write("Standard Single Index Grounding active.")
+            info.write("FinOps: Low Cost.")
+        else:
+            info.write("No Search Grounding selected.")
 
 
 class CreatePayloadModal(ModalScreen[dict]):
@@ -1632,7 +1892,7 @@ class NexusPlex(App[None]):
 
     @on(Button.Pressed, "#btn-agent-chat")
     def action_open_agent_chat(self) -> None:
-        self.push_screen(AgentChatModalScreen())
+        self.push_screen(AgentStudioChatScreen())
 
     # ── Agent Builder Handlers ────────────────────────────────────────────────
     @on(Button.Pressed, "#btn-open-edit-agent")
@@ -1793,6 +2053,11 @@ class NexusPlex(App[None]):
         self.query_one("#ab-code", Switch).value = bool(opts.get("code_execution", False))
         self.query_one("#ab-function", Switch).value = bool(opts.get("function_calling", False))
         self.query_one("#ab-gsearch", Switch).value = bool(opts.get("grounding_google_search", False))
+        self.query_one("#ab-bsearch", Switch).value = bool(opts.get("grounding_brave_search", False))
+        self.query_one("#ab-msearch", Switch).value = bool(opts.get("grounding_local_memory", False))
+        self.query_one("#ab-exclusionary", Switch).value = bool(opts.get("exclusionary_search", False))
+        self.query_one("#ab-funnel", Switch).value = bool(opts.get("funnel_search", False))
+        
         self.query_one("#ab-gmaps", Switch).value = bool(opts.get("grounding_google_maps", False))
         self.query_one("#ab-url", Switch).value = bool(opts.get("url_context", False))
 
@@ -1877,6 +2142,10 @@ class NexusPlex(App[None]):
             "code_execution": self.query_one("#ab-code", Switch).value,
             "function_calling": self.query_one("#ab-function", Switch).value,
             "grounding_google_search": self.query_one("#ab-gsearch", Switch).value,
+            "grounding_brave_search": self.query_one("#ab-bsearch", Switch).value,
+            "grounding_local_memory": self.query_one("#ab-msearch", Switch).value,
+            "exclusionary_search": self.query_one("#ab-exclusionary", Switch).value,
+            "funnel_search": self.query_one("#ab-funnel", Switch).value,
             "grounding_google_maps": self.query_one("#ab-gmaps", Switch).value,
             "url_context": self.query_one("#ab-url", Switch).value,
             "media_resolution": str(media_val) if media_val != Select.BLANK else "default",
@@ -2408,11 +2677,9 @@ class NexusPlex(App[None]):
 
             elif action == "canonize":
                 try:
-                    from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
                     from maccre_core.orchestration.local_broker import LocalMessageBroker
                     from maccre_core.utils.path_resolver import get_datacenter_path
                     import sqlite3
-                    import json
 
                     broker = LocalMessageBroker()
                     broker.mark_canonized(job_id)
@@ -2437,7 +2704,6 @@ class NexusPlex(App[None]):
                 try:
                     from maccre_core.orchestration.local_broker import LocalMessageBroker
                     import sqlite3
-                    import json
                     conn = LocalMessageBroker()._get_conn()
                     conn.row_factory = sqlite3.Row
                     row = conn.execute("SELECT topology_csv FROM job_sessions WHERE job_id = ?", (job_id,)).fetchone()
@@ -2907,10 +3173,30 @@ class NexusPlex(App[None]):
             """Capture the active job ID for SQLite unrolling queries."""
             self._current_job_id = job_id
 
+        try:
+            final_artifact = runner.execute_flow(
+                self.active_flow_steps,
+                initial_payload_path=self._pending_payload_path,
+                cancel_event=self._flow_cancel_event,
+                pause_event=self._flow_pause_event,
+                step_callback=_on_step_complete,
+                hitl_callback=_on_hitl_pause,
+                job_started_callback=_on_job_started,
+            )
+            if self._flow_cancel_event and self._flow_cancel_event.is_set():
+                self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
+            else:
+                self.write_agent_log(f"\n[green]Flow completed successfully![/green]\nFinal Artifact: {final_artifact}")
+        except Exception as e:
+            self.write_agent_log(f"\n[red]Flow Error:[/red] {e}")
+        finally:
+            root_logger.removeHandler(tui_handler)
+            root_logger.setLevel(original_level)
+            self.call_from_thread(self._finish_flow)
+
     @work(thread=True)
     def resume_linear_flow_background(self, job_id: str) -> None:
         import logging
-        import threading
         class RichLogHandler(logging.Handler):
             def __init__(self, tui_app):
                 super().__init__()
@@ -2966,27 +3252,7 @@ class NexusPlex(App[None]):
             root_logger.removeHandler(tui_handler)
             root_logger.setLevel(original_level)
 
-        try:
-            final_artifact = runner.execute_flow(
-                self.active_flow_steps,
-                initial_payload_path=self._pending_payload_path,
-                cancel_event=self._flow_cancel_event,
-                pause_event=self._flow_pause_event,
-                step_callback=_on_step_complete,
-                hitl_callback=_on_hitl_pause,
-                job_started_callback=_on_job_started,
-            )
-            if self._flow_cancel_event and self._flow_cancel_event.is_set():
-                self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
-            else:
-                self.write_agent_log(f"\n[green]Flow completed successfully![/green]\nFinal Artifact: {final_artifact}")
-        except Exception as e:
-            self.write_agent_log(f"\n[red]Flow Error:[/red] {e}")
-        finally:
-            root_logger.removeHandler(tui_handler)
-            root_logger.setLevel(original_level)
-            self.call_from_thread(self._finish_flow)
-            
+
     def _finish_flow(self) -> None:
         self.is_session_active = False
         

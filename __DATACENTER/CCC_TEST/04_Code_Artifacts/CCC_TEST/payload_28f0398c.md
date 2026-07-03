@@ -1,0 +1,1 @@
+Lets talk about this weeks SCOTUS opinions.

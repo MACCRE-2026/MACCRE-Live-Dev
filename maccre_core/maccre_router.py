@@ -723,17 +723,11 @@ class AgentRouter:
 
         import os
         project_name = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
-
-        # Triune Architecture: Vectorize the thought to ephemeral session DB
+        
+        # Route the JSON scratchpad into the standard stdout stream so _FileTee 
+        # captures it as a standard <thought> block for the unified ledger.
         if parsed.scratchpad:
-            try:
-                from maccre_core.tools.rag_tools import vectorize_thought
-                vectorize_thought(parsed.scratchpad, project_name, session_id, agent_name)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Failed to vectorize thought: {e}")
-
-        # Triune Architecture: Vectorize the ledger to ephemeral session DB
+            print(f"<thought>\n{parsed.scratchpad}\n</thought>\n")
         if parsed.final_response:
             try:
                 from maccre_core.tools.rag_tools import vectorize_ledger

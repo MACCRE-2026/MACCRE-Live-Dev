@@ -82,7 +82,12 @@ class LiveSessionManager:
                             self.register_agent(speaker)
                             if not is_typing:
                                 self.scorekeeper.register_speech(speaker, tension_modifier=0.05)
-                                await self._route_chat_message(str(job_id or ""), speaker, payload.get("text", ""))
+                                await self._route_chat_message(
+                                    str(job_id or ""), 
+                                    speaker, 
+                                    payload.get("text", ""),
+                                    payload.get("thought", "")
+                                )
                     
                     for cb in self.callbacks.get(event_type, []):
                         cb(payload)
@@ -98,14 +103,16 @@ class LiveSessionManager:
                 
         physics_task.cancel()
 
-    async def _route_chat_message(self, job_id: str, speaker: str, text: str) -> None:
+    async def _route_chat_message(self, job_id: str, speaker: str, text: str, thought: str = "") -> None:
         from maccre_core.utils.path_resolver import get_datacenter_path
 
         # Write to session-scoped unified chat log
-        log_dir = get_datacenter_path("04_Code_Artifacts", job_id)
+        log_dir = get_datacenter_path("04_Code_Artifacts")
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / "unified_chat.md"
+        log_path = log_dir / "agent_chat_ledger.md"
         with open(log_path, "a", encoding="utf-8") as f:
+            if thought:
+                f.write(f"### {speaker} (Internal Reasoning)\n```markdown\n{thought}\n```\n\n")
             f.write(f"**{speaker}**: {text}\n\n---\n\n")
 
         # Track global turns for HITL pause

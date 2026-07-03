@@ -6,22 +6,10 @@
     "started": "2026-06-20T17:54:32.682522"
   },
   {
-    "pid": 14980,
-    "project": "GLOBAL",
-    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\session_live_session_agent_thoughts.db",
-    "started": "2026-06-20T17:54:34.370356"
-  },
-  {
     "pid": 8500,
     "project": "GLOBAL",
     "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\session_live_session_agent_thoughts.db",
     "started": "2026-06-20T17:54:34.487795"
-  },
-  {
-    "pid": 14980,
-    "project": "GLOBAL",
-    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
-    "started": "2026-06-20T17:54:34.752519"
   },
   {
     "pid": 15548,
@@ -90,9 +78,57 @@
     "started": "2026-06-28T18:00:18.488482"
   },
   {
-    "pid": 14980,
+    "pid": 15228,
+    "project": "",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-07-02T03:11:08.485639"
+  },
+  {
+    "pid": 6736,
+    "project": "CCC_TEST",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\CCC_TEST\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-07-02T04:06:58.472366"
+  },
+  {
+    "pid": 11520,
+    "project": "CCC_TEST",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\CCC_TEST\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-07-02T04:26:49.705458"
+  },
+  {
+    "pid": 8940,
+    "project": "",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-07-02T20:15:33.540268"
+  },
+  {
+    "pid": 15196,
+    "project": "CCC_TEST",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\CCC_TEST\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-07-02T20:31:53.387853"
+  },
+  {
+    "pid": 11032,
+    "project": "CCC_TEST",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\CCC_TEST\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-07-02T22:09:56.373655"
+  },
+  {
+    "pid": 5716,
+    "project": "CCC_TEST",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\CCC_TEST\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
+    "started": "2026-07-02T22:56:52.801562"
+  },
+  {
+    "pid": 15260,
     "project": "GLOBAL",
     "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
-    "started": "2026-06-29T20:51:14.793110"
+    "started": "2026-07-03T13:06:16.077715"
+  },
+  {
+    "pid": 8068,
+    "project": "GLOBAL",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
+    "started": "2026-07-03T16:09:41.500512"
   }
 ]
