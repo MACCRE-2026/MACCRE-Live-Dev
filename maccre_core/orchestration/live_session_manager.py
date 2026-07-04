@@ -106,10 +106,18 @@ class LiveSessionManager:
     async def _route_chat_message(self, job_id: str, speaker: str, text: str, thought: str = "") -> None:
         from maccre_core.utils.path_resolver import get_datacenter_path
 
+        clean_id = job_id.replace("studio_session_", "", 1) if job_id.startswith("studio_session_") else job_id
+
         # Write to session-scoped unified chat log
-        log_dir = get_datacenter_path("04_Code_Artifacts")
+        if job_id.startswith("studio_session_"):
+            log_dir = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{clean_id}-Chat")
+            log_path = log_dir / "unified_chat_ledger.md"
+        else:
+            log_dir = get_datacenter_path("04_Code_Artifacts")
+            log_path = log_dir / "agent_chat_ledger.md"
+            
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / "agent_chat_ledger.md"
+        
         with open(log_path, "a", encoding="utf-8") as f:
             if thought:
                 f.write(f"### {speaker} (Internal Reasoning)\n```markdown\n{thought}\n```\n\n")

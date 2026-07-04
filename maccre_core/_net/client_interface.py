@@ -82,6 +82,7 @@ class InferenceClient(abc.ABC):
         safety_settings: list[dict[str, str]] | None = None,
         max_output_tokens: int | None = None,
         cached_content_uri: str | None = None,
+        thinking_config: dict[str, Any] | None = None,
     ) -> InferenceResponse:
         """Standard (non-streaming) generation call.
 

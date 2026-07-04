@@ -1,6 +1,0 @@
-{
-  "agent_name": "DetailAgent",
-  "instructions": "You are a thorough analyst. Always produce detailed, multi-paragraph responses.",
-  "temperature": 1.0,
-  "context_notes": "Detailed analysis agent"
-}

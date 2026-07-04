@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from maccre_tui.macro_editor_modal import MacroNodeEditorModal
-from textual import work, on
+from textual import work, on, events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, Container
@@ -78,7 +78,24 @@ class SelectProjectModal(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         with Container(classes="dialog"):
             yield Label("Select Existing Project")
-            projects = [(p, p) for p in load_project_names()]
+            from pathlib import Path
+            root_dir = Path(__file__).parent.parent.resolve()
+            datacenter = root_dir / "__DATACENTER"
+            
+            projects = []
+            if datacenter.exists() and datacenter.is_dir():
+                for folder in datacenter.iterdir():
+                    if folder.is_dir():
+                        tiers = [
+                            "01_Raw_Source",
+                            "02_Dynamic_Context",
+                            "03_Agent_Ledgers",
+                            "04_Code_Artifacts",
+                            "05_Rendered_Media"
+                        ]
+                        if all((folder / tier).exists() for tier in tiers):
+                            projects.append((folder.name, folder.name))
+                            
             yield Select(projects, id="project-select")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", variant="error", id="cancel-btn")
@@ -521,9 +538,20 @@ class AgentChatInputModalScreen(ModalScreen[str]):
 class ChatDashboardPane(Vertical):
     def compose(self) -> ComposeResult:
         yield Label("Chat Dashboard", classes="pane-title")
-        yield Label("Select a Previous Chat")
-        yield SelectionList(id="studio-history-list")
-        yield Button("Load Chat", variant="primary", id="btn-load-studio-chat")
+        
+        yield Label("Select a Project", classes="form-group-title")
+        yield Select([], id="studio-project-select")
+        
+        yield Label("Select a Chat Studio Session", classes="form-group-title")
+        yield Select([], id="studio-session-select")
+        yield Button("Resume Chat", variant="primary", id="btn-resume-studio-chat")
+        
+        yield Label("KnowledgeStore", classes="form-group-title")
+        with Vertical(id="studio-knowledgestore", classes="form-group-box"):
+            yield Label("KnowledgeStore is currently empty.", id="ks-empty-label")
+            
+        yield Button("Canonize Chat Session", variant="warning", id="btn-canonize-studio-chat", disabled=True)
+        yield Button("Promote Chat to Topology", variant="success", id="btn-promote-studio-chat", disabled=True)
 
 class ChatBuilderPane(Vertical):
     def compose(self) -> ComposeResult:
@@ -628,7 +656,8 @@ class AgentStudioChatScreen(ModalScreen):
             yield ChatBuilderPane()
         
     def on_mount(self) -> None:
-        self.active_chat_name = "New_Session"
+        from maccre_core.utils.session_manager import generate_session_id
+        self.active_chat_name = f"_job_{generate_session_id()}"
         self.local_profiles = {}
         self.session_task = None
         self.roster = []
@@ -657,6 +686,36 @@ class AgentStudioChatScreen(ModalScreen):
         except Exception:
             pass
             
+        try:
+            from pathlib import Path
+            root_dir = Path(__file__).parent.parent.resolve()
+            datacenter = root_dir / "__DATACENTER"
+            
+            options = []
+            if datacenter.exists() and datacenter.is_dir():
+                for folder in datacenter.iterdir():
+                    if folder.is_dir() and folder.name != "GLOBAL":
+                        # Check for compliant 5-tier structure
+                        tiers = [
+                            "01_Raw_Source",
+                            "02_Dynamic_Context",
+                            "03_Agent_Ledgers",
+                            "04_Code_Artifacts",
+                            "05_Rendered_Media"
+                        ]
+                        if all((folder / tier).exists() for tier in tiers):
+                            options.append((folder.name, folder.name))
+                            
+            p_select = self.query_one("#studio-project-select", Select)
+            p_select.set_options(options)
+            
+            # Auto-select active project if it exists in the list
+            if any(opt[1] == self.app.active_project for opt in options):
+                p_select.value = self.app.active_project
+                self._refresh_session_dropdown()
+        except Exception:
+            pass
+            
         self._poll_timer = self.set_interval(0.5, self._poll_chat_bus)
         
     def _poll_chat_bus(self):
@@ -679,19 +738,126 @@ class AgentStudioChatScreen(ModalScreen):
         except Exception:
             pass
 
-    def _refresh_history_list(self) -> None:
-        try:
-            import os
-            from maccre_core.utils.path_resolver import get_datacenter_path
-            ledgers_dir = get_datacenter_path("03_Agent_Ledgers", "live_sessions")
-            if not ledgers_dir.exists():
+    @on(Select.Changed, "#studio-project-select")
+    def on_project_changed(self, event: Select.Changed) -> None:
+        self._refresh_session_dropdown()
+        
+    def _refresh_session_dropdown(self) -> None:
+        project_select = self.query_one("#studio-project-select", Select)
+        project_name = project_select.value
+        if not project_name:
+            return
+            
+        import os
+        from pathlib import Path
+        
+        root_dir = Path(__file__).parent.parent.resolve()
+        dc_dir = root_dir / "__DATACENTER" / str(project_name) / "02_Dynamic_Context" / "ChatStudioSessions"
+        
+        options = []
+        if dc_dir.exists():
+            for folder in dc_dir.iterdir():
+                if folder.is_dir() and folder.name.endswith("-Chat"):
+                    clean_id = folder.name[:-5]
+                    dict_file = folder / f"ChatStudio-{clean_id}.dict"
+                    
+                    if dict_file.exists():
+                        options.append((clean_id, clean_id))
+                        
+        session_select = self.query_one("#studio-session-select", Select)
+        session_select.set_options(options)
+
+    @on(Button.Pressed, "#btn-resume-studio-chat")
+    def on_resume_chat(self) -> None:
+        project_name = self.query_one("#studio-project-select", Select).value
+        session_id = self.query_one("#studio-session-select", Select).value
+        
+        if not project_name or not session_id:
+            self.notify("Please select a project and a session to resume.", severity="warning")
+            return
+            
+        import json
+        from pathlib import Path
+        
+        root_dir = Path(__file__).parent.parent.resolve()
+        dict_file = root_dir / "__DATACENTER" / str(project_name) / "02_Dynamic_Context" / "ChatStudioSessions" / f"{session_id}-Chat" / f"ChatStudio-{session_id}.dict"
+        ledger_file = root_dir / "__DATACENTER" / str(project_name) / "04_Code_Artifacts" / "ChatStudioSessions" / f"{session_id}-Chat" / "unified_chat_ledger.md"
+        
+        if dict_file.exists():
+            try:
+                with open(dict_file, "r", encoding="utf-8") as f:
+                    self.local_profiles = json.load(f)
+                self.active_chat_name = session_id
+                self.notify(f"Resumed Chat Session: {session_id}")
+                
+                # Apply dictionary state to UI
+                self._apply_dict_to_ui()
+                
+            except Exception as e:
+                self.notify(f"Failed to load dictionary: {e}", severity="error")
                 return
                 
-            sel_hist = self.query_one("#studio-history-list", SelectionList)
-            sel_hist.clear_options()
+        if ledger_file.exists():
+            try:
+                content = ledger_file.read_text(encoding="utf-8")
+                from rich.markup import escape
+                log = self.query_one("#chat-arena-log", RichLog)
+                log.clear()
+                log.write(escape(content))
+            except Exception as e:
+                self.notify(f"Failed to load ledger: {e}", severity="error")
+        else:
+            log = self.query_one("#chat-arena-log", RichLog)
+            log.clear()
+            log.write("[italic dim]No previous chat history found for this session.[/italic dim]")
+                
+    def _apply_dict_to_ui(self) -> None:
+        sel_agents = self.query_one("#studio-select-agents", SelectionList)
+        sel_agents.deselect_all()
+        
+        if not self.local_profiles:
+            return
             
-            for file in ledgers_dir.glob("*.md"):
-                sel_hist.add_option((file.stem, str(file)))
+        agent = list(self.local_profiles.keys())[0]
+        
+        try:
+            sel_agents.select(agent)
+            sel_config = self.query_one("#studio-configure-agent", SelectionList)
+            sel_config.deselect_all()
+            sel_config.select(agent)
+            
+            self._populate_config_ui_from_agent(agent)
+        except Exception:
+            pass
+            
+    def _populate_config_ui_from_agent(self, agent: str) -> None:
+        profile = self.local_profiles.get(agent, {})
+        
+        model_select = self.query_one("#studio-model", Select)
+        if profile.get("model"):
+            model_select.value = profile["model"]
+            
+        temp_input = self.query_one("#studio-temp", Input)
+        if profile.get("temperature") is not None:
+            temp_input.value = str(profile["temperature"])
+            
+        ai_opts = profile.get("ai_studio_options", {})
+        
+        try:
+            self.query_one("#studio-thinking", Select).value = ai_opts.get("thinking_level", "high")
+            self.query_one("#studio-structured", Switch).value = ai_opts.get("structured_outputs", False)
+            self.query_one("#studio-code", Switch).value = ai_opts.get("code_execution", False)
+            self.query_one("#studio-function", Switch).value = ai_opts.get("function_calling", False)
+            self.query_one("#studio-gsearch", Switch).value = ai_opts.get("grounding_google_search", True)
+            self.query_one("#studio-bsearch", Switch).value = ai_opts.get("grounding_brave_search", False)
+            self.query_one("#studio-msearch", Switch).value = ai_opts.get("grounding_local_memory", False)
+            self.query_one("#studio-exclusionary", Switch).value = ai_opts.get("exclusionary_search", False)
+            self.query_one("#studio-funnel", Switch).value = ai_opts.get("funnel_search", False)
+            self.query_one("#studio-gmaps", Switch).value = ai_opts.get("grounding_google_maps", False)
+            self.query_one("#studio-url", Switch).value = ai_opts.get("url_context", False)
+            self.query_one("#studio-stop", Input).value = ai_opts.get("stop_sequence", "")
+            self.query_one("#studio-output-len", Input).value = str(ai_opts.get("output_length", "8192"))
+            self.query_one("#studio-top-p", Input).value = str(ai_opts.get("top_p", "0.95"))
         except Exception:
             pass
             
@@ -761,12 +927,12 @@ class AgentStudioChatScreen(ModalScreen):
                 self.query_one("#studio-code", Switch).value = ai_options.get("code_execution", False)
                 self.query_one("#studio-function", Switch).value = ai_options.get("function_calling", False)
                 
-                self.query_one("#studio-gsearch", Switch).value = ai_options.get("triple_google", True)
-                self.query_one("#studio-bsearch", Switch).value = ai_options.get("triple_brave", False)
-                self.query_one("#studio-msearch", Switch).value = ai_options.get("triple_local", False)
-                self.query_one("#studio-exclusionary", Switch).value = ai_options.get("exclusionary", False)
-                self.query_one("#studio-funnel", Switch).value = ai_options.get("funnel", False)
-                self.query_one("#studio-gmaps", Switch).value = ai_options.get("google_maps", False)
+                self.query_one("#studio-gsearch", Switch).value = ai_options.get("grounding_google_search", True)
+                self.query_one("#studio-bsearch", Switch).value = ai_options.get("grounding_brave_search", False)
+                self.query_one("#studio-msearch", Switch).value = ai_options.get("grounding_local_memory", False)
+                self.query_one("#studio-exclusionary", Switch).value = ai_options.get("exclusionary_search", False)
+                self.query_one("#studio-funnel", Switch).value = ai_options.get("funnel_search", False)
+                self.query_one("#studio-gmaps", Switch).value = ai_options.get("grounding_google_maps", False)
                 self.query_one("#studio-url", Switch).value = ai_options.get("url_context", False)
                 
                 self.query_one("#studio-stop", Input).value = ai_options.get("stop_sequence", "")
@@ -813,12 +979,12 @@ class AgentStudioChatScreen(ModalScreen):
                     "studio-structured": "structured_outputs",
                     "studio-code": "code_execution",
                     "studio-function": "function_calling",
-                    "studio-gsearch": "triple_google",
-                    "studio-bsearch": "triple_brave",
-                    "studio-msearch": "triple_local",
-                    "studio-exclusionary": "exclusionary",
-                    "studio-funnel": "funnel",
-                    "studio-gmaps": "google_maps",
+                    "studio-gsearch": "grounding_google_search",
+                    "studio-bsearch": "grounding_brave_search",
+                    "studio-msearch": "grounding_local_memory",
+                    "studio-exclusionary": "exclusionary_search",
+                    "studio-funnel": "funnel_search",
+                    "studio-gmaps": "grounding_google_maps",
                     "studio-url": "url_context"
                 }
                 if s_id in key_map:
@@ -910,18 +1076,89 @@ class AgentStudioChatScreen(ModalScreen):
     @on(Input.Submitted, "#chat-rename-input")
     def on_chat_renamed(self, event: Input.Submitted) -> None:
         new_name = event.value.strip()
-        if new_name:
+        self._process_rename(new_name)
+        
+    @on(events.Blur)
+    def handle_blur(self, event: events.Blur) -> None:
+        if event.widget and event.widget.id == "chat-rename-input":
+            input_widget = self.query_one("#chat-rename-input", Input)
+            new_name = input_widget.value.strip()
+            self._process_rename(new_name)
+
+    def _process_rename(self, new_name: str) -> None:
+        if new_name and new_name != self.active_chat_name:
+            old_name = self.active_chat_name
             self.active_chat_name = new_name
+            
+            # Restart agent with the new name so it doesn't crash writing to the old folder
+            # IMPORTANT: Terminate the agent BEFORE renaming to release file locks on Windows
+            if getattr(self, 'session_task', None):
+                try:
+                    self.session_task.terminate()
+                except Exception:
+                    pass
+                self.session_task = None
+                
+            self._rename_chat_session_folders(old_name, new_name)
             self.notify(f"Chat renamed to: {self.active_chat_name}")
             self._save_dict_profile()
+            
+            # Repopulate the session dropdown so the new name appears
+            self._refresh_session_dropdown()
+            
+            self.action_start_chat(None)
+            
+    def _rename_chat_session_folders(self, old_name: str, new_name: str) -> None:
+        import shutil
+        from maccre_core.utils.path_resolver import get_datacenter_path
+        old_id = f"studio_session_{old_name}"
+        new_id = f"studio_session_{new_name}"
+        clean_old = old_name
+        clean_new = new_name
+        
+        try:
+            # 1. 02_Dynamic_Context
+            old_dyn = get_datacenter_path("02_Dynamic_Context", f"ChatStudioSessions/{clean_old}-Chat")
+            new_dyn = get_datacenter_path("02_Dynamic_Context", f"ChatStudioSessions/{clean_new}-Chat")
+            if old_dyn.exists():
+                old_dyn.rename(new_dyn)
+                # rename dict file inside
+                old_dict = new_dyn / f"ChatStudio-{clean_old}.dict"
+                if old_dict.exists():
+                    old_dict.rename(new_dyn / f"ChatStudio-{clean_new}.dict")
+                    
+            # 2. 04_Code_Artifacts
+            old_art = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{clean_old}-Chat")
+            new_art = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{clean_new}-Chat")
+            if old_art.exists():
+                old_art.rename(new_art)
+                
+            # 3. 03_Agent_Ledgers
+            old_ledg = get_datacenter_path("03_Agent_Ledgers", f"ChatStudioSessions/{clean_old}-Chat")
+            new_ledg = get_datacenter_path("03_Agent_Ledgers", f"ChatStudioSessions/{clean_new}-Chat")
+            if old_ledg.exists():
+                old_ledg.rename(new_ledg)
+                # rename all log files inside
+                for f in new_ledg.iterdir():
+                    if f.name.startswith(f"{clean_old}-"):
+                        f.rename(new_ledg / f.name.replace(f"{clean_old}-", f"{clean_new}-"))
+        except Exception as e:
+            self.notify(f"Could not rename folders (File may be open): {e}", severity="error")
+        # Update active job id if currently active
+        if hasattr(self, 'active_job_id') and self.active_job_id == old_id:
+            self.active_job_id = new_id
             
     def _save_dict_profile(self) -> str:
         import json
         from maccre_core.utils.path_resolver import get_datacenter_path
-        ledgers_dir = get_datacenter_path("03_Agent_Ledgers", f"studio_session_{self.active_chat_name}")
-        ledgers_dir.mkdir(parents=True, exist_ok=True)
+        job_id = f"studio_session_{self.active_chat_name}"
+        clean_id = self.active_chat_name
+        # 02_Dynamic_Context\ChatStudioSessions\[clean_id]-Chat\
+        dict_dir = get_datacenter_path("02_Dynamic_Context", f"ChatStudioSessions/{clean_id}-Chat")
+        dict_dir.mkdir(parents=True, exist_ok=True)
         
-        dict_path = ledgers_dir / f"{self.active_chat_name}-dictionary.dict"
+        # ChatStudio-[clean_id].dict
+        dict_path = dict_dir / f"ChatStudio-{clean_id}.dict"
         try:
             with open(dict_path, "w", encoding="utf-8") as f:
                 json.dump(self.local_profiles, f, indent=4)
@@ -937,6 +1174,16 @@ class AgentStudioChatScreen(ModalScreen):
             self.notify("Select at least one agent to start chat.", severity="warning")
             return
             
+        btn = self.query_one("#btn-start-studio-chat", Button)
+        is_update = btn.label.plain == "Update Chat"
+        
+        if is_update and getattr(self, 'session_task', None):
+            try:
+                self.session_task.terminate()
+            except Exception:
+                pass
+            self.session_task = None
+            
         dict_path = self._save_dict_profile()
         agent_name = sel_agents[0]
         
@@ -947,13 +1194,20 @@ class AgentStudioChatScreen(ModalScreen):
         from pathlib import Path
         from maccre_core.utils.path_resolver import get_datacenter_path
         
+        try:
+            project_val = self.query_one("#studio-project-select", Select).value
+            target_project = project_val if project_val else self.app.active_project
+        except Exception:
+            target_project = self.app.active_project
+            
+        os.environ["MACCRE_ACTIVE_PROJECT"] = target_project
+
         job_id = f"studio_session_{self.active_chat_name}"
+        clean_id = self.active_chat_name
         self.active_job_id = job_id
-        payload_path = str(get_datacenter_path(f"02_Dynamic_Context/{job_id}_payload.txt"))
+        payload_path = str(get_datacenter_path(f"02_Dynamic_Context/{clean_id}_payload.txt"))
         Path(payload_path).parent.mkdir(parents=True, exist_ok=True)
         Path(payload_path).write_text("[SYSTEM] WAIT_FOR_USER", encoding="utf-8")
-        
-        os.environ["MACCRE_ACTIVE_PROJECT"] = self.app.active_project
         db_path = get_datacenter_path("swarm_queue.db")
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         
@@ -983,7 +1237,7 @@ class AgentStudioChatScreen(ModalScreen):
         
         root_dir = str(Path(__file__).parent.parent.resolve())
         env["PYTHONPATH"] = root_dir + (os.pathsep + env.get("PYTHONPATH", "") if "PYTHONPATH" in env else "")
-        env["MACCRE_ACTIVE_PROJECT"] = self.app.active_project
+        env["MACCRE_ACTIVE_PROJECT"] = target_project
         env["MACCRE_LIVE_OVERRIDE"] = "1"
         env["MACCRE_CUSTOM_DICT"] = dict_path
             
@@ -1007,11 +1261,15 @@ class AgentStudioChatScreen(ModalScreen):
         except FileNotFoundError:
             pass
             
-        self.notify("Started Studio Chat!")
+        self.notify("Updated Studio Chat!" if is_update else "Started Studio Chat!")
         
         log = self.query_one("#chat-arena-log", RichLog)
-        log.clear()
-        log.write(f"\n[italic dim]System: {agent_name} has entered the chat.[/italic dim]")
+        if not is_update:
+            log.write(f"\n[italic dim]System: {agent_name} has entered the chat.[/italic dim]")
+        else:
+            log.write(f"\n[italic dim]System: Chat updated. Active agent is now {agent_name}.[/italic dim]")
+            
+        btn.label = "Update Chat"
         
     def action_submit_chat(self) -> None:
         self._send_chat_message()
@@ -1045,13 +1303,29 @@ class AgentStudioChatScreen(ModalScreen):
         message_bus = JsonFileQueue("live_session_bus")
         payload = {
             "job_id": getattr(self, "active_job_id", ""),
-            "speaker": "User",
+            "speaker": "You",
             "text": msg
         }
         message_bus.publish(f"MACCRE.ROUTE.{agent_name}", payload)
         
     @on(Button.Pressed, "#btn-close-studio-chat")
     def action_close(self, event: Button.Pressed) -> None:
+        if getattr(self, 'session_task', None):
+            try:
+                self.session_task.terminate()
+            except Exception:
+                pass
+            self.session_task = None
+            
+        try:
+            # Sync the selected project to the main UI before dismissing
+            project_select = self.query_one("#studio-project-select", Select)
+            if project_select.value:
+                self.app.active_project = project_select.value
+                self.app.update_app_title()
+        except Exception:
+            pass
+            
         self.dismiss(None)
         
     @on(Button.Pressed, "#btn-expand-input")

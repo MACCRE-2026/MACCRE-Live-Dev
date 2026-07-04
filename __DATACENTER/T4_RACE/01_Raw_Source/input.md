@@ -1,1 +1,0 @@
-Topology test T4. One fast branch, one slow branch. MERGE waits for both.

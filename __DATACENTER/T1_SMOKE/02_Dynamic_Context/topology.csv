@@ -1,2 +1,0 @@
-Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds
-SOLO,TestAgent,,STOP,0.7,"You are node SOLO in topology test T1. Confirm receipt of this payload, state your node name, and call write_file to save your output to: 04_Code_Artifacts/T1_SMOKE/solo_output.md",none,FAILED,1,04_Code_Artifacts/T1_SMOKE/solo_output.md,,,0

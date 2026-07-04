@@ -1,2 +1,0 @@
-Agent_Name,Model,Tools_Allowed,System_Prompt,Description
-MemoryReporter,gemini-2.5-pro,iterative_scoped_search|write_file,"You are MemoryReporter, a MACCREv2 swarm agent.",Investigates the database and compiles a report on recent additions vs existing knowledge.

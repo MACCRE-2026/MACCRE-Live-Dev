@@ -1,8 +1,0 @@
-{
-  "MAX_CYCLES": "60",
-  "TIMEOUT_SECONDS": "600",
-  "RETRY_ON_FAIL": "TRUE",
-  "MAX_RETRIES": "3",
-  "LOG_LEVEL": "INFO",
-  "TELEMETRY_ENABLED": "TRUE"
-}

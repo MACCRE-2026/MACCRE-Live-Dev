@@ -929,10 +929,17 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
     from datetime import datetime, timezone  # noqa: PLC0415
     import sqlite3
 
-    ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
-    artifact_dir = get_datacenter_path("04_Code_Artifacts", job_id)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    output_path = artifact_dir / "unified_session_ledger.md"
+    if job_id.startswith("studio_session_"):
+        clean_id = job_id.replace("studio_session_", "", 1)
+        ledger_dir = get_datacenter_path("03_Agent_Ledgers", f"ChatStudioSessions/{clean_id}-Chat")
+        artifact_dir = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{clean_id}-Chat")
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        output_path = artifact_dir / "unified_chat_ledger.md"
+    else:
+        ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+        artifact_dir = get_datacenter_path("04_Code_Artifacts", job_id)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        output_path = artifact_dir / "unified_session_ledger.md"
 
     # ── Collect per-node metadata from task_queue ─────────────────────────
     node_meta: list[dict[str, Any]] = []
@@ -960,6 +967,9 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
                 
     def get_ledger_sort_key(item: tuple[Path, float]) -> str:
         fpath, mtime = item
+        if job_id.startswith("studio_session_"):
+            return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            
         fname = fpath.stem
         for m in node_meta:
             if m.get("current_node", "") in fname:

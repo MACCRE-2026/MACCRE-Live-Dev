@@ -56,3 +56,10 @@ desktop.ini
 *.log
 build_pipeline.log
 dist_omni/
+
+# User Ignored Folders
+_legacy/
+scratch/
+scripts/
+tests/
+user_scripts/

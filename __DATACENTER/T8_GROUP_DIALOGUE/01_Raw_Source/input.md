@@ -1,1 +1,0 @@
-Topology test T8. Topic: 'Should fully autonomous multi-agent AI systems be deployed without human oversight?' BRIEFER frames the question. GROUP_DEBATE runs a structured 2-round group discussion. SYNTHESIZER reads the full transcript and produces a conclusion.

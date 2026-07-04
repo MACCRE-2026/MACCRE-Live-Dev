@@ -98,13 +98,16 @@ class GeminiResponse(InferenceResponse):
 
     @property
     def scratchpad_thought(self) -> str:
-        """Extracts native 'thought' blocks from Gemini 2.0 Thinking models."""
+        """Extracts native 'thought' blocks from Gemini Thinking models."""
         try:
             candidate = self._body["candidates"][0]
             thoughts = []
             for part in candidate["content"]["parts"]:
-                if "text" in part and part.get("thought"):
-                    thoughts.append(str(part["text"]))
+                if "thought" in part:
+                    if isinstance(part["thought"], str):
+                        thoughts.append(part["thought"])
+                    elif part["thought"] is True and "text" in part:
+                        thoughts.append(str(part["text"]))
             return "\n\n".join(thoughts)
         except (KeyError, IndexError, TypeError):
             pass
@@ -209,6 +212,7 @@ def _build_request_body(
     response_schema: dict[str, Any] | None = None,
     safety_settings: list[dict[str, str]] | None = None,
     max_output_tokens: int | None = None,
+    thinking_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"contents": contents}
 
@@ -218,6 +222,10 @@ def _build_request_body(
     gen_config: dict[str, Any] = {"temperature": temperature}
     if max_output_tokens is not None:
         gen_config["maxOutputTokens"] = max_output_tokens
+    if thinking_config is not None:
+        tc = dict(thinking_config)
+        tc["includeThoughts"] = True
+        gen_config["thinkingConfig"] = tc
     body["generationConfig"] = gen_config
 
     if response_schema:
@@ -234,7 +242,7 @@ def _build_request_body(
 
     tool_config: dict[str, Any] = {}
     if disable_auto_function_calling and tool_declarations:
-        tool_config["functionCallingConfig"] = {"mode": "ANY"}
+        tool_config["functionCallingConfig"] = {"mode": "AUTO"}
     if search_grounding and tool_declarations:
         tool_config["includeServerSideToolInvocations"] = True
     if tool_config:
@@ -425,6 +433,7 @@ class GeminiClient(InferenceClient):
         safety_settings: list[dict[str, str]] | None = None,
         max_output_tokens: int | None = None,
         cached_content_uri: str | None = None,
+        thinking_config: dict[str, Any] | None = None,
     ) -> GeminiResponse:
         """Standard (non-streaming) generate call.
 
@@ -447,6 +456,7 @@ class GeminiClient(InferenceClient):
             response_schema=response_schema,
             safety_settings=safety_settings,
             max_output_tokens=max_output_tokens,
+            thinking_config=thinking_config,
         )
         if cached_content_uri:
             body["cachedContent"] = cached_content_uri

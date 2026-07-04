@@ -149,7 +149,7 @@ async def run_mega_test() -> None:
         # 1. Epistemic OSINT
         print("\n[1/6] Executing EPISTEMIC_OSINT...")
         osint_sys = load_persona("EPISTEMIC_OSINT")
-        osint_out, cost = router.generate("gemini-2.5-flash", raw_source, osint_sys, "none", 0.3)
+        osint_out, cost, _ = router.generate("gemini-2.5-flash", raw_source, osint_sys, "none", 0.3)
         total_cost += cost
         write_ledger("01_EPISTEMIC_OSINT", osint_out)
         logger.info("OSINT Complete", extra={"extra_data": {"cost": cost}})
@@ -157,7 +157,7 @@ async def run_mega_test() -> None:
         # 2. Strategic Forecaster
         print("\n[2/6] Executing STRATEGIC_FORECASTER...")
         forecast_sys = load_persona("STRATEGIC_FORECASTER")
-        forecast_out, cost = router.generate(
+        forecast_out, cost, _ = router.generate(
             "gemini-2.5-pro", raw_source, forecast_sys, "none", 0.7
         )
         total_cost += cost
@@ -170,7 +170,7 @@ async def run_mega_test() -> None:
         synth_payload = (
             f"RAW SOURCE:\n{raw_source}\n\nOSINT:\n{osint_out}\n\nFORECAST:\n{forecast_out}"
         )
-        synth1_out, cost = router.generate(
+        synth1_out, cost, _ = router.generate(
             "gemini-2.5-flash", synth_payload, synth_sys, "none", 0.1
         )
         total_cost += cost

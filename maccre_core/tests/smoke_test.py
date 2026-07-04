@@ -214,7 +214,7 @@ def run_smoke_test() -> bool:
 
             # Inference
             t0 = time.time()
-            output, cost = router.generate(
+            output, cost, _ = router.generate(
                 model_name=str(cfg.get("model", _SMOKE_MODEL)),
                 payload=(
                     "SMOKE TEST: Respond with exactly five words "
@@ -242,9 +242,9 @@ def run_smoke_test() -> bool:
 
             # Memory extraction
             try:
-        memory.extract_from_canonized_ledger(str(ledger_path), job_id)
-    except AttributeError:
-        pass
+                memory.extract_from_canonized_ledger(str(ledger_path), job_id)
+            except AttributeError:
+                pass
 
             # Route to STOP (same as swarm_worker)
             broker.route_task(

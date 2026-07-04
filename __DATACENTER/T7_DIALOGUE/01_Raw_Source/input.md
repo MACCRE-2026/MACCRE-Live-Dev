@@ -1,1 +1,0 @@
-Topology test T7. Topic for debate: 'Is a fully autonomous multi-agent AI system safer with static topologies or adaptive conditional routing?' BRIEFER will summarise the question, DEBATER will debate it, VERDICT will decide.

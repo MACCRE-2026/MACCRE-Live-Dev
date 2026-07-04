@@ -1,3 +1,0 @@
-Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds
-VALID_NODE,TestAgent,,STOP,0.7,Valid node in T6. Should never run — pre-flight must block launch.,none,FAILED,1,04_Code_Artifacts/T6_VALIDATE/valid_output.md,,,0
-ORPHAN_NODE,TestAgent,,NONEXISTENT_TARGET,0.7,Orphan node — unreachable. Routes to a nonexistent target. Also waits for a ghost node.,GHOST_NODE,FAILED,1,,,,0

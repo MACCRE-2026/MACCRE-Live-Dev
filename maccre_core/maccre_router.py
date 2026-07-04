@@ -201,7 +201,8 @@ class UniversalRouter:
         conversation_history: list[dict[str, str]] | None = None,
         response_schema: Any | None = None,
         expect_multiple_reads: bool = False,
-    ) -> tuple[str, float]:
+        thinking_level: str = "none",
+    ) -> tuple[str, float, str]:
         """Universal Dispatcher. Routes to the correct vendor based on ``model_name``.
 
         Args:
@@ -328,6 +329,13 @@ class UniversalRouter:
                         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                     ]
                     
+
+                    _thinking_config = None
+                    if thinking_level.lower() == "low":
+                        _thinking_config = {"thinkingBudget": 1024}
+                    elif thinking_level.lower() == "high":
+                        _thinking_config = {"thinkingBudget": 4096}
+                    
                     response: GeminiResponse = self.gemini_client.generate_content(
                         model=_attempt_model,
                         contents=_req_contents,
@@ -340,6 +348,7 @@ class UniversalRouter:
                         safety_settings=_safety_off,
                         max_output_tokens=8192,
                         cached_content_uri=_cached_uri,
+                        thinking_config=_thinking_config,
                     )
                     _latency_ms = (_t0.monotonic() - _t0_start) * 1000.0
 
@@ -372,6 +381,8 @@ class UniversalRouter:
                     if self._sentinel is not None:
                         self._sentinel.record_success(_attempt_model, latency_ms=_latency_ms)
 
+                    api_thought = response.scratchpad_thought
+
                     # Check if the model returned a function call
                     fc = response.function_call
                     
@@ -381,7 +392,7 @@ class UniversalRouter:
                             args_json = json.dumps(fc_args)
                         except Exception:
                             args_json = str(fc_args)
-                        return (f"[TOOL CALL REQUESTED: {fc_name} - {args_json}]", cost)
+                        return (f"[TOOL CALL REQUESTED: {fc_name} - {args_json}]", cost, api_thought)
 
                     final_text = response.text
                     if _attempt_model != model_name:
@@ -389,7 +400,7 @@ class UniversalRouter:
                             "[ROUTER] '%s' served by failover model '%s'.",
                             model_name, _attempt_model,
                         )
-                    return (final_text, cost)
+                    return (final_text, cost, api_thought)
 
                 except Exception as exc:
                     if self._sentinel is not None:
@@ -443,7 +454,7 @@ class UniversalRouter:
                     output += block.text
                 elif block.type == "tool_use":
                     output += f"\n[TOOL CALL REQUESTED: {block.name} with args {block.input}]"
-            return (output, 0.0)
+            return (output, 0.0, "")
 
         # ── OpenAI Schema Tools (Used natively by OpenAI, Groq, and Ollama) ───
         oai_tools = []
@@ -483,8 +494,8 @@ class UniversalRouter:
             res = self.openai_client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
             msg = res.choices[0].message
             if msg.tool_calls:
-                return (f"[TOOL CALL REQUESTED: {msg.tool_calls[0].function.name} - {msg.tool_calls[0].function.arguments}]", 0.0)
-            return (msg.content or "", 0.0)
+                return (f"[TOOL CALL REQUESTED: {msg.tool_calls[0].function.name} - {msg.tool_calls[0].function.arguments}]", 0.0, "")
+            return (msg.content or "", 0.0, "")
             
         # ── Groq ──────────────────────────────────────────────────────────────
         elif "groq" in model_lower:
@@ -510,8 +521,8 @@ class UniversalRouter:
             res = self.groq_client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
             msg = res.choices[0].message
             if msg.tool_calls:
-                return (f"[TOOL CALL REQUESTED: {msg.tool_calls[0].function.name} - {msg.tool_calls[0].function.arguments}]", 0.0)
-            return (msg.content or "", 0.0)
+                return (f"[TOOL CALL REQUESTED: {msg.tool_calls[0].function.name} - {msg.tool_calls[0].function.arguments}]", 0.0, "")
+            return (msg.content or "", 0.0, "")
 
         # ── Edge Compute (Personal Cloud) ──────────────────────────────────────
         elif model_lower.startswith("edge-"):
@@ -548,8 +559,8 @@ class UniversalRouter:
                 
             msg_dict = _edge_data.get("choices", [{}])[0].get("message", {})
             if "tool_calls" in msg_dict and msg_dict["tool_calls"]:
-                return (f"[LOCAL TOOL CALL REQUESTED: {json.dumps(msg_dict['tool_calls'])}]", 0.0)
-            return (str(msg_dict.get("content", "")), 0.0)
+                return (f"[LOCAL TOOL CALL REQUESTED: {json.dumps(msg_dict['tool_calls'])}]", 0.0, "")
+            return (str(msg_dict.get("content", "", "")), 0.0)
 
         # ── Ollama (local air-gap) ─────────────────────────────────────────────
         # Ollama tag format always has a colon: gemma3:4b, llama3.1:8b
@@ -581,8 +592,8 @@ class UniversalRouter:
                 raise ValueError(f"Ollama Error ({_e.code}): {_e.read().decode('utf-8', errors='replace')[:200]}") from _e
             msg_dict = _ollama_data.get("message", {})
             if "tool_calls" in msg_dict:
-                return (f"[LOCAL TOOL CALL REQUESTED: {json.dumps(msg_dict['tool_calls'])}]", 0.0)
-            return (str(msg_dict.get("content", "")), 0.0)
+                return (f"[LOCAL TOOL CALL REQUESTED: {json.dumps(msg_dict['tool_calls'])}]", 0.0, "")
+            return (str(msg_dict.get("content", "", "")), 0.0)
 
         # ── Google AI API-hosted Gemma (gemma-4-31b-it, gemma-3-27b-it …) ──────
         # Dash-format Gemma IDs are served by generativelanguage.googleapis.com
@@ -626,7 +637,7 @@ class UniversalRouter:
                             pass
                     if self._sentinel is not None:
                         self._sentinel.record_success(_amodel)
-                    return (_gr.text, _gc_cost)
+                    return (_gr.text, _gc_cost, "")
                 except Exception as _gex:
                     if self._sentinel is not None:
                         self._sentinel.record_error(_amodel, error=str(_gex))

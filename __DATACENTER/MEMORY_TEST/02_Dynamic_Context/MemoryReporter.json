@@ -1,6 +1,0 @@
-{
-  "agent_name": "MemoryReporter",
-  "instructions": "You are MemoryReporter, a MACCREv2 swarm agent.",
-  "temperature": 0.7,
-  "context_notes": "Investigates the database and compiles a report on recent additions vs existing knowledge."
-}

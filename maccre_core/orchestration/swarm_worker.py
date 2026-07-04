@@ -159,6 +159,16 @@ class UniversalSwarmWorker:
         message_bus = JsonFileQueue("live_session_bus")
         override_text = []
         
+        # Setup session path for thoughts
+        clean_id = job_id.replace("studio_session_", "", 1) if job_id.startswith("studio_session_") else job_id
+        ledg_dir = get_datacenter_path("03_Agent_Ledgers", f"ChatStudioSessions/{clean_id}-Chat")
+        ledg_dir.mkdir(parents=True, exist_ok=True)
+        thoughts_log_path = ledg_dir / f"{current_node}_agent.log"
+        
+        def write_thought(msg: str):
+            with open(thoughts_log_path, "a", encoding="utf-8") as tf:
+                tf.write(f"\n{msg}\n")
+        
         def listener_thread():
             while not self._shutdown_flag:
                 try:
@@ -167,7 +177,7 @@ class UniversalSwarmWorker:
                         if payload.get("job_id") == job_id:
                             speaker = payload.get("speaker", "User")
                             text = payload.get("text", "")
-                            override_text.append(f"[{speaker}]: {text}")
+                            override_text.append(f"**{speaker}**: {text}\n\n---\n\n")
                             
                     time.sleep(0.1)
                 except Exception as e:
@@ -196,15 +206,34 @@ class UniversalSwarmWorker:
                             ai_options.update(agent_config.get("ai_studio_options", {}))
                         else:
                             ai_options = agent_config.get("ai_studio_options", {})
+                            
+                        # Inject search tools based on UI toggles
+                        _t_list = [t.strip() for t in tools_str.replace("|", ",").split(",") if t.strip() and t.strip() != "none"]
+                        if ai_options.get("grounding_google_search"):
+                            if "google_search" not in _t_list: _t_list.append("google_search")
+                        elif "google_search" in _t_list:
+                            _t_list.remove("google_search")
+                            
+                        if ai_options.get("grounding_brave_search"):
+                            if "search_web" not in _t_list: _t_list.append("search_web")
+                        elif "search_web" in _t_list:
+                            _t_list.remove("search_web")
+                            
+                        tools_str = ",".join(_t_list) if _t_list else "none"
             except Exception as e:
                 logger.error(f"Failed to load chat .dict: {e}")
                 
-        # For the interactive loop, the payload keeps growing
-        session_history = f"[SYSTEM_PAYLOAD]\n{current_payload}\n[/SYSTEM_PAYLOAD]\n\n"
-        
         is_first_turn = True
         total_session_cost = 0.0
         agent_turn = False
+        
+        # Load from unified ledger if it exists to maintain memory across restarts
+        art_dir = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{clean_id}-Chat")
+        unified_path = art_dir / "unified_chat_ledger.md"
+        if unified_path.exists():
+            session_history = unified_path.read_text(encoding="utf-8")
+        else:
+            session_history = f"[SYSTEM_PAYLOAD]\n{current_payload}\n[/SYSTEM_PAYLOAD]\n\n"
         
         try:
             while True:
@@ -246,14 +275,24 @@ class UniversalSwarmWorker:
                             # Run synchronous generation
                             # Since this is an async worker originally, we wrap synchronous router 
                             # Or we just call the router since router IS sync!
-                            raw_response, loop_cost = self.router.generate(
+                            raw_response, loop_cost, api_thought = self.router.generate(
                                 model_name=model_id,
                                 payload=loop_payload,
                                 system_prompt=system_prompt,
                                 tools_str=tools_str,
                                 temperature=temperature,
-                                expect_multiple_reads=True
+                                expect_multiple_reads=True,
+                                thinking_level=ai_options.get('thinking_level', 'none')
                             )
+                            if api_thought:
+                                write_thought(f"<api_thought>\n{api_thought}\n</api_thought>")
+                                
+                            # Extract Prompt-Based Reasoning thoughts
+                            import re
+                            pbr_thoughts = re.findall(r'<thought>(.*?)</thought>', raw_response, re.DOTALL)
+                            for t in pbr_thoughts:
+                                write_thought(f"<thought>\n{t.strip()}\n</thought>")
+                                
                             current_loop_cost += loop_cost
                             
                             # Parse tools
@@ -265,6 +304,7 @@ class UniversalSwarmWorker:
                                 agent_id=current_node
                             )
                             if did_fire:
+                                write_thought(f"<tool_call>\n{raw_response}\n</tool_call>")
                                 loop_payload = new_payload
                                 # Keep iterating
                             else:
@@ -276,11 +316,12 @@ class UniversalSwarmWorker:
                             final_response = f"Error during loop execution: {e}"
                             break
                             
+                    if not final_response:
+                        final_response = "[SYSTEM] Error: Agent exceeded maximum tool iterations or failed to produce an answer."
+                        
                     # Finished Loop! Append to history
                     total_session_cost += current_loop_cost
-                    session_history += f"\n[{current_node}]: {final_response}\n"
-                    
-                    # Log thoughts/tools to agent.log instead of ledger (handled by dual-logger)
+                    session_history += f"**{current_node}**: {final_response}\n\n---\n\n"
                     
                     # Publish final message to TUI
                     chat_payload = {
@@ -290,6 +331,15 @@ class UniversalSwarmWorker:
                         "cost": current_loop_cost
                     }
                     message_bus.publish("MACCRE.CHAT", chat_payload)
+                    
+                    # Write unified ledger directly
+                    art_dir = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{clean_id}-Chat")
+                    art_dir.mkdir(parents=True, exist_ok=True)
+                    unified_path = art_dir / "unified_chat_ledger.md"
+                    with open(unified_path, "w", encoding="utf-8") as f:
+                        f.write(session_history)
+                    logger.info(f"[{current_node}] Live-updated unified ledger: {unified_path}")
+                        
                     agent_turn = False
                     
                 time.sleep(0.5)
@@ -334,7 +384,7 @@ class UniversalSwarmWorker:
                             f"The current date is {today}. "
                             "Return ONLY valid JSON in this exact format: {\"domains\": [\"domain1.com\"], \"keywords\": [\"word1\"]}"
                         )
-                        out, cst = self.router.generate(
+                        out, cst, _ = self.router.generate(
                             model_name=model_id,
                             payload=current_payload,
                             system_prompt=prompt,
@@ -352,7 +402,7 @@ class UniversalSwarmWorker:
                                 keywords = parsed.get("keywords", [])
                                 
                                 # Extract a base query
-                                q_out, q_cst = self.router.generate(
+                                q_out, q_cst, _ = self.router.generate(
                                     model_name=model_id, 
                                     payload=current_payload, 
                                     system_prompt=f"{system_prompt}\n\n[TASK] Extract a concise 1-sentence search query for this topic. Return ONLY the query string, no quotes.", 
@@ -393,7 +443,7 @@ class UniversalSwarmWorker:
                             f"The current date is {today}. "
                             "Return ONLY valid JSON in this format: {\"entities\": [\"Entity 1\"]}"
                         )
-                        out, cst = self.router.generate(
+                        out, cst, _ = self.router.generate(
                             model_name=model_id,
                             payload=current_payload,
                             system_prompt=prompt,
@@ -422,7 +472,7 @@ class UniversalSwarmWorker:
                             logger.info(f"[{agent_id}] Executing Additive Pre-injection...")
                             import datetime
                             today = datetime.datetime.now().strftime("%Y-%m-%d")
-                            q_out, q_cst = self.router.generate(
+                            q_out, q_cst, _ = self.router.generate(
                                 model_name=model_id, 
                                 payload=current_payload, 
                                 system_prompt=f"{system_prompt}\n\n[TASK] Extract a concise 1-sentence search query to fulfill the user's request based on your persona. The current date is {today}. Return ONLY the query string.", 
@@ -507,20 +557,29 @@ class UniversalSwarmWorker:
             job_dir = Path(ledger_path).parent
             job_dir.mkdir(parents=True, exist_ok=True)
         else:
-            job_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+            if job_id.startswith("studio_session_"):
+                clean_id = job_id.replace("studio_session_", "", 1)
+                job_dir = get_datacenter_path("03_Agent_Ledgers", f"ChatStudioSessions/{clean_id}-Chat")
+            else:
+                job_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
             job_dir.mkdir(parents=True, exist_ok=True)
             ledger_path = str(job_dir / f"{current_node}_{row_id}.md")
             agent_log_path = str(job_dir / f"{current_node}_{row_id}_agent.log")
 
         # ── Dual-Stream File Logger ───────────────────────────────────────────
         import sys
-
         orig_stdout = sys.stdout
         orig_stderr = sys.stderr
-        dual_out = _FileTee(agent_log_path, orig_stdout)
-        dual_err = _FileTee(agent_log_path, orig_stderr)
-        sys.stdout = dual_out  # type: ignore[assignment]
-        sys.stderr = dual_err  # type: ignore[assignment]
+        
+        is_studio_session = job_id.startswith("studio_session_")
+        dual_out = None
+        dual_err = None
+        
+        if not is_studio_session:
+            dual_out = _FileTee(agent_log_path, orig_stdout)
+            dual_err = _FileTee(agent_log_path, orig_stderr)
+            sys.stdout = dual_out  # type: ignore[assignment]
+            sys.stderr = dual_err  # type: ignore[assignment]
 
         try:
             logger.info(f"\n[{AGENT_ID}] Lock Acquired: job={job_id} | row={row_id} | Node: [{current_node}]")
@@ -621,7 +680,11 @@ class UniversalSwarmWorker:
             # substituted with the actual job_id at runtime. This guarantees
             # every swarm run writes to its own isolated subdirectory so
             # re-running the same topology never overwrites prior artifacts.
-            _artifacts_dir = get_datacenter_path(f"04_Code_Artifacts/{job_id}")
+            if job_id.startswith("studio_session_"):
+                _clean_id = job_id.replace("studio_session_", "", 1)
+                _artifacts_dir = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{_clean_id}-Chat")
+            else:
+                _artifacts_dir = get_datacenter_path(f"04_Code_Artifacts/{job_id}")
             _artifacts_dir.mkdir(parents=True, exist_ok=True)
 
             # Substitute {SESSION_ID} in the instruction text
@@ -1036,14 +1099,17 @@ All file paths must strictly resolve to these five silos:
                 for turn_idx in range(max_tool_turns + 1):
                     is_last: bool = (turn_idx >= max_tool_turns)
 
-                    output_text, turn_cost = self.router.generate(
+                    output_text, turn_cost, api_thought = self.router.generate(
                         model_name=model_id,
                         payload=current_payload,
                         system_prompt=system_prompt,
                         tools_str=tools_str,
                         temperature=float(node_config.get("temperature", 0.7)),
                         expect_multiple_reads=True,
+                        thinking_level=ai_options.get('thinking_level', 'none')
                     )
+                    if api_thought:
+                        d_logger.info(f"<api_thought>\n{api_thought}\n</api_thought>")
                     total_cost += turn_cost
 
                     did_fire, updated_prompt = self.tool_executor.run(
@@ -1077,7 +1143,7 @@ All file paths must strictly resolve to these five silos:
                             "You must now produce your complete final output as prose immediately. "
                             "Consolidate all findings from this session and write your structured output now.]"
                         )
-                        close_text, close_cost = self.router.generate(
+                        close_text, close_cost, _ = self.router.generate(
                             model_name=model_id,
                             payload=close_prompt,
                             system_prompt=system_prompt,
@@ -1156,11 +1222,19 @@ All file paths must strictly resolve to these five silos:
             # Captures every tool call + result verbatim for effectiveness auditing.
             if tool_audit_lines:
                 from datetime import datetime, timezone  # noqa: PLC0415
-                audit_path = Path(ledger_path).parent / f"thoughts_and_tools_{current_node}_{row_id}.md"
+                
+                if job_id.startswith("studio_session_"):
+                    audit_path = Path(ledger_path).parent / f"{job_id}-{AGENT_ID}_thoughts_tool-calls.log"
+                    mode = "a"
+                else:
+                    audit_path = Path(ledger_path).parent / f"thoughts_and_tools_{current_node}_{row_id}.md"
+                    mode = "w"
+                    
                 audit_ts = datetime.now(tz=timezone.utc).isoformat()
-                audit_header = f"# Thoughts and Tools Ledger — {current_node} | {job_id} | {audit_ts}\n\n"
+                audit_header = f"\n\n# Thoughts and Tools Ledger — {current_node} | {job_id} | {audit_ts}\n\n" if mode == "a" else f"# Thoughts and Tools Ledger — {current_node} | {job_id} | {audit_ts}\n\n"
                 audit_body = "\n\n".join(tool_audit_lines) + f"\n\n## FINAL OUTPUT\n{final_output_text}"
-                with open(audit_path, "w", encoding="utf-8") as af:
+                
+                with open(audit_path, mode, encoding="utf-8") as af:
                     af.write(audit_header + audit_body)
                 logger.info(f"[{AGENT_ID}] Thoughts and tools sidecar: {audit_path}")
 

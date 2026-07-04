@@ -83,7 +83,7 @@ class _AgentSession:
         if self.model == "manual":
             raise ManualInputRequired(participant_label=self.label)
 
-        response_text, cost = router.generate(
+        response_text, cost, _ = router.generate(
             model_name=self.model,
             payload=message,
             system_prompt=self.system_prompt,

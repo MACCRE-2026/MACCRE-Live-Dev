@@ -1,5 +1,0 @@
-Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds
-NODE_A,TestAgent,,NODE_B,0.7,You are NODE_A. Confirm receipt and pass a short message downstream. Call write_file to save output to: 04_Code_Artifacts/T2_FAILURE/node_a.md,none,FAILED,1,04_Code_Artifacts/T2_FAILURE/node_a.md,,,0
-NODE_B,TestAgent,invalid-model-t2-failtest-xyz9999,NODE_C,0.7,You are NODE_B. This node is INTENTIONALLY BROKEN for test T2. This text should never be sent to a model.,none,RECOVERY,1,,,,0
-NODE_C,TestAgent,,STOP,0.7,"You are NODE_C. If this executes, T2 FAILED — FAILURE_TARGET was not honoured.",none,FAILED,1,04_Code_Artifacts/T2_FAILURE/node_c_SHOULD_NOT_EXIST.md,,,0
-RECOVERY,TestAgent,,STOP,0.7,You are the RECOVERY node. NODE_B failed as expected. Confirm you received the failure payload and call write_file to save: 04_Code_Artifacts/T2_FAILURE/recovery.md,none,FAILED,1,04_Code_Artifacts/T2_FAILURE/recovery.md,,,0

@@ -1,1 +1,0 @@
-Begin group dialogue test

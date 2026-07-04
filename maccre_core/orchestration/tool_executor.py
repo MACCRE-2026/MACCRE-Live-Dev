@@ -196,6 +196,7 @@ class ToolExecutor(ToolDispatcherABC):
             )
         updated_prompt = (
             current_prompt
+            + f"\n\n[MODEL_ACTION]:\n{response_text}"
             + f"\n\n[SYSTEM_TOOL_CALLBACK - '{t_name}' Executed]: {result}"
             + sys_suffix
         )
