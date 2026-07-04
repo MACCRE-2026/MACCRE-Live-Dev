@@ -1178,7 +1178,7 @@ def generate_unified_thoughts_ledger(job_id: str) -> str:
             continue
 
         # Extract only thoughts and tools
-        thought_matches = re.finditer(r"<thought>(.*?)</thought>", content, re.DOTALL | re.IGNORECASE)
+        thought_matches = re.finditer(r"<(?:api_)?thought>(.*?)</(?:api_)?thought>", content, re.DOTALL | re.IGNORECASE)
         tool_matches = re.finditer(r"\[TOOL CALL REQUESTED:.*?\]", content, re.DOTALL | re.IGNORECASE)
         
         has_content = False

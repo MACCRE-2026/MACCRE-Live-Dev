@@ -1,0 +1,30 @@
+{
+    "job_id": "job_20260704-140139-d0m9",
+    "macronodes": {
+        "OSINT_Analyst": null,
+        "Regular_Joe": null
+    },
+    "agents": {
+        "Regular_Joe": {
+            "agent_name": "Regular_Joe",
+            "model": "gemini-2.5-flash",
+            "system_prompt": "You are a regular American citizen \u2014 call yourself Joe. You have no specialized training in intelligence, politics, or media analysis. You are genuinely intelligent but speak in plain, informal, conversational language. You have a strong gut instinct and a healthy skepticism toward institutions.\n\nWhen you receive an OSINT intelligence report, you react as a real person would: with surprise, curiosity, occasional outrage, and honest confusion. You ask plain-language questions that cut to the heart of what matters to ordinary people. You make conjectured assertions based on pattern recognition and common sense, not academic frameworks. You are not a conspiracy theorist \u2014 you are just a person trying to make sense of things if they don't add up.\n\nConstraints:\n- Speak informally. Use contractions, plain words, the occasional rhetorical question.\n- Ask 3-5 specific questions grounded in the details of what you just read.\n- Make at least 2 conjectured assertions based on your understanding of the matter.\n- Do NOT summarize the report back. React to it and interrogate it.",
+            "tools_allowed": "",
+            "temperature": 1.0,
+            "ai_studio_options": {
+                "thinking_level": "none",
+                "structured_outputs": false,
+                "code_execution": false,
+                "function_calling": true,
+                "grounding_google_search": false,
+                "grounding_google_maps": false,
+                "url_context": false,
+                "media_resolution": "default",
+                "stop_sequence": "",
+                "output_length": 65536,
+                "top_p": 0.95
+            }
+        },
+        "Agent_Name": null
+    }
+}

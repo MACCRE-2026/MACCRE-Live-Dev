@@ -938,7 +938,54 @@ class AgentStudioChatScreen(ModalScreen):
                 self.query_one("#studio-stop", Input).value = ai_options.get("stop_sequence", "")
                 self.query_one("#studio-output-len", Input).value = str(ai_options.get("output_length", "65536"))
                 self.query_one("#studio-top-p", Input).value = str(ai_options.get("top_p", "0.95"))
-            
+            self._update_studio_search_toggles()
+
+    def _update_studio_search_toggles(self) -> None:
+        gsearch = self.query_one("#studio-gsearch", Switch).value
+        bsearch = self.query_one("#studio-bsearch", Switch).value
+        msearch = self.query_one("#studio-msearch", Switch).value
+        exc = self.query_one("#studio-exclusionary", Switch)
+        fun = self.query_one("#studio-funnel", Switch)
+        info = self.query_one("#studio-search-info-panel", RichLog)
+
+        count = sum([gsearch, bsearch, msearch])
+
+        if count < 2:
+            exc.disabled = True
+            if exc.value:
+                exc.value = False
+            fun.disabled = True
+            if fun.value:
+                fun.value = False
+        else:
+            exc.disabled = False
+            fun.disabled = False
+
+        if exc.value:
+            fun.value = False
+        elif fun.value:
+            exc.value = False
+
+        info.clear()
+        if exc.value:
+            info.write("[bold red]Adversarial Topology Active (Exclusionary Search)[/bold red]")
+            info.write("Logic: Google establishes consensus. Brave finds non-overlapping, buried intelligence.")
+            info.write("FinOps: [bold yellow]High Cost[/bold yellow] (Multi-step sequential token burn).")
+            info.write("Fallback: If exclusion yields 0 results, safely falls back to Additive Merging.")
+        elif fun.value:
+            info.write("[bold cyan]Funnel Topology Active (Iterative Source Batching)[/bold cyan]")
+            info.write("Logic: Google finds broad sources. Entities are extracted and passed to Brave for deep-dives.")
+            info.write("FinOps: [bold yellow]High Cost[/bold yellow] (Entity extraction intermediate step).")
+        elif count >= 2:
+            info.write("[bold green]Additive Merging Active[/bold green]")
+            info.write("Logic: Parallel API calls are executed and merged into a single deduplicated context window.")
+            info.write("FinOps: Medium-High Cost (Parallel API fees and wider context window).")
+        elif count == 1:
+            info.write("Standard Single Index Grounding active.")
+            info.write("FinOps: Low Cost.")
+        else:
+            info.write("No Search Grounding selected.")
+
     @on(Select.Changed, "#studio-model")
     def on_model_changed(self, event: Select.Changed) -> None:
         if event.value != Select.BLANK:
@@ -990,6 +1037,11 @@ class AgentStudioChatScreen(ModalScreen):
                 if s_id in key_map:
                     self.local_profiles[agent]["ai_studio_options"][key_map[s_id]] = event.value
                 self._save_dict_profile()
+                
+        # Handle mutual exclusion and enabling/disabling for Search Grounding
+        if event.switch.id in ["studio-gsearch", "studio-bsearch", "studio-msearch", "studio-exclusionary", "studio-funnel"]:
+            self._update_studio_search_toggles()
+
 
     @on(Input.Changed, "#studio-stop")
     @on(Input.Changed, "#studio-output-len")
@@ -1434,12 +1486,7 @@ class AgentBuilderPanel(Vertical):
 
         yield Button("Save to Roster", variant="success", id="btn-save-agent")
 
-    @on(Switch.Changed, "#ab-gsearch")
-    @on(Switch.Changed, "#ab-bsearch")
-    @on(Switch.Changed, "#ab-msearch")
-    @on(Switch.Changed, "#ab-exclusionary")
-    @on(Switch.Changed, "#ab-funnel")
-    def on_search_toggle_changed(self, event: Switch.Changed) -> None:
+    def _update_ab_search_toggles(self, event=None) -> None:
         gsearch = self.query_one("#ab-gsearch", Switch).value
         bsearch = self.query_one("#ab-bsearch", Switch).value
         msearch = self.query_one("#ab-msearch", Switch).value
@@ -1453,18 +1500,26 @@ class AgentBuilderPanel(Vertical):
         # Enable/Disable advanced mode based on count
         if count < 2:
             exc.disabled = True
-            exc.value = False
+            if exc.value:
+                exc.value = False
             fun.disabled = True
-            fun.value = False
+            if fun.value:
+                fun.value = False
         else:
             exc.disabled = False
             fun.disabled = False
 
         # Mutually exclusive logic
-        if event.control.id == "ab-exclusionary" and event.value:
-            fun.value = False
-        elif event.control.id == "ab-funnel" and event.value:
-            exc.value = False
+        if event and hasattr(event, "control") and hasattr(event.control, "id"):
+            if event.control.id == "ab-exclusionary" and event.value:
+                fun.value = False
+            elif event.control.id == "ab-funnel" and event.value:
+                exc.value = False
+        else:
+            if exc.value:
+                fun.value = False
+            elif fun.value:
+                exc.value = False
 
         # Update Info Panel
         info.clear()
@@ -1486,6 +1541,14 @@ class AgentBuilderPanel(Vertical):
             info.write("FinOps: Low Cost.")
         else:
             info.write("No Search Grounding selected.")
+
+    @on(Switch.Changed, "#ab-gsearch")
+    @on(Switch.Changed, "#ab-bsearch")
+    @on(Switch.Changed, "#ab-msearch")
+    @on(Switch.Changed, "#ab-exclusionary")
+    @on(Switch.Changed, "#ab-funnel")
+    def on_search_toggle_changed(self, event: Switch.Changed) -> None:
+        self._update_ab_search_toggles(event)
 
 
 class CreatePayloadModal(ModalScreen[dict]):
@@ -2339,6 +2402,8 @@ class NexusPlex(App[None]):
         self.query_one("#ab-output-len", Input).value = str(opts.get("output_length", 65536))
         self.query_one("#ab-top-p", Input).value = str(opts.get("top_p", 0.95))
         
+        self._update_ab_search_toggles()
+        
         self.write_nexus_log(f"[bold cyan]System:[/bold cyan] Loaded agent '{name}' into builder.")
 
     @on(Button.Pressed, "#btn-edit-instructions")
@@ -3097,10 +3162,13 @@ class NexusPlex(App[None]):
                 
         # Resolve agents in the MacroNode
         agents_in_node = set()
+        macro_def = {}
         try:
             from maccre_core.macronode_registry import get_macronode_store
             store = get_macronode_store()
-            macro_def = store.load(node.macronode_name)
+            loaded_def = store.load(node.macronode_name)
+            if loaded_def:
+                macro_def = loaded_def
             
             # Extract from topology rows
             for row in macro_def.get("topology_rows", []):

@@ -1109,7 +1109,7 @@ All file paths must strictly resolve to these five silos:
                         thinking_level=ai_options.get('thinking_level', 'none')
                     )
                     if api_thought:
-                        d_logger.info(f"<api_thought>\n{api_thought}\n</api_thought>")
+                        logger.info(f"<api_thought>\n{api_thought}\n</api_thought>")
                     total_cost += turn_cost
 
                     did_fire, updated_prompt = self.tool_executor.run(
