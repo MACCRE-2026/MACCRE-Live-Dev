@@ -193,8 +193,8 @@ class FlowRunner:
             macro_name = step.macronode_name
 
             # ── (a) MacroNode existence ───────────────────────────────────────
-            if macro_name.strip().upper() == "MANUAL":
-                continue  # MANUAL is a hardcoded intercept node, bypass validation
+            if macro_name.strip().upper() == "DET_REVIEW":
+                continue  # DET_REVIEW is a hardcoded intercept node, bypass validation
 
             try:
                 macro_def = self._get_macronode(macro_name)
@@ -437,7 +437,7 @@ class FlowRunner:
                 logger.info(f"\n[FLOW_ENGINE] === RESUMING STEP {idx+1}/{len(steps)}: MacroNode '{step.macronode_name}' ===")
                 
                 # 1. Load MacroNode
-                if step.macronode_name.strip().upper() == "MANUAL":
+                if step.macronode_name.strip().upper() == "DET_REVIEW":
                     macro_def = {"topology_rows": [{"Node_ID": "DET_PAUSE_MANUAL", "Model_Override": "none", "Wait_For": "none", "Next_Node": "END"}]}
                 else:
                     try:
@@ -605,7 +605,7 @@ class FlowRunner:
                 logger.info(f"\n[FLOW_ENGINE] === STEP {idx+1}/{len(steps)}: Loading MacroNode '{step.macronode_name}' ===")
             
                 # 1. Load the MacroNode
-                if step.macronode_name.strip().upper() == "MANUAL":
+                if step.macronode_name.strip().upper() == "DET_REVIEW":
                     macro_def = {
                         "topology_rows": [{
                             "Node_ID": "DET_PAUSE_MANUAL",
@@ -782,7 +782,7 @@ class FlowRunner:
                         except Exception:
                             as_wrapped["macronodes"][m_name] = None
                             
-                special_nodes = {"MANUAL", "DET_PAUSE", "DET_ANCHOR", "DET_RECURSION", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"}
+                special_nodes = {"DET_REVIEW", "DET_PAUSE", "DET_ANCHOR", "DET_RECURSION", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"}
                 for a_name in used_agents:
                     if a_name.upper() in special_nodes:
                         continue
