@@ -36,6 +36,7 @@ from textual.widgets import (
     RadioSet,
     RadioButton,
     DataTable,
+    Rule,
 )
 
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
@@ -507,7 +508,7 @@ class FileCabinetModalScreen(ModalScreen[dict]):
 class AgentChatInputModalScreen(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         with Container(classes="dialog", id="agent-chat-input-dialog"):
-            yield Label("Agent Chat Input")
+            yield Label("Chat Studio Input")
             yield TextArea(id="agent-chat-text-area")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", variant="error", id="cancel-btn")
@@ -551,7 +552,7 @@ class ChatDashboardPane(Vertical):
             yield Label("KnowledgeStore is currently empty.", id="ks-empty-label")
             
         yield Button("Canonize Chat Session", variant="warning", id="btn-canonize-studio-chat", disabled=True)
-        yield Button("Promote Chat to Topology", variant="success", id="btn-promote-studio-chat", disabled=True)
+        yield Button("Studio Bridge: Compile to Flow Line", variant="success", id="btn-studio-bridge", disabled=True)
 
 class ChatBuilderPane(Vertical):
     def compose(self) -> ComposeResult:
@@ -592,9 +593,17 @@ class ChatBuilderPane(Vertical):
             with Horizontal(classes="form-row"):
                 yield Label("Grounding with Brave Search")
                 yield Switch(value=False, id="studio-bsearch")
-            with Horizontal(classes="form-row"):
-                yield Label("Grounding with Local Memory")
-                yield Switch(value=False, id="studio-msearch")
+            with Vertical(id="studio-memories-index-box", classes="form-group-box"):
+                yield Label("Memories Index", classes="form-group-title")
+                with Horizontal(classes="form-row"):
+                    yield Label("Grounding with Local Memory")
+                    yield Switch(value=False, id="studio-msearch")
+                with Horizontal(classes="form-row"):
+                    yield Label("FinOps Ledger")
+                    yield Switch(value=False, id="studio-fsearch")
+                    
+            yield Rule()
+            
             with Horizontal(classes="form-row"):
                 yield Label("Exclusionary Search")
                 yield Switch(value=False, id="studio-exclusionary", disabled=True)
@@ -643,6 +652,7 @@ class ChatArenaPane(Vertical):
                 yield Button("Expand", variant="primary", id="btn-expand-input")
                 yield Button("Paste from Clipboard", variant="default", id="btn-paste-clipboard")
                 yield Button("Send (Ctrl+Enter)", variant="success", id="btn-send-studio")
+                yield Button("Send to Nexus", variant="warning", id="btn-send-to-nexus")
             yield Label("Select Notebook (KnowledgeStore Grounding)")
             yield SelectionList(id="chat-notebook-list")
 
@@ -827,6 +837,9 @@ class AgentStudioChatScreen(ModalScreen):
             sel_config.select(agent)
             
             self._populate_config_ui_from_agent(agent)
+            
+            # Enable the Bridge button if profiles exist
+            self.query_one("#btn-studio-bridge", Button).disabled = False
         except Exception:
             pass
             
@@ -1330,6 +1343,39 @@ class AgentStudioChatScreen(ModalScreen):
     def handle_btn_send_studio(self, event: Button.Pressed) -> None:
         self._send_chat_message()
 
+    @on(Button.Pressed, "#btn-send-to-nexus")
+    def handle_btn_send_to_nexus(self, event: Button.Pressed) -> None:
+        import json
+        if not hasattr(self, "local_profiles") or not self.local_profiles:
+            self.app.notify("No chat profiles loaded.", severity="warning")
+            return
+            
+        profiles_json = json.dumps(self.local_profiles, indent=2)
+        
+        nexus_input = self.app.query_one("#nexus-input", Input)
+        if nexus_input:
+            nexus_input.value = f"Please parse this chat dictionary:\n{profiles_json}"
+            self.app.notify("Sent chat dictionary to Nexus Copilot")
+
+    @on(Button.Pressed, "#btn-studio-bridge")
+    def handle_studio_bridge(self, event: Button.Pressed) -> None:
+        if not hasattr(self, "local_profiles") or not self.local_profiles:
+            self.app.notify("No chat profiles loaded to bridge.", severity="warning")
+            return
+            
+        from maccre_core.orchestration.flow_engine import FlowStep
+        
+        count = 0
+        for agent_name in self.local_profiles.keys():
+            step = FlowStep(macronode_name=agent_name)
+            self.app.active_flow_steps.append(step)
+            count += 1
+            
+        self.app.write_nexus_log(f"[dim]System:[/dim] Compiled {count} Chat Studio agents to Flow Line.")
+        self.app._refresh_active_flow_sequence()
+        self.app.notify(f"Compiled {count} agents to Flow Line.", title="Studio Bridge")
+        self.dismiss(None)
+
     def _send_chat_message(self):
         inp = self.query_one("#chat-arena-input", TextArea)
         msg = inp.text.strip()
@@ -1401,20 +1447,47 @@ class NexusChat(Vertical):
             yield Input(placeholder="Ask Nexus to parse a topology...", id="nexus-input")
             yield Button("Ctrl-Enter", id="btn-nexus-send", variant="primary")
 
-class ProjectControls(Horizontal):
+class CustomHeader(Horizontal):
     def compose(self) -> ComposeResult:
-        yield Static("Project: [None]", id="active-project-label", classes="ribbon-label")
-        yield Button("New Project", variant="success", id="btn-new-project")
-        yield Button("Select Project", variant="primary", id="btn-select-project")
-        yield Button("File Cabinet", variant="warning", id="btn-file-cabinet")
-        yield Button("Agent Chat", variant="default", id="btn-agent-chat")
+        from maccre_tui.widgets.onionbook_modal import FinOpsBuddy
+        with Horizontal(id="header-left"):
+            yield Button("New Project", variant="success", id="btn-new-project")
+            yield Select([], prompt="Project...", id="btn-select-project-dropdown")
+        with Horizontal(id="header-center"):
+            yield FinOpsBuddy(id="finops-buddy")
+            yield Button("OnionBook", variant="error", id="btn-onionbook")
+            yield Button("Edit MacroNode", variant="warning", id="btn-open-edit-macro")
+
+    def on_mount(self) -> None:
+        self.refresh_projects()
+
+    def refresh_projects(self) -> None:
+        try:
+            from maccre_core.utils.path_resolver import get_maccre_root
+            datacenter_path = get_maccre_root() / "__DATACENTER"
+            projects = []
+            if datacenter_path.exists():
+                for d in datacenter_path.iterdir():
+                    if d.is_dir() and (d / "01_Raw_Source").exists():
+                        projects.append((d.name, d.name))
+            select = self.query_one("#btn-select-project-dropdown", Select)
+            select.set_options(projects)
+        except Exception:
+            pass
+
+    @on(Select.Changed, "#btn-select-project-dropdown")
+    def on_project_selected(self, event: Select.Changed) -> None:
+        if event.value and event.value != Select.BLANK:
+            self.app.set_active_project(str(event.value))
 
 class AgentBuilderPanel(Vertical):
     """Panel to define and mint new agents into the roster."""
     def compose(self) -> ComposeResult:
         yield Label("Agent Builder", classes="pane-title")
-        yield Button("Edit Agent", variant="warning", id="btn-open-edit-agent", classes="top-edit-btn")
-        yield Button("Edit MacroNode", variant="warning", id="btn-open-edit-macro", classes="top-edit-btn")
+        with Horizontal(id="agent-builder-top-row", classes="form-row"):
+            yield Select([], prompt="Select Agent...", id="ab-select-agent")
+        with Horizontal(id="agent-builder-buttons-row", classes="form-row"):
+            yield Button("Refresh", id="btn-refresh-agent-builder", classes="top-edit-btn")
         yield Label("Agent Name")
         yield Input(placeholder="e.g., OSINT_Researcher", id="ab-name")
         
@@ -1432,6 +1505,9 @@ class AgentBuilderPanel(Vertical):
         # --- AI Studio Options ---
         yield Label("Thinking level", classes="form-group-title")
         yield Select([("None", "none"), ("Low", "low"), ("High", "high")], value="high", id="ab-thinking")
+
+        yield Label("Safety Settings", classes="form-group-title")
+        yield Select([("Block None", "BLOCK_NONE"), ("Block Low", "BLOCK_LOW_AND_ABOVE"), ("Block Medium", "BLOCK_MEDIUM_AND_ABOVE"), ("Block High", "BLOCK_ONLY_HIGH")], value="BLOCK_NONE", id="ab-safety")
 
         yield Label("Tools", classes="form-group-title")
         with Horizontal(classes="form-row"):
@@ -1451,9 +1527,18 @@ class AgentBuilderPanel(Vertical):
             with Horizontal(classes="form-row"):
                 yield Label("Grounding with Brave Search")
                 yield Switch(value=False, id="ab-bsearch")
-            with Horizontal(classes="form-row"):
-                yield Label("Grounding with Local Memory")
-                yield Switch(value=False, id="ab-msearch")
+            
+            with Vertical(id="memories-index-box", classes="form-group-box"):
+                yield Label("Memories Index", classes="form-group-title")
+                with Horizontal(classes="form-row"):
+                    yield Label("Grounding with Local Memory")
+                    yield Switch(value=False, id="ab-msearch")
+                with Horizontal(classes="form-row"):
+                    yield Label("FinOps Ledger")
+                    yield Switch(value=False, id="ab-fsearch")
+                    
+            yield Rule()
+                    
             with Horizontal(classes="form-row"):
                 yield Label("Exclusionary Search")
                 yield Switch(value=False, id="ab-exclusionary", disabled=True)
@@ -1985,11 +2070,14 @@ class FlowExecutionPanel(Vertical):
                 yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
                 yield Button("Create Payload", variant="primary", id="btn-create-payload")
                 yield Button("Session Manager", variant="primary", id="btn-session-manager")
+                yield Button("Chat Studio", variant="default", id="btn-agent-chat")
+                yield Button("File Cabinet", variant="warning", id="btn-file-cabinet")
 
             yield Label("Active Flow Sequence", id="active-flow-sequence-label")
-            with Horizontal(id="active-flow-sequence", classes="flow-controls"):
-                yield Static("No flow loaded.", classes="flow-seq-text")
-                
+            with Horizontal(classes="flow-controls", id="flow-line-container"):
+                yield Button("⏸", id="btn-vcr", classes="vcr-btn vcr-btn--idle", disabled=True)
+                with Horizontal(id="active-flow-sequence"):
+                    yield Static("No flow loaded.", classes="flow-seq-text")
             with Horizontal(classes="flow-controls", id="flow-line-actions"):
                 yield Button("Remove Last Node", variant="warning", id="btn-remove-last")
                 yield Button("Clear Flow", variant="error", id="btn-clear-flow")
@@ -2003,9 +2091,8 @@ class FlowExecutionPanel(Vertical):
             yield Label("Stage: [dim]Idle[/dim]", id="flow-stage-readout", classes="flow-stage-readout")
             yield RichLog(id="flow-execution-log", wrap=True, highlight=True, markup=True)
 
-            # VCR Transport + Instruction Panel
+            # VCR Instruction Panel
             with Horizontal(id="vcr-transport-row"):
-                yield Button("⏸", id="btn-vcr", classes="vcr-btn vcr-btn--idle", disabled=True)
                 yield Static(
                     "[dim]While paused: click a node → ○ radios appear → "
                     "left = inject before (+ Live Chat) · right = inject after (fork) → "
@@ -2079,26 +2166,24 @@ class NexusPlex(App[None]):
         self.active_project = project_name
         import os
         os.environ["MACCRE_ACTIVE_PROJECT"] = project_name
-        label = self.query_one("#active-project-label", Static)
-        
-        display_name = project_name if project_name else "SET ACTIVE PROJECT"
-        
-        import threading
-        if self._thread_id == threading.get_ident():
-            label.update(f"Project: [bold cyan]{display_name}[/bold cyan]")
-        else:
-            self.call_from_thread(label.update, f"Project: [bold cyan]{display_name}[/bold cyan]")
+        try:
+            dropdown = self.query_one("#btn-select-project-dropdown", Select)
+            import threading
+            if self._thread_id == threading.get_ident():
+                dropdown.value = project_name
+            else:
+                self.call_from_thread(setattr, dropdown, "value", project_name)
+        except Exception:
+            pass
             
         self.refresh_agent_dropdown()
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield CustomHeader(id="custom-header")
         with Horizontal(id="main-layout"):
             with Vertical(id="left-pane"):
                 yield NexusChat()
             with Vertical(id="right-pane"):
-                with Horizontal(id="top-ribbon"):
-                    yield ProjectControls(id="project-controls")
                 with Horizontal(id="agent-manager"):
                     yield AgentBuilderPanel()
                     yield FlowExecutionPanel()
@@ -2135,7 +2220,7 @@ class NexusPlex(App[None]):
             if agent_sel:
                 agent_sel.set_options([(a, a) for a in agents])
                 
-            special = ["MANUAL", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
+            special = ["DET_REVIEW", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
             special_sel = self.query_one("#special-select", Select)
             if special_sel:
                 special_sel.set_options([(s, s) for s in special])
@@ -2144,7 +2229,19 @@ class NexusPlex(App[None]):
             self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
             
         self._load_autosave_flow()
+        
+        # Launch Splash Screen sequence
+        from maccre_tui.widgets.splash_screen import BootSplashModal, LoadingSplashModal
+        
+        def check_boot_result(result: str):
+            if result:
+                self.set_active_project(result)
+                # Show loading splash
+                def finish_loading(x):
+                    pass
+                self.push_screen(LoadingSplashModal(result), finish_loading)
 
+        self.push_screen(BootSplashModal(), check_boot_result)
 
     def on_unmount(self) -> None:
         if hasattr(self, "nexus"):
@@ -2231,14 +2328,16 @@ class NexusPlex(App[None]):
     def action_open_agent_chat(self) -> None:
         self.push_screen(AgentStudioChatScreen())
 
+    @on(Button.Pressed, "#btn-onionbook")
+    def action_open_onionbook(self) -> None:
+        from maccre_tui.widgets.onionbook_modal import OnionBookModal
+        self.push_screen(OnionBookModal(self.active_project))
+
     # ── Agent Builder Handlers ────────────────────────────────────────────────
-    @on(Button.Pressed, "#btn-open-edit-agent")
-    def action_open_edit_agent(self) -> None:
-        agents = load_agent_names_from_library(self.active_project)
-        def handle_edit_agent(name: str | None):
-            if name:
-                self._load_agent_into_builder(name)
-        self.push_screen(EditAgentModal(agents), handle_edit_agent)
+    @on(Select.Changed, "#ab-select-agent")
+    def action_select_agent_builder(self, event: Select.Changed) -> None:
+        if event.value and event.value != Select.BLANK:
+            self._load_agent_into_builder(str(event.value))
 
     @on(Button.Pressed, "#btn-open-edit-macro")
     def action_open_edit_macro(self) -> None:
@@ -2255,7 +2354,7 @@ class NexusPlex(App[None]):
         agents = load_agent_names_from_library(self.active_project)
         
         special_nodes = [
-            ("MANUAL", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
+            ("DET_REVIEW", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
             ("DET_ANCHOR", "Entry marker - passes payload through unchanged."),
             ("DET_RECURSION", "Loop-back control with counter tracking."),
             ("DET_PAUSE", "Halts execution, sets task to paused for manual resume."),
@@ -2384,6 +2483,7 @@ class NexusPlex(App[None]):
                     
         set_sel("#ab-model", agent.get("model"))
         set_sel("#ab-thinking", opts.get("thinking_level"))
+        set_sel("#ab-safety", opts.get("safety_level", "BLOCK_NONE"))
         set_sel("#ab-media", opts.get("media_resolution"))
 
         self.query_one("#ab-structured", Switch).value = bool(opts.get("structured_outputs", False))
@@ -2442,8 +2542,26 @@ class NexusPlex(App[None]):
             except Exception:
                 pass
                 
+            try:
+                ab_agent_sel = self.query_one("#ab-select-agent", Select)
+                if ab_agent_sel:
+                    current_ab_val = ab_agent_sel.value
+                    ab_agent_sel.set_options([(a, a) for a in agents])
+                    if current_ab_val in agents:
+                        ab_agent_sel.value = current_ab_val
+            except Exception:
+                pass
+                
         except Exception as e:
             self.write_nexus_log(f"[red]Error refreshing agent dropdowns: {e}[/red]")
+
+    @on(Button.Pressed, "#btn-refresh-agent-builder")
+    def action_refresh_agent_builder(self) -> None:
+        self.refresh_agent_dropdown()
+        # AUA Interrupt
+        from maccre_core.finops._finop_daemon_ import get_finop_daemon
+        get_finop_daemon().refresh_project_health_metrics(self.active_project)
+        self.notify("Agent Roster and Health Metrics Refreshed.")
 
     @on(Button.Pressed, "#btn-save-agent")
     def action_save_agent(self) -> None:
@@ -2472,11 +2590,13 @@ class NexusPlex(App[None]):
             output_len = 65536
 
         thinking_val = self.query_one("#ab-thinking", Select).value
+        safety_val = self.query_one("#ab-safety", Select).value
         media_val = self.query_one("#ab-media", Select).value
 
         # Build ai_studio_options dictionary
         ai_studio_options = {
             "thinking_level": str(thinking_val) if thinking_val != Select.BLANK else "none",
+            "safety_level": str(safety_val) if safety_val != Select.BLANK else "BLOCK_NONE",
             "structured_outputs": self.query_one("#ab-structured", Switch).value,
             "code_execution": self.query_one("#ab-code", Switch).value,
             "function_calling": self.query_one("#ab-function", Switch).value,
@@ -2711,6 +2831,11 @@ class NexusPlex(App[None]):
             container.mount(Static("[dim italic]  ── empty flow line ──  [/dim italic]"))
             return
 
+        # Update VCR button state
+        vcr_btn = self.query_one("#btn-vcr", Button)
+        vcr_btn.disabled = False
+        vcr_btn.classes = f"vcr-btn vcr-btn--{self._vcr_state}"
+
         display_names = []
         job_id = getattr(self, "_current_job_id", None)
         if job_id:
@@ -2732,8 +2857,6 @@ class NexusPlex(App[None]):
         if not display_names:
             from maccre_core.orchestration.flow_engine import FlowStep  # noqa: PLC0415
             display_names = [step.macronode_name if isinstance(step, FlowStep) else str(step) for step in self.active_flow_steps]
-
-        container.mount(Static("[yellow]⏸ PAUSED[/yellow] ", classes="flow-arrow-dim"))
 
         for i, name in enumerate(display_names):
 
@@ -2899,7 +3022,7 @@ class NexusPlex(App[None]):
         if not event.value or event.value == Select.BLANK:
             return
         desc_map = {
-            "MANUAL": "Pauses execution for manual user input. Acts as a strict human-in-the-loop gate.",
+            "DET_REVIEW": "Pauses execution for manual user input. Acts as a strict human-in-the-loop gate.",
             "DET_ANCHOR": "Anchors execution state, creating a reliable fallback point if downstream nodes fail.",
             "DET_RECURSION": "Triggers a recursive loop, rerunning the previous node sequence until conditions are met.",
             "DET_PAUSE": "Temporarily pauses execution for a predefined amount of time or until externally unpaused.",
@@ -3123,14 +3246,28 @@ class NexusPlex(App[None]):
             container.mount(Static("No flow loaded.", classes="flow-seq-text"))
             return
             
+        vcr_disabled = (self._vcr_state == "idle")
+        vcr_btn = self.query_one("#btn-vcr", Button)
+        vcr_btn.disabled = vcr_disabled
+        vcr_btn.classes = f"vcr-btn vcr-btn--{self._vcr_state}"
+        
         widgets_to_mount = []
         for i, step in enumerate(self.active_flow_steps):
             if i > 0:
-                widgets_to_mount.append(Static(" → ", classes="flow-arrow-dim"))
+                widgets_to_mount.append(Button("→", id=f"flow-insert-arrow-{i}", classes="flow-arrow-gold"))
             name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
             import uuid
-            btn = Button(name, variant="default", id=f"anode-{i}-{uuid.uuid4().hex[:8]}", classes="active-node-btn")
-            widgets_to_mount.append(btn)
+            uid = uuid.uuid4().hex[:8]
+            
+            btn_left = Button("◀", id=f"fmoveleft-{i}-{uid}", classes="flow-move-btn")
+            btn = Button(name, variant="default", id=f"anode-{i}-{uid}", classes="active-node-btn")
+            btn_right = Button("▶", id=f"fmoveright-{i}-{uid}", classes="flow-move-btn")
+            btn_del = Button("✕", id=f"fdelete-{i}-{uid}", classes="flow-del-btn")
+            
+            top_row = Horizontal(btn_del, classes="flow-node-top")
+            bottom_row = Horizontal(btn_left, btn, btn_right, classes="flow-node-bottom")
+            wrapper = Vertical(top_row, bottom_row, classes="flow-node-wrapper")
+            widgets_to_mount.append(wrapper)
             
         # Batch mount the new widgets
         container.mount(*widgets_to_mount)
@@ -3222,6 +3359,36 @@ class NexusPlex(App[None]):
             baked_tools=baked_tools,
             current_agent_tools_overrides=getattr(node, "agent_tools_overrides", {})
         ), handle_config)
+
+    @on(Button.Pressed, ".flow-del-btn")
+    def action_delete_flow_node(self, event: Button.Pressed) -> None:
+        if self._vcr_state != "idle":
+            return
+        try:
+            idx = int(event.button.id.split("-")[1])
+            deleted_node = self.active_flow_steps.pop(idx)
+            self.write_agent_log(f"[yellow]Deleted node '{getattr(deleted_node, 'macronode_name', str(deleted_node))}' from flow.[/yellow]")
+            self._refresh_active_flow_sequence()
+        except (ValueError, IndexError):
+            pass
+
+    @on(Button.Pressed, ".flow-move-btn")
+    def action_move_flow_node(self, event: Button.Pressed) -> None:
+        if self._vcr_state != "idle":
+            return
+        try:
+            parts = event.button.id.split("-")
+            action = parts[0]
+            idx = int(parts[1])
+            
+            if action == "fmoveleft" and idx > 0:
+                self.active_flow_steps[idx - 1], self.active_flow_steps[idx] = self.active_flow_steps[idx], self.active_flow_steps[idx - 1]
+                self._refresh_active_flow_sequence()
+            elif action == "fmoveright" and idx < len(self.active_flow_steps) - 1:
+                self.active_flow_steps[idx], self.active_flow_steps[idx + 1] = self.active_flow_steps[idx + 1], self.active_flow_steps[idx]
+                self._refresh_active_flow_sequence()
+        except (ValueError, IndexError):
+            pass
 
     @on(Button.Pressed)
     def _handle_paused_flow_clicks(self, event: Button.Pressed) -> None:
@@ -3407,7 +3574,7 @@ class NexusPlex(App[None]):
 
         # Reset history tracking on launch
         self._flow_loaded_from_history = False
-        self._do_launch_flow()
+        self._do_budget_proposal()
 
     @on(Button.Pressed, "#btn-proceed-anyway")
     def action_proceed_anyway(self) -> None:
@@ -3450,6 +3617,37 @@ class NexusPlex(App[None]):
                 self.query_one("#flow-stage-readout", Label).update(label_text)
         except Exception:
             pass
+
+    def _do_budget_proposal(self) -> None:
+        """Calculate projection and show Budget Proposal modal."""
+        from maccre_core.finops._finop_daemon_ import get_finop_daemon
+        from maccre_tui.widgets.finops_modals import BudgetProposalModal, BudgetWarningModal
+        from maccre_core.tools.workbook_engine import _estimate_node_cost, get_pricing_table
+        
+        daemon = get_finop_daemon()
+        node_count = len(self.active_flow_steps)
+        pricing = get_pricing_table()
+        # Fallback to flash-8b for basic estimate if actual nodes aren't fully resolved
+        history_avg = _estimate_node_cost("gemini-2.5-flash-8b", pricing)
+        est_cost = daemon.calculate_topology_projection(node_count, history_avg)
+        
+        def handle_warning(result: bool):
+            if result:
+                # Log approval
+                import uuid
+                session_id = f"job_{uuid.uuid4().hex[:8]}"
+                daemon.log_budget_approval(self.active_project, session_id, est_cost)
+                self._do_launch_flow()
+            else:
+                self.write_agent_log("[red]Flow launch aborted by user at final warning.[/red]")
+                
+        def handle_proposal(result: bool):
+            if result:
+                self.push_screen(BudgetWarningModal(est_cost), handle_warning)
+            else:
+                self.write_agent_log("[red]Budget Proposal rejected by user.[/red]")
+                
+        self.push_screen(BudgetProposalModal(node_count, est_cost), handle_proposal)
 
     def _do_launch_flow(self) -> None:
         """Internal launch - called after pre-flight passes or is overridden."""

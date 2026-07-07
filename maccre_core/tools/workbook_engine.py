@@ -80,7 +80,7 @@ _SECTION_RULES: dict[str, dict[str, Any]] = {
 }
 
 # Estimated average output tokens per agent node (used for rough FinOps)
-_AVG_NODE_TOKENS: int = 1500
+_AVG_NODE_TOKENS: int = 20000
 
 
 # ── FinOps pricing reference ───────────────────────────────────────────────────

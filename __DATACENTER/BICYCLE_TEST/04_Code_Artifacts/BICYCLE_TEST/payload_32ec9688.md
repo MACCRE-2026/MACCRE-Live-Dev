@@ -1,0 +1,1 @@
+Lets talk about the public reaction to the America 250 celebration on July 4th in DC. How many people attended for enjoyment compared to how many people attended to protest?

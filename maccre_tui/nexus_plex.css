@@ -111,23 +111,42 @@ NexusChat {
     border: none;
 }
 
-/* ── Right Pane: Top Ribbon ──────────────────────────────────────────────── */
-#top-ribbon {
+/* ── Header Layout ──────────────────────────────────────────────────────────────── */
+#custom-header {
+    width: 100%;
     height: 3;
-    border-bottom: thick #30363d;
     background: #161b22;
+    border-bottom: solid #30363d;
+    align: left middle;
+    padding: 0;
 }
 
-ProjectControls {
-    width: auto;
+#header-left {
+    width: 35%;
     height: 100%;
-    padding: 0 1;
-    align-vertical: middle;
+    align: center middle;
 }
 
-ProjectControls Button {
+#header-center {
+    width: 65%;
+    height: 100%;
+    align: center middle;
+}
+
+#header-left Button, #header-center Button {
     margin-right: 1;
     min-width: 10;
+}
+
+#btn-select-project-dropdown {
+    width: 28;
+    margin-right: 1;
+}
+
+#finops-buddy {
+    width: auto;
+    content-align: center middle;
+    margin-right: 2;
 }
 
 TopologyTracker {
@@ -547,7 +566,7 @@ FlowExecutionPanel {
 
 #active-flow-sequence {
     width: 1fr;
-    height: 7;
+    height: 10;
     padding: 1 1;
     color: #58a6ff;
     overflow-x: scroll;
@@ -647,19 +666,51 @@ FlowExecutionPanel {
     width: auto;
     height: auto;
     align: center middle;
+    margin: 0 1;
 }
 
-.flow-node-rm {
-    width: 3;
-    min-width: 3;
+.flow-node-top {
+    width: 100%;
     height: 1;
-    background: transparent;
-    color: #da3633;
+    align: center top;
+}
+
+.flow-node-bottom {
+    width: auto;
+    height: 3;
+    align: center middle;
+}
+
+.flow-move-btn {
+    min-width: 3;
+    width: 3;
+    height: 3;
     border: none;
+    background: transparent;
+    color: #d29922;
+    margin: 0;
+    padding: 0;
     content-align: center middle;
 }
 
-.flow-node-rm:hover {
+.flow-move-btn:hover {
+    color: #e3b341;
+    background: #21262d;
+}
+
+.flow-del-btn {
+    min-width: 3;
+    width: 3;
+    height: 1;
+    border: none;
+    background: transparent;
+    color: #da3633;
+    margin: 0;
+    padding: 0;
+    content-align: center middle;
+}
+
+.flow-del-btn:hover {
     background: #da3633;
     color: #ffffff;
 }
@@ -689,6 +740,10 @@ FlowExecutionPanel {
     border: round $primary;
     padding: 1 2;
     margin-bottom: 1;
+}
+
+#memories-index-box, #studio-memories-index-box {
+    height: auto;
 }
 
 #search-info-panel, #studio-search-info-panel {
@@ -1036,4 +1091,22 @@ FlowExecutionPanel {
     height: auto;
     margin-top: 1;
     margin-bottom: 1;
+}
+
+#main-name-session-input {
+    width: 28;
+}
+
+.flow-arrow-gold {
+    min-width: 3;
+    width: 3;
+    height: 1;
+    color: gold;
+    border: none;
+    background: transparent;
+}
+
+.flow-arrow-gold:hover {
+    color: yellow;
+    text-style: bold;
 }

@@ -282,7 +282,8 @@ class UniversalSwarmWorker:
                                 tools_str=tools_str,
                                 temperature=temperature,
                                 expect_multiple_reads=True,
-                                thinking_level=ai_options.get('thinking_level', 'none')
+                                thinking_level=ai_options.get('thinking_level', 'none'),
+                                safety_level=ai_options.get('safety_level', 'BLOCK_NONE')
                             )
                             if api_thought:
                                 write_thought(f"<api_thought>\n{api_thought}\n</api_thought>")
@@ -1106,10 +1107,17 @@ All file paths must strictly resolve to these five silos:
                         tools_str=tools_str,
                         temperature=float(node_config.get("temperature", 0.7)),
                         expect_multiple_reads=True,
-                        thinking_level=ai_options.get('thinking_level', 'none')
+                        thinking_level=ai_options.get('thinking_level', 'none'),
+                        safety_level=ai_options.get('safety_level', 'BLOCK_NONE')
                     )
                     if api_thought:
                         logger.info(f"<api_thought>\n{api_thought}\n</api_thought>")
+                        
+                    import re as _re_pbr
+                    pbr_thoughts = _re_pbr.findall(r'<thought>(.*?)</thought>', output_text, _re_pbr.DOTALL)
+                    for t in pbr_thoughts:
+                        logger.info(f"<thought>\n{t.strip()}\n</thought>")
+
                     total_cost += turn_cost
 
                     did_fire, updated_prompt = self.tool_executor.run(
@@ -1130,6 +1138,8 @@ All file paths must strictly resolve to these five silos:
 
                     # Capture raw tool call text for forensic audit sidecar.
                     tool_audit_lines.append(f"## TOOL TURN {turn_idx + 1}/{max_tool_turns}\n{output_text}")
+                    # Log explicitly into the telemetry stream
+                    logger.info(f"<tool_call>\n{output_text}\n</tool_call>")
 
                     if is_last:
                         # Graceful close: agent hit the recursion limit mid-sequence.

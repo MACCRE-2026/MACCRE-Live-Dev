@@ -202,6 +202,7 @@ class UniversalRouter:
         response_schema: Any | None = None,
         expect_multiple_reads: bool = False,
         thinking_level: str = "none",
+        safety_level: str = "BLOCK_NONE",
     ) -> tuple[str, float, str]:
         """Universal Dispatcher. Routes to the correct vendor based on ``model_name``.
 
@@ -323,10 +324,10 @@ class UniversalRouter:
                     # OSINT and journalism agents require maximally permissive thresholds.
                     # This mirrors the AI Studio "Safety Off" toggle at the API level.
                     _safety_off: list[dict[str, str]] = [
-                        {"category": "HARM_CATEGORY_HARASSMENT",        "threshold": "BLOCK_NONE"},
-                        {"category": "HARM_CATEGORY_HATE_SPEECH",       "threshold": "BLOCK_NONE"},
-                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                        {"category": "HARM_CATEGORY_HARASSMENT",        "threshold": safety_level},
+                        {"category": "HARM_CATEGORY_HATE_SPEECH",       "threshold": safety_level},
+                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": safety_level},
+                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": safety_level},
                     ]
                     
 

@@ -1173,26 +1173,48 @@ def generate_unified_thoughts_ledger(job_id: str) -> str:
         ts_str = datetime.fromtimestamp(_mtime, tz=timezone.utc).isoformat()
         
         try:
-            content = log_path.read_text(encoding="utf-8")
+            raw_content = log_path.read_text(encoding="utf-8")
         except Exception:
             continue
 
-        # Extract only thoughts and tools
-        thought_matches = re.finditer(r"<(?:api_)?thought>(.*?)</(?:api_)?thought>", content, re.DOTALL | re.IGNORECASE)
-        tool_matches = re.finditer(r"\[TOOL CALL REQUESTED:.*?\]", content, re.DOTALL | re.IGNORECASE)
+        import json
+        parsed_content = []
+        for line in raw_content.splitlines():
+            if line.strip().startswith("{"):
+                try:
+                    obj = json.loads(line)
+                    if "message" in obj:
+                        parsed_content.append(obj["message"])
+                except Exception:
+                    parsed_content.append(line)
+            else:
+                parsed_content.append(line)
+        content = "\n".join(parsed_content)
+
+        # Extract thoughts and tools
+        thought_matches = list(re.finditer(r"<(?:api_)?thought>(.*?)</(?:api_)?thought>", content, re.DOTALL | re.IGNORECASE))
+        # Support both legacy [TOOL CALL...] format and the newer <tool_call> format
+        tool_matches = list(re.finditer(r"<tool_call>(.*?)</tool_call>|(\[TOOL CALL REQUESTED:.*?\])(?=\n\[TOOL|\n<|\n\Z|\Z)", content, re.DOTALL | re.IGNORECASE))
+        
+        all_matches = []
+        for tm in thought_matches:
+            all_matches.append((tm.start(), "thought", tm.group(1).strip()))
+        for tm in tool_matches:
+            text = tm.group(1) if tm.group(1) is not None else tm.group(2)
+            all_matches.append((tm.start(), "tool", text.strip()))
+            
+        all_matches.sort(key=lambda x: x[0])
         
         has_content = False
         turn_parts = [f"### {node_name}", f"*Written: {ts_str}*\n"]
         
-        for tm in thought_matches:
+        for _pos, mtype, text in all_matches:
             has_content = True
-            turn_parts.append("#### 🤔 Thought")
-            turn_parts.append(f"```\n{tm.group(1).strip()}\n```\n")
-            
-        for tm in tool_matches:
-            has_content = True
-            turn_parts.append("#### 🛠️ Tool Call")
-            turn_parts.append(f"```\n{tm.group(0).strip()}\n```\n")
+            if mtype == "thought":
+                turn_parts.append("#### 🤔 Thought")
+            else:
+                turn_parts.append("#### 🛠️ Tool Call")
+            turn_parts.append(f"```\n{text}\n```\n")
 
         if has_content:
             parts.extend(turn_parts)

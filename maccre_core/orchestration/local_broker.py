@@ -396,7 +396,7 @@ class LocalMessageBroker(MessageBroker):
         discard the duplicate at the SQLite C-engine level.
         """
         # ── LIVE SWARM INTERCEPT ──────────────────────────────────────────────
-        if next_node_str.strip().upper() == "MANUAL":
+        if next_node_str.strip().upper() == "DET_REVIEW":
             conn = self._get_conn()
             conn.execute(
                 "UPDATE task_queue "

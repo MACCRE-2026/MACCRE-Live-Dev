@@ -142,7 +142,9 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
         with Container(classes="dialog", id="macro-editor-dialog"):
             with Vertical(id="me-left-col"):
                 with Vertical(id="me-left-form"):
-                    yield Label("Edit / Create MacroNode", classes="pane-title", id="me-title")
+                    with Horizontal():
+                        yield Label("Edit / Create MacroNode", classes="pane-title", id="me-title")
+                        yield Button("Refresh", id="btn-refresh-macronode", classes="top-edit-btn")
                     
                     with Horizontal(classes="me-slot-row"):
                         yield Label("Select MacroNode:", classes="me-slot-label")
@@ -633,4 +635,8 @@ class MacroNodeEditorModal(ModalScreen[dict | None]):
         )
         
         preview_panel.update(info_text + preview)
+
+    @on(Button.Pressed, "#btn-refresh-macronode")
+    def action_refresh_macronode(self) -> None:
+        self.notify("MacroNode refresh functionality not yet implemented.", title="Refresh")
 
