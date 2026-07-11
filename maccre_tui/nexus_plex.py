@@ -39,7 +39,9 @@ from textual.widgets import (
     Rule,
 )
 
+from maccre_tui.macro_editor_modal import MacroNodeEditorModal
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
+from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_project_names, load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -1440,11 +1442,12 @@ class NexusChat(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(id="nexus-header-row"):
             yield Label("Nexus Copilot", classes="pane-title")
+            yield Button("▲ Expand", id="btn-toggle-nexus", classes="nexus-tab-btn")
             yield Button("Copy", id="btn-copy-nexus")
         yield RichLog(id="nexus-log", wrap=True, highlight=True, markup=True)
         with Horizontal(id="nexus-input-container"):
-            yield Button(">", id="btn-expand-nexus-input")
-            yield Input(placeholder="Ask Nexus to parse a topology...", id="nexus-input")
+            yield Button("Paste", id="btn-paste-nexus")
+            yield TextArea(id="nexus-input")
             yield Button("Ctrl-Enter", id="btn-nexus-send", variant="primary")
 
 class CustomHeader(Horizontal):
@@ -1456,7 +1459,6 @@ class CustomHeader(Horizontal):
         with Horizontal(id="header-center"):
             yield FinOpsBuddy(id="finops-buddy")
             yield Button("OnionBook", variant="error", id="btn-onionbook")
-            yield Button("Edit MacroNode", variant="warning", id="btn-open-edit-macro")
 
     def on_mount(self) -> None:
         self.refresh_projects()
@@ -2182,6 +2184,7 @@ class NexusPlex(App[None]):
         yield CustomHeader(id="custom-header")
         with Horizontal(id="main-layout"):
             with Vertical(id="left-pane"):
+                yield MacroNodeBuilderPanel(self.active_project)
                 yield NexusChat()
             with Vertical(id="right-pane"):
                 with Horizontal(id="agent-manager"):
@@ -2264,24 +2267,14 @@ class NexusPlex(App[None]):
             self.call_from_thread(log.write, text)
 
     # ── Nexus Copilot Handlers ────────────────────────────────────────────────
-    @on(Input.Submitted, "#nexus-input")
-    def handle_nexus_input(self, event: Input.Submitted) -> None:
-        msg = event.value.strip()
-        if not msg:
-            return
-        inp = self.query_one("#nexus-input", Input)
-        inp.value = ""
-        self.write_nexus_log(f"\n[bold green]You:[/bold green] {msg}")
-        self.dispatch_nexus_message(msg)
-
     @on(Button.Pressed, "#btn-nexus-send")
     def action_nexus_send(self) -> None:
         try:
-            inp = self.query_one("#nexus-input", Input)
-            msg = inp.value.strip()
+            inp = self.query_one("#nexus-input", TextArea)
+            msg = inp.text.strip()
             if not msg:
                 return
-            inp.value = ""
+            inp.text = ""
             self.write_nexus_log(f"\n[bold green]You:[/bold green] {msg}")
             self.dispatch_nexus_message(msg)
         except Exception:
@@ -2289,19 +2282,23 @@ class NexusPlex(App[None]):
 
     def action_nexus_send_shortcut(self) -> None:
         try:
-            inp = self.query_one("#nexus-input", Input)
+            inp = self.query_one("#nexus-input", TextArea)
             if inp.has_focus:
                 self.action_nexus_send()
         except Exception:
             pass
 
-    @on(Button.Pressed, "#btn-expand-nexus-input")
-    def action_expand_nexus_input(self) -> None:
-        def handle_nexus_expanded(msg: str | None):
-            if msg:
-                self.write_nexus_log(f"\n[bold green]You:[/bold green] {msg}")
-                self.dispatch_nexus_message(msg)
-        self.push_screen(NexusInputModalScreen(), handle_nexus_expanded)
+    @on(Button.Pressed, "#btn-paste-nexus")
+    def action_paste_nexus(self) -> None:
+        try:
+            import pyperclip
+            text = pyperclip.paste()
+            if text:
+                inp = self.query_one("#nexus-input", TextArea)
+                inp.text += text
+                inp.cursor_location = (inp.document.line_count - 1, len(inp.document.get_line(inp.document.line_count - 1)))
+        except Exception as e:
+            self.app.notify(f"Paste failed: {e}", severity="error")
 
     @work(thread=True)
     def dispatch_nexus_message(self, message: str) -> None:
@@ -2333,7 +2330,41 @@ class NexusPlex(App[None]):
         from maccre_tui.widgets.onionbook_modal import OnionBookModal
         self.push_screen(OnionBookModal(self.active_project))
 
+    # ── MacroNode Builder Handlers ────────────────────────────────────────────
+    @on(MacroNodeBuilderPanel.MacroSaved)
+    def handle_macro_saved(self, event) -> None:
+        result = event.macro_data
+        if not result:
+            return
+        try:
+            from maccre_core.macronode_registry import SQLiteMacroNodeStore, _db_path
+            store = SQLiteMacroNodeStore(_db_path(self.active_project))
+            store.save(result["name"], result)
+            self.app.notify(f"Saved MacroNode: {result['name']}")
+            self.refresh_projects()
+        except Exception as e:
+            self.app.notify(f"Failed to save MacroNode: {e}", severity="error")
+
+    @on(Button.Pressed, "#btn-refresh-macronode")
+    def action_refresh_macronode(self) -> None:
+        try:
+            builder = self.query_one(MacroNodeBuilderPanel)
+            builder.refresh_data()
+            self.app.notify("MacroNode Builder Refreshed")
+        except Exception as e:
+            self.app.notify(f"Failed to refresh MacroNode Builder: {e}", severity="error")
+
     # ── Agent Builder Handlers ────────────────────────────────────────────────
+    @on(Button.Pressed, "#btn-toggle-nexus")
+    def action_toggle_nexus(self, event: Button.Pressed) -> None:
+        chat = self.query_one(NexusChat)
+        if chat.has_class("-expanded"):
+            chat.remove_class("-expanded")
+            event.button.label = "▲ Expand"
+        else:
+            chat.add_class("-expanded")
+            event.button.label = "▼ Collapse"
+
     @on(Select.Changed, "#ab-select-agent")
     def action_select_agent_builder(self, event: Select.Changed) -> None:
         if event.value and event.value != Select.BLANK:

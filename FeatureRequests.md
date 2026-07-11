@@ -169,3 +169,30 @@ As the Sovereign Datacenter expands and Nexus workflows grow in complexity, the 
 1. **Polled Database State Objects (State Container):** Build an in-memory buffer (Python dictionaries) that loads SQLite tables in the background. The TUI reads exclusively from this instantaneous memory buffer. The buffer updates via background polling or event triggers when an agent modifies the database.
 2. **Textual Worker API (`@work(thread=True)`):** Push heavy processing off the main asyncio thread. Modals should mount instantly with loaders, dispatch a background worker to query data, and populate upon receiving a callback.
 3. **DOM Optimization:** Implement lazy-loading or pagination for massive files (like reading the `unified_session_ledger.md`) to prevent the Textual engine from recalculating layout syntax highlighting for thousands of nodes on a single tick.
+
+***
+
+### Feature Name: Nexus Copilot Sovereign Sandbox Enhancement (antigravity-preview-05-2026)
+**Abstract:** Elevate Nexus Copilot from conversational topology creation to full sovereign sandbox execution using antigravity-preview-05-2026 capabilities with the local .venv as a provisioned sandbox environment.
+**Date/Time Entered:** 2026-07-11T11:56:00-04:00
+**Status:** Unfulfilled
+
+**Description:**
+The Nexus Copilot is currently primed for topology creation and has demonstrated the ability to create MacroNodes from conversational context, as well as possessing nascent capabilities for repairing broken topologies. This feature request proposes a significant capability uplift:
+
+1. **Sandbox Provisioning:** Leverage `antigravity-preview-05-2026` and its ability to use the local `.venv` as a provisioned sandbox environment for Nexus Copilot. This will enable the Copilot to execute code, validate topologies, and test configurations locally — elevating its reasoning and capability to match the Primary Engineering Agent's level.
+
+2. **Sovereign REST Integration:** This MUST NOT use the Antigravity SDK. Instead, use and augment the existing sovereign REST capabilities (`maccre_core._net.gemini_client` / `UniversalRouter`) to maintain the system's zero-dependency edge compatibility and data sovereignty.
+
+3. **Enhanced Capabilities:**
+   - **Topology Validation:** Execute `build_from_template()` in the sandbox to validate MacroNode configurations before saving.
+   - **Topology Repair:** Detect broken topologies (missing agents, invalid Wait_For references, orphaned nodes) and propose/apply fixes using sandbox execution.
+   - **MacroNode Generation:** Convert natural language descriptions into complete MacroNode configurations with validated topology graphs.
+   - **Control Node Composition:** Assemble custom topologies from the Control Node (DET) primitive library with sandbox-validated wiring.
+
+4. **Assessment Required:**
+   - Audit current Copilot topology creation capabilities and success rate.
+   - Map existing REST client capabilities vs. what antigravity-preview-05-2026 requires.
+   - Identify integration points between the Copilot's tool registry and the sandbox environment.
+   - Ensure all sandbox operations remain within the Sovereign Physical Laws (no external network dependencies, all paths relative via `get_maccre_root()`).
+
