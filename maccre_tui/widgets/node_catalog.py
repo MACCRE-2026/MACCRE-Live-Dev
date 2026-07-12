@@ -140,11 +140,11 @@ class NodeCatalog(Vertical):
                               wrap=True, markup=True)
             with TabPane("Control", id="tab-ctrl"):
                 with Horizontal(classes="catalog-row"):
-                    yield Select([], prompt="Select Special Node…", id="special-select")
+                    yield Select([], prompt="Select Control Node…", id="special-select")
                     yield Button("+ Add", variant="warning", id="btn-add-special",
                                  classes="flow-add-btn")
                 yield Static(
-                    "[dim]Select a Special Node above to see its description.[/dim]",
+                    "[dim]Select a Control Node above to see its description.[/dim]",
                     id="special-info-body", classes="info-panel-body",
                 )
 

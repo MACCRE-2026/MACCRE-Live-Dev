@@ -1928,12 +1928,12 @@ class FlowExecutionPanel(Vertical):
                         yield RichLog(id="agent-info-body", classes="info-panel-body", wrap=True, markup=True)
                     yield Button("Add Agent", variant="success", id="btn-add-agent", classes="flow-add-btn")
                 with Vertical(classes="flow-select-group"):
-                    yield Label("Special Node")
-                    yield Select([], prompt="Select Special Node…", id="special-select")
+                    yield Label("Control Node")
+                    yield Select([], prompt="Select Control Node…", id="special-select")
                     with Vertical(id="flow-special-info", classes="info-panel-container"):
-                        yield Label("Special Details", classes="info-panel-title")
-                        yield Static("[dim]Select a Special Node above to see its description.[/dim]", id="special-info-body", classes="info-panel-body")
-                    yield Button("Add Special", variant="warning", id="btn-add-special", classes="flow-add-btn")
+                        yield Label("Control Node Details", classes="info-panel-title")
+                        yield Static("[dim]Select a Control Node above to see its description.[/dim]", id="special-info-body", classes="info-panel-body")
+                    yield Button("Add Control Node", variant="warning", id="btn-add-special", classes="flow-add-btn")
 
             with Horizontal(classes="flow-controls"):
                 yield Button("Launch Flow", variant="success", id="btn-launch-flow")
@@ -2889,8 +2889,8 @@ class NexusPlex(App[None]):
         from maccre_core.orchestration.flow_engine import FlowStep
         step = FlowStep(macronode_name=name)
         self.active_flow_steps.append(step)
-        self.write_nexus_log(f"[dim]System:[/dim] Added Special Node '{name}' to flow.")
-        self.write_agent_log(f"[dim]System:[/dim] Added Special Node '{name}' to flow.")
+        self.write_nexus_log(f"[dim]System:[/dim] Added Control Node '{name}' to flow.")
+        self.write_agent_log(f"[dim]System:[/dim] Added Control Node '{name}' to flow.")
         self._refresh_active_flow_sequence()
 
     @on(Select.Changed, "#macro-select")
@@ -2987,7 +2987,7 @@ class NexusPlex(App[None]):
             "CTRL_TRANSFORM": "Transforms payload data format (e.g., Markdown to JSON) before passing to next node."
         }
         val = str(event.value)
-        self.query_one("#special-info-body", Static).update(desc_map.get(val, "Special node for logic control."))
+        self.query_one("#special-info-body", Static).update(desc_map.get(val, "Control node for logic control."))
         # Also populate left-pane InformationPanel with control node details
         try:
             from maccre_core.controlnode_registry import get_controlnode_store
@@ -3785,10 +3785,12 @@ class NexusPlex(App[None]):
         )
 
         def _on_hitl_inject(text: str | None) -> None:
-            if text:
-                self._hitl_resume_with_context(job_id, text)
-            else:
+            if text is None:
                 self.write_agent_log("[dim]HITL modal dismissed - flow remains paused. Use ▶ to resume.[/dim]")
+            else:
+                # Treat empty string as valid resume with no context
+                context = text if text.strip() else "[No user context provided]"
+                self._hitl_resume_with_context(job_id, context)
 
         self.push_screen(ContextInjectModalScreen(current_payload=payload), _on_hitl_inject)
 
