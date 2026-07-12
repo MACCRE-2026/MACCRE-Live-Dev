@@ -22,7 +22,6 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, Container
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Header,
     Footer,
     RichLog,
     Input,
@@ -33,17 +32,14 @@ from textual.widgets import (
     TextArea,
     Switch,
     SelectionList,
-    RadioSet,
-    RadioButton,
     DataTable,
     Rule,
 )
 
-from maccre_tui.macro_editor_modal import MacroNodeEditorModal
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
 from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_core.orchestration.nexus_agent import NexusAgent
-from maccre_core.workbook_data import load_project_names, load_agent_names_from_library, load_model_ids
+from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
 from maccre_core.agent_library import get_agent_store
 
@@ -151,30 +147,6 @@ class SystemInstructionsModal(ModalScreen[str]):
         val = self.query_one("#si-textarea", TextArea).text
         self.dismiss(val)
 
-class EditAgentModal(ModalScreen[str]):
-    """Modal to select an agent from the roster to edit."""
-    def __init__(self, agents: list[str]):
-        super().__init__()
-        self.agents = agents
-
-    def compose(self) -> ComposeResult:
-        with Container(classes="dialog"):
-            yield Label("Select Agent to Edit")
-            options = [(a, a) for a in self.agents]
-            yield Select(options, id="edit-agent-select")
-            with Horizontal(classes="dialog-buttons"):
-                yield Button("Cancel", variant="error", id="cancel-btn")
-                yield Button("Load Agent", variant="primary", id="load-btn")
-
-    @on(Button.Pressed, "#cancel-btn")
-    def cancel(self):
-        self.dismiss(None)
-
-    @on(Button.Pressed, "#load-btn")
-    def load_agent(self):
-        sel = self.query_one("#edit-agent-select", Select)
-        if sel.value and sel.value != Select.BLANK:
-            self.dismiss(str(sel.value))
 
 class OverwriteConfirmModal(ModalScreen[bool]):
     """Modal to confirm overwriting an existing agent."""
@@ -507,36 +479,6 @@ class FileCabinetModalScreen(ModalScreen[dict]):
             self.dismiss(None)
 
 
-class AgentChatInputModalScreen(ModalScreen[str]):
-    def compose(self) -> ComposeResult:
-        with Container(classes="dialog", id="agent-chat-input-dialog"):
-            yield Label("Chat Studio Input")
-            yield TextArea(id="agent-chat-text-area")
-            with Horizontal(classes="dialog-buttons"):
-                yield Button("Cancel", variant="error", id="cancel-btn")
-                yield Button("Paste from Clipboard", variant="default", id="paste-btn")
-                yield Button("Send to Chat", variant="success", id="send-btn")
-
-    @on(Button.Pressed, "#cancel-btn")
-    def cancel(self):
-        self.dismiss(None)
-
-    @on(Button.Pressed, "#paste-btn")
-    def paste_clipboard(self):
-        try:
-            import pyperclip
-            text = pyperclip.paste()
-            if text:
-                ta = self.query_one("#agent-chat-text-area", TextArea)
-                ta.text = ta.text + "\n" + text if ta.text else text
-        except Exception:
-            pass
-
-    @on(Button.Pressed, "#send-btn")
-    def send(self):
-        text = self.query_one("#agent-chat-text-area", TextArea).text.strip()
-        self.dismiss(text)
-
 
 class ChatDashboardPane(Vertical):
     def compose(self) -> ComposeResult:
@@ -760,7 +702,7 @@ class AgentStudioChatScreen(ModalScreen):
         if not project_name:
             return
             
-        import os
+        import os  # noqa: F401  (used by downstream Path operations)
         from pathlib import Path
         
         root_dir = Path(__file__).parent.parent.resolve()
@@ -1080,11 +1022,13 @@ class AgentStudioChatScreen(ModalScreen):
                     if i_id == "studio-output-len":
                         try:
                             val = int(val)
-                        except: pass
+                        except Exception:  # noqa: BLE001
+                            pass
                     elif i_id == "studio-top-p":
                         try:
                             val = float(val)
-                        except: pass
+                        except Exception:  # noqa: BLE001
+                            pass
                     self.local_profiles[agent]["ai_studio_options"][key_map[i_id]] = val
                 self._save_dict_profile()
                 
@@ -1176,7 +1120,7 @@ class AgentStudioChatScreen(ModalScreen):
             self.action_start_chat(None)
             
     def _rename_chat_session_folders(self, old_name: str, new_name: str) -> None:
-        import shutil
+
         from maccre_core.utils.path_resolver import get_datacenter_path
         old_id = f"studio_session_{old_name}"
         new_id = f"studio_session_{new_name}"
@@ -1218,7 +1162,7 @@ class AgentStudioChatScreen(ModalScreen):
     def _save_dict_profile(self) -> str:
         import json
         from maccre_core.utils.path_resolver import get_datacenter_path
-        job_id = f"studio_session_{self.active_chat_name}"
+
         clean_id = self.active_chat_name
         # 02_Dynamic_Context\ChatStudioSessions\[clean_id]-Chat\
         dict_dir = get_datacenter_path("02_Dynamic_Context", f"ChatStudioSessions/{clean_id}-Chat")
@@ -1398,7 +1342,7 @@ class AgentStudioChatScreen(ModalScreen):
         indicator.update(f"{agent_name} is typing...")
         
         from maccre_core.orchestration.queues import JsonFileQueue
-        import time
+
         
         message_bus = JsonFileQueue("live_session_bus")
         payload = {
@@ -1713,82 +1657,6 @@ class CreatePayloadModal(ModalScreen[dict]):
 
 
 
-class FlowRegistryModalScreen(ModalScreen[dict | None]):
-    """Modal to save/load complete flow layouts from flow_registry.db"""
-    
-    CSS = """
-    FlowRegistryModalScreen {
-        align: center middle;
-    }
-    #reg-dialog {
-        width: 80;
-        height: auto;
-        max-height: 90vh;
-        background: $panel;
-        border: solid $primary;
-        padding: 1 2;
-    }
-    .reg-section {
-        border: solid $secondary;
-        padding: 1;
-        margin-bottom: 1;
-    }
-    #reg-save-desc {
-        height: 5;
-    }
-    """
-    
-    def __init__(self, flows: list[dict], **kwargs):
-        super().__init__(**kwargs)
-        self.flows = flows
-        
-    def compose(self) -> ComposeResult:
-        with Vertical(id="reg-dialog"):
-            yield Label("Flow Registry", classes="pane-title")
-            
-            with Vertical(classes="reg-section"):
-                yield Label("Save Current Flow", classes="node-cfg-title")
-                yield Input(placeholder="Flow Name", id="reg-save-name")
-                yield TextArea(id="reg-save-desc")
-                yield Button("Save Flow", variant="success", id="btn-reg-save")
-                
-            with Vertical(classes="reg-section"):
-                yield Label("Load Flow", classes="node-cfg-title")
-                opts = [(f["name"], f["name"]) for f in self.flows]
-                yield Select(opts, prompt="Select Flow...", id="reg-load-select")
-                yield Static("", id="reg-load-desc", classes="info-panel-body")
-                yield Button("Load Flow", variant="primary", id="btn-reg-load")
-                
-            with Horizontal():
-                yield Button("Cancel", variant="error", id="btn-reg-cancel")
-
-    @on(Select.Changed, "#reg-load-select")
-    def on_select(self, event: Select.Changed):
-        desc = self.query_one("#reg-load-desc", Static)
-        if not event.value or event.value == Select.BLANK:
-            desc.update("")
-            return
-        for f in self.flows:
-            if f["name"] == str(event.value):
-                desc.update(f"[b]Description:[/b]\n{f['description']}")
-                break
-
-    @on(Button.Pressed, "#btn-reg-save")
-    def action_save(self):
-        name = self.query_one("#reg-save-name", Input).value.strip()
-        desc = self.query_one("#reg-save-desc", TextArea).text.strip()
-        if name:
-            self.dismiss({"action": "save", "name": name, "description": desc})
-
-    @on(Button.Pressed, "#btn-reg-load")
-    def action_load(self):
-        sel = self.query_one("#reg-load-select", Select)
-        if sel.value and sel.value != Select.BLANK:
-            self.dismiss({"action": "load", "name": str(sel.value)})
-
-    @on(Button.Pressed, "#btn-reg-cancel")
-    def action_cancel(self):
-        self.dismiss(None)
 
 
 class NodeConfigModal(ModalScreen[dict | None]):
@@ -2039,8 +1907,6 @@ class FlowExecutionPanel(Vertical):
         # Flow Execution Top Panel
         with Vertical(classes="panel-section", id="flow-execution-top"):
             yield Label("Flow Execution", classes="pane-title")
-            with Horizontal(id="main-flow-load-row", classes="flow-controls"):
-                yield Select([], prompt="Load Flow from Registry...", id="main-flow-load-select")
             with Horizontal(id="flow-select-row"):
                 with Vertical(classes="flow-select-group"):
                     yield Label("MacroNode")
@@ -2226,7 +2092,6 @@ class NexusPlex(App[None]):
             special_sel = self.query_one("#special-select", Select)
             if special_sel:
                 special_sel.set_options([(s, s) for s in special])
-            self._populate_flow_registry_dropdown()
         except Exception as e:
             self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
             
@@ -3079,54 +2944,6 @@ class NexusPlex(App[None]):
             self.active_flow_steps.pop()
             self._refresh_active_flow_sequence()
 
-    def _populate_flow_registry_dropdown(self) -> None:
-        try:
-            from maccre_core.flow_registry import FlowRegistryStore
-            store = FlowRegistryStore()
-            names = store.list_flow_names()
-            opts = [(n, n) for n in names]
-            sel = self.query_one("#main-flow-load-select", Select)
-            if sel:
-                sel.set_options(opts)
-        except Exception as e:
-            self.write_agent_log(f"[red]Error loading Flow Registry dropdown: {e}[/red]")
-
-    @on(Select.Changed, "#main-flow-load-select")
-    def on_main_flow_load(self, event: Select.Changed) -> None:
-        val = event.value
-        if not val or val == Select.BLANK:
-            return
-        try:
-            import json
-            from maccre_core.flow_registry import FlowRegistryStore
-            from maccre_core.orchestration.flow_engine import FlowStep
-            store = FlowRegistryStore()
-            flow = store.load_flow(str(val))
-            raw_steps = json.loads(flow["steps_json"])
-            
-            self.active_flow_steps = []
-            for s in raw_steps:
-                if isinstance(s, dict):
-                    self.active_flow_steps.append(FlowStep.from_dict(s))
-                elif isinstance(s, str):
-                    import ast
-                    try:
-                        d = ast.literal_eval(s)
-                        if isinstance(d, dict):
-                            self.active_flow_steps.append(FlowStep.from_dict(d))
-                        else:
-                            self.active_flow_steps.append(s)
-                    except Exception:
-                        self.active_flow_steps.append(s)
-                else:
-                    self.active_flow_steps.append(s)
-                    
-            self._refresh_active_flow_sequence()
-            self.notify(f"Loaded Flow: {flow['name']}")
-            self._current_job_id = None
-            self.query_one("#active-flow-sequence-label", Label).update("Active Flow Sequence [Unsaved]")
-        except Exception as e:
-            self.notify(f"Load failed: {e}", severity="error")
 
     @on(Button.Pressed, "#btn-clear-flow")
     def clear_flow_sequence(self) -> None:
@@ -3189,10 +3006,7 @@ class NexusPlex(App[None]):
                     conn.row_factory = sqlite3.Row
                     row = conn.execute("SELECT topology_csv FROM job_sessions WHERE job_id = ?", (job_id,)).fetchone()
                     if row and row["topology_csv"]:
-                        from maccre_core.flow_registry import FlowRegistryStore
-                        store = FlowRegistryStore()
-                        store.save_flow(f"{job_id}-CanonFlow", "Canonized Flow", row["topology_csv"])
-                        self._populate_flow_registry_dropdown()
+                        pass  # topology_csv available for future use
 
                     # Fix canonize arguments
                     ledger_path = str(get_datacenter_path("03_Agent_Ledgers", job_id, "unified_session_ledger.md"))
@@ -3201,21 +3015,42 @@ class NexusPlex(App[None]):
                 except Exception as e:
                     self.notify(f"Canonize failed: {e}", severity="error")
 
-            elif action == "save_registry":
+
+            elif action == "save_as_template":
                 try:
-                    from maccre_core.orchestration.local_broker import LocalMessageBroker
-                    import sqlite3
-                    conn = LocalMessageBroker()._get_conn()
-                    conn.row_factory = sqlite3.Row
-                    row = conn.execute("SELECT topology_csv FROM job_sessions WHERE job_id = ?", (job_id,)).fetchone()
-                    if row and row["topology_csv"]:
-                        from maccre_core.flow_registry import FlowRegistryStore
-                        store = FlowRegistryStore()
-                        store.save_flow(job_id, "Saved from Session Manager", row["topology_csv"])
-                        self.notify(f"Flow {job_id} saved to registry.")
-                        self._populate_flow_registry_dropdown()
+                    import json as _json
+                    from maccre_core.utils.path_resolver import get_datacenter_path
+                    from maccre_core.macronode_registry import get_macronode_store
+
+                    topo_path = get_datacenter_path("02_Dynamic_Context", job_id) / "as_wrapped_topology.json"
+                    if not topo_path.exists():
+                        self.notify(f"No topology snapshot found for {job_id}", severity="error")
+                        return
+
+                    topo_data = _json.loads(topo_path.read_text(encoding="utf-8"))
+                    nodes_list = topo_data.get("nodes", topo_data.get("topology_rows", []))
+
+                    template_rows: list[dict] = []
+                    for node in nodes_list:
+                        template_rows.append({
+                            "Node_ID": node.get("Node_ID", ""),
+                            "Role": node.get("Role", node.get("Node_ID", "")),
+                            "Next_Node": node.get("Next_Node", "END"),
+                            "Wait_For": node.get("Wait_For", ""),
+                        })
+
+                    store = get_macronode_store(self.active_project)
+                    store.save(
+                        name=job_id,
+                        topology_rows=template_rows,
+                        description=f"Template derived from completed session {job_id}",
+                        is_template=True,
+                        template_type="custom",
+                    )
+                    self.notify(f"Saved topology template: {job_id}")
+                    self._refresh_macro_dropdown()
                 except Exception as e:
-                    self.notify(f"Save failed: {e}", severity="error")
+                    self.notify(f"Save template failed: {e}", severity="error")
 
             elif action == "nexus_deadflow":
                 self.focus_nexus()
@@ -3234,45 +3069,6 @@ class NexusPlex(App[None]):
         except Exception as e:
             self.call_from_thread(self.notify, f"Canonize failed: {e}", severity="error")
 
-    @on(Button.Pressed, "#btn-flow-registry")
-    def action_flow_registry(self) -> None:
-        if self._vcr_state != "idle":
-            return
-            
-        try:
-            from maccre_core.flow_registry import FlowRegistryStore
-            store = FlowRegistryStore()
-            flows = store.load_all_flows()
-        except Exception as e:
-            self.write_agent_log(f"[red]Error loading Flow Registry: {e}[/red]")
-            return
-            
-        def handle_registry(result: dict | None):
-            if result:
-                action = result.get("action")
-                if action == "save":
-                    try:
-                        import json
-                        store = FlowRegistryStore()
-                        steps_json = json.dumps([s.to_dict() for s in self.active_flow_steps])
-                        store.save_flow(result["name"], result["description"], steps_json)
-                        self.write_agent_log(f"[green]Flow '{result['name']}' saved to registry.[/green]")
-                    except Exception as e:
-                        self.write_agent_log(f"[red]Failed to save flow: {e}[/red]")
-                elif action == "load":
-                    try:
-                        import json
-                        store = FlowRegistryStore()
-                        flow = store.load_flow(result["name"])
-                        steps_data = json.loads(flow["steps_json"])
-                        from maccre_core.orchestration.flow_engine import FlowStep
-                        self.active_flow_steps = [FlowStep.from_dict(s) for s in steps_data]
-                        self._refresh_active_flow_sequence()
-                        self.write_agent_log(f"[green]Flow '{result['name']}' loaded from registry.[/green]")
-                    except Exception as e:
-                        self.write_agent_log(f"[red]Failed to load flow: {e}[/red]")
-                        
-        self.app.push_screen(FlowRegistryModalScreen(flows), handle_registry)
 
     def _refresh_active_flow_sequence(self) -> None:
         """Refresh the active flow sequence display with clickable nodes."""

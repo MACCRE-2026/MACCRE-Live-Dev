@@ -90,7 +90,7 @@ class SessionManagerModal(ModalScreen[dict | None]):
                     Select([], prompt="Select Completed...", id="completed-select"),
                     Horizontal(
                         Button("Canonize", id="btn-canonize-session", variant="warning", disabled=True),
-                        Button("Save to Flow Registry", id="btn-save-registry", variant="primary", disabled=True),
+                        Button("Save as Template", id="btn-save-registry", variant="primary", disabled=True),
                         classes="mt-1"
                     ),
                     classes="sm-column", id="completed-panel"
@@ -274,6 +274,7 @@ class SessionManagerModal(ModalScreen[dict | None]):
 
     @on(Button.Pressed, "#btn-save-registry")
     def on_save_registry(self, event: Button.Pressed) -> None:
+        """Save the completed session's topology as a reusable MacroNode template."""
         if self.selected_completed:
             new_name = self.query_one("#session-name-input", Input).value.strip()
             job_to_save = self.selected_completed
@@ -284,7 +285,7 @@ class SessionManagerModal(ModalScreen[dict | None]):
                 except Exception as e:
                     self.notify(f"Rename failed before saving: {e}", severity="error")
                     return
-            self.dismiss({"action": "save_registry", "job_id": job_to_save})
+            self.dismiss({"action": "save_as_template", "job_id": job_to_save})
 
     @on(Button.Pressed, "#btn-close-session-manager")
     def on_close(self, event: Button.Pressed) -> None:

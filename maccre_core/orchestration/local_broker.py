@@ -245,14 +245,7 @@ class LocalMessageBroker(MessageBroker):
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Could not rename pins in memory engine: {e}")
-            
-        try:
-            from maccre_core.flow_registry import FlowRegistryStore
-            store = FlowRegistryStore()
-            store.rename_flow(f"{old_job_id}-CanonFlow", f"{new_job_id}-CanonFlow")
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Could not rename flow in registry: {e}")
+
 
     def update_session_topology(self, job_id: str, topology_json: str) -> None:
         """Patch the topology JSON string for a specific session."""
