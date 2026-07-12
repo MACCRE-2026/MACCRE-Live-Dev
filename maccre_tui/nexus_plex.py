@@ -41,6 +41,7 @@ from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_tui.widgets.information_panel import InformationPanel
 from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop
 from maccre_tui.widgets.flow_monitor_overlay import FlowMonitorCollapsed, FlowMonitorOverlay
+from maccre_tui.widgets.topology_visualizer import TopologyVisualizer
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -3562,6 +3563,18 @@ class NexusPlex(App[None]):
         except Exception:  # noqa: BLE001
             pass
         
+        # Load topology into visualizer and start animation
+        try:
+            viz = self.query_one(TopologyVisualizer)
+            topo_steps = []
+            for i, step in enumerate(self.active_flow_steps):
+                next_name = self.active_flow_steps[i + 1].macronode_name if i + 1 < len(self.active_flow_steps) else "END"
+                topo_steps.append({"Node_ID": step.macronode_name, "Next_Node": next_name, "Wait_For": ""})
+            viz.load_topology(topo_steps)
+            viz.start_animation()
+        except Exception:  # noqa: BLE001
+            pass
+        
         self.write_agent_log(
             f"\n[bold cyan]--- Started Linear Flow Execution ---[/bold cyan]\n"
             f"Payload: {self._pending_payload_path}"
@@ -3609,6 +3622,12 @@ class NexusPlex(App[None]):
             while len(self._node_payloads) <= step_index:
                 self._node_payloads.append("")
             self._node_payloads[step_index] = output_path
+            # Update progress in Flow Monitor
+            self.call_from_thread(self._update_monitor_progress, step_index + 1, len(self.active_flow_steps))
+
+        def _on_node_started(step_index: int, macronode_name: str) -> None:
+            """Called when a MacroNode step begins — update topology and monitor."""
+            self.call_from_thread(self._highlight_active_node, step_index, macronode_name)
 
         def _on_hitl_pause(step_index: int, job_id: str, payload: str) -> None:
             """Called from flow engine thread when CTRL_PAUSE fires."""
@@ -3628,6 +3647,7 @@ class NexusPlex(App[None]):
                 step_callback=_on_step_complete,
                 hitl_callback=_on_hitl_pause,
                 job_started_callback=_on_job_started,
+                node_started_callback=_on_node_started,
             )
             if self._flow_cancel_event and self._flow_cancel_event.is_set():
                 self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
@@ -3712,11 +3732,42 @@ class NexusPlex(App[None]):
         self._set_vcr_state("idle")
         self._exit_paused_state()
         
+        # Stop topology animation and mark all nodes completed
+        try:
+            viz = self.query_one(TopologyVisualizer)
+            viz.mark_all_completed()
+        except Exception:  # noqa: BLE001
+            pass
+        
         # Hide Flow Monitor Overlay + header button, restore InformationPanel
         try:
             self.query_one(FlowMonitorOverlay).add_class("hidden")
             self.query_one(InformationPanel).remove_class("hidden")
             self.query_one("#btn-expand-monitor", Button).add_class("hidden")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _highlight_active_node(self, step_index: int, macronode_name: str) -> None:
+        """Update the TopologyVisualizer and FlowMonitorOverlay when a step starts."""
+        try:
+            viz = self.query_one(TopologyVisualizer)
+            viz.set_active_node(macronode_name)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            monitor = self.query_one(FlowMonitorOverlay)
+            if not monitor.has_class("hidden"):
+                monitor.update_stage(f"[bold cyan]{macronode_name}[/bold cyan] (step {step_index + 1})")
+                monitor.set_current_node(macronode_name, "", "")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _update_monitor_progress(self, completed: int, total: int) -> None:
+        """Update the FlowMonitorOverlay progress bar."""
+        try:
+            monitor = self.query_one(FlowMonitorOverlay)
+            if not monitor.has_class("hidden"):
+                monitor.update_progress(completed, total)
         except Exception:  # noqa: BLE001
             pass
 

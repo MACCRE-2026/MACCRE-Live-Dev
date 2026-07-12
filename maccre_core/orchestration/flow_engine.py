@@ -553,6 +553,7 @@ class FlowRunner:
         step_callback: Callable[[int, str], None] | None = None,
         hitl_callback: Callable[[int, str, str], None] | None = None,
         job_started_callback: Callable[[str], None] | None = None,
+        node_started_callback: Callable[[int, str], None] | None = None,
     ) -> str:
         """
         Execute a sequential linear flow of MacroNodes.
@@ -603,6 +604,13 @@ class FlowRunner:
                     pause_event.wait()
 
                 logger.info(f"\n[FLOW_ENGINE] === STEP {idx+1}/{len(steps)}: Loading MacroNode '{step.macronode_name}' ===")
+
+                # Notify TUI that this step is starting (for live topology highlighting)
+                if node_started_callback is not None:
+                    try:
+                        node_started_callback(idx, step.macronode_name)
+                    except Exception:  # noqa: BLE001
+                        pass
             
                 # 1. Load the MacroNode
                 if step.macronode_name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
