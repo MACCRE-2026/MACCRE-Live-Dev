@@ -309,6 +309,11 @@ class UniversalSwarmWorker:
                                 loop_payload = new_payload
                                 # Keep iterating
                             else:
+                                # Capture native search grounding as a tool call
+                                if "### Search Grounding Sources:" in raw_response:
+                                    _grounding_start = raw_response.index("### Search Grounding Sources:")
+                                    _grounding_block = raw_response[_grounding_start:]
+                                    write_thought(f"<tool_call>\n[GOOGLE_SEARCH_GROUNDING]\n{_grounding_block}\n</tool_call>")
                                 final_response = raw_response
                                 break
                                 
@@ -1107,7 +1112,7 @@ All file paths must strictly resolve to these five silos:
                         tools_str=tools_str,
                         temperature=float(node_config.get("temperature", 0.7)),
                         expect_multiple_reads=True,
-                        thinking_level=ai_options.get('thinking_level', 'none'),
+                        thinking_level=ai_options.get('thinking_level', 'low'),
                         safety_level=ai_options.get('safety_level', 'BLOCK_NONE')
                     )
 
@@ -1142,6 +1147,11 @@ All file paths must strictly resolve to these five silos:
                     if not did_fire:
                         # Clean prose output — loop terminates naturally.
                         final_output_text = output_text
+                        # Capture native search grounding as a tool call
+                        if "### Search Grounding Sources:" in output_text:
+                            _gs_start = output_text.index("### Search Grounding Sources:")
+                            _gs_block = output_text[_gs_start:]
+                            logger.info(f"<tool_call>\n[GOOGLE_SEARCH_GROUNDING]\n{_gs_block}\n</tool_call>")
                         if tool_audit_lines:
                             logger.info(f"[{AGENT_ID}] Tool loop complete: {turn_idx} tool turn(s) → clean output.")
                         break

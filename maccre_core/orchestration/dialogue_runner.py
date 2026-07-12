@@ -58,6 +58,7 @@ class _AgentSession:
     system_prompt: str
     temperature: float
     tools_str: str = "none"
+    thinking_level: str = "low"
     # Conversation history — grows after every exchange turn.
     # Format mirrors router.generate(conversation_history=…):
     #   [{"role": "user", "text": "<what the model received>"},
@@ -92,6 +93,7 @@ class _AgentSession:
             temperature=self.temperature,
             conversation_history=self.history if self.history else None,
             expect_multiple_reads=True,
+            thinking_level=self.thinking_level,
         )
         self.total_cost += cost
 
@@ -101,6 +103,11 @@ class _AgentSession:
         pbr_thoughts = re.findall(r"<thought>(.*?)</thought>", response_text, re.DOTALL)
         for t in pbr_thoughts:
             logger.info("<thought>\n%s\n</thought>", t.strip())
+        # Capture native search grounding as a tool call
+        if "### Search Grounding Sources:" in response_text:
+            _gs_idx = response_text.index("### Search Grounding Sources:")
+            _gs_block = response_text[_gs_idx:]
+            logger.info("<tool_call>\n[GOOGLE_SEARCH_GROUNDING]\n%s\n</tool_call>", _gs_block)
 
         # Append this exchange to history so the NEXT call has full context.
         # Format: user turn = what we sent, model turn = what it replied.
