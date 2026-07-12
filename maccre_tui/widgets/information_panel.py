@@ -136,9 +136,8 @@ class InformationPanel(Vertical):
 
     DEFAULT_CSS = """
     InformationPanel {
-        height: auto;
-        max-height: 50%;
-        overflow-y: auto;
+        height: 1fr;
+        overflow-y: scroll;
         border: solid $primary;
         padding: 0 1;
     }

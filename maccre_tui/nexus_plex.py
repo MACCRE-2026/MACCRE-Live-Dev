@@ -3117,11 +3117,11 @@ class NexusPlex(App[None]):
         
         widgets_to_mount = []
         for i, step in enumerate(self.active_flow_steps):
-            if i > 0:
-                widgets_to_mount.append(Button("→", id=f"flow-insert-arrow-{i}", classes="flow-arrow-gold"))
-            name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
             import uuid
             uid = uuid.uuid4().hex[:8]
+            if i > 0:
+                widgets_to_mount.append(Button("→", id=f"flow-insert-arrow-{i}-{uid}", classes="flow-arrow-gold"))
+            name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
             
             btn_left = Button("◀", id=f"fmoveleft-{i}-{uid}", classes="flow-move-btn")
             btn = Button(name, variant="default", id=f"anode-{i}-{uid}", classes="active-node-btn")
