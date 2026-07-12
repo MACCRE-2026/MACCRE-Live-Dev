@@ -114,22 +114,22 @@ class TopologyVisualizer(Vertical):
     TopologyVisualizer {
         height: auto;
         min-height: 8;
-        max-height: 100%;
         border: solid $primary;
         padding: 0;
+        margin-bottom: 1;
     }
     TopologyVisualizer > Label.topo-title {
+        height: 1;
         text-style: bold;
         color: $accent;
         padding: 0 1;
     }
     TopologyVisualizer > Tree {
-        height: auto;
-        min-height: 6;
-        max-height: 100%;
+        height: 8;
         scrollbar-size: 1 1;
     }
     TopologyVisualizer > .topo-empty {
+        height: 3;
         color: $text-muted;
         padding: 1 2;
     }

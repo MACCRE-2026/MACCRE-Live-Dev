@@ -90,15 +90,17 @@ class MacroNodeWorkshop(Vertical):
         padding: 0 1;
     }
     MacroNodeWorkshop > .workshop-title {
+        height: 1;
         text-style: bold;
         color: $accent;
         padding: 0 1;
         background: $boost;
+        margin-bottom: 1;
     }
     MacroNodeWorkshop .flow-controls {
-        height: auto;
-        padding: 0;
-        margin-bottom: 0;
+        height: 3;
+        layout: horizontal;
+        margin-bottom: 1;
     }
     MacroNodeWorkshop .flow-controls Button {
         margin: 0 1 0 0;
@@ -108,34 +110,34 @@ class MacroNodeWorkshop(Vertical):
         padding: 0;
     }
     MacroNodeWorkshop .flow-monitor-section {
-        height: auto;
-        min-height: 12;
-        max-height: 30;
+        height: 20;
         border-top: solid $primary;
         padding: 0;
+        margin-top: 1;
     }
     MacroNodeWorkshop .flow-monitor-section RichLog {
-        height: auto;
-        min-height: 8;
-        max-height: 20;
+        height: 12;
     }
     MacroNodeWorkshop .input-row {
-        height: auto;
-        padding: 0;
+        height: 3;
+        layout: horizontal;
     }
     MacroNodeWorkshop .input-row Input {
-        width: 1fr;
+        width: 90%;
     }
     MacroNodeWorkshop .input-row Button {
+        width: 8%;
         min-width: 4;
     }
     MacroNodeWorkshop .flow-stage-readout {
+        height: 1;
         padding: 0 1;
         color: $text-muted;
     }
     MacroNodeWorkshop .topo-actions {
-        height: auto;
-        padding: 0 1;
+        height: 3;
+        layout: horizontal;
+        margin-bottom: 1;
     }
     MacroNodeWorkshop .topo-actions Button {
         margin-right: 1;
@@ -149,6 +151,7 @@ class MacroNodeWorkshop(Vertical):
         max-width: 4;
     }
     MacroNodeWorkshop .vcr-instructions {
+        height: 2;
         color: $text-muted;
         padding: 0 1;
     }

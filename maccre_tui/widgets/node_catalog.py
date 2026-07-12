@@ -75,50 +75,42 @@ class NodeCatalog(Vertical):
     DEFAULT_CSS = """
     NodeCatalog {
         height: auto;
-        max-height: 30;
         border: solid $primary;
         padding: 0;
+        margin-bottom: 1;
     }
     NodeCatalog > Label.catalog-title {
+        height: 1;
         text-style: bold;
         color: $accent;
         padding: 0 1;
     }
     NodeCatalog TabbedContent {
-        height: auto;
-        min-height: 10;
-        max-height: 26;
+        height: 14;
     }
     NodeCatalog ContentSwitcher {
-        height: auto;
-        min-height: 6;
+        height: 10;
     }
     NodeCatalog TabPane {
-        height: auto;
-        min-height: 5;
+        height: 10;
         padding: 0 1;
     }
     NodeCatalog .catalog-row {
-        height: auto;
-        min-height: 3;
-        padding: 0;
+        height: 3;
+        layout: horizontal;
+        margin-bottom: 1;
     }
-    NodeCatalog Select {
-        width: 1fr;
+    NodeCatalog .catalog-row Select {
+        width: 80%;
     }
-    NodeCatalog .flow-add-btn {
+    NodeCatalog .catalog-row Button {
+        width: 18%;
         min-width: 8;
         margin-left: 1;
     }
     NodeCatalog .info-panel-body {
-        height: auto;
-        max-height: 6;
-        min-height: 2;
+        height: 5;
         scrollbar-size: 1 1;
-        padding: 0 1;
-    }
-    NodeCatalog .catalog-status {
-        color: $text-muted;
         padding: 0 1;
     }
     """

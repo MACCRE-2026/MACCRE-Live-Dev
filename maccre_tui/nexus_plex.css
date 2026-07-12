@@ -581,38 +581,49 @@ MacroNodeWorkshop {
 
 NodeCatalog {
     height: auto;
-    max-height: 30;
     border: solid #30363d;
     background: #0d1117;
+    margin-bottom: 1;
 }
 
 NodeCatalog TabbedContent {
-    min-height: 8;
+    height: 14;
 }
 
 NodeCatalog ContentSwitcher {
-    min-height: 5;
+    height: 10;
 }
 
 NodeCatalog TabPane {
-    min-height: 4;
+    height: 10;
+}
+
+NodeCatalog .catalog-row {
+    height: 3;
+    layout: horizontal;
+}
+
+NodeCatalog .catalog-row Select {
+    width: 80%;
+}
+
+NodeCatalog .catalog-row Button {
+    width: 18%;
+    min-width: 8;
 }
 
 /* ── TopologyVisualizer integration ──────────────────────────────────────── */
 
 TopologyVisualizer {
     height: auto;
-    min-height: 6;
-    max-height: 20;
+    min-height: 8;
     border: solid #30363d;
     background: #0d1117;
     margin-bottom: 1;
 }
 
 TopologyVisualizer Tree {
-    height: auto;
-    min-height: 4;
-    max-height: 16;
+    height: 8;
     scrollbar-color: #30363d;
     scrollbar-color-hover: #58a6ff;
 }
