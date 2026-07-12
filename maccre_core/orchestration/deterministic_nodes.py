@@ -14,11 +14,11 @@ maccre_core/orchestration/deterministic_nodes.py
 =================================================
 Phase 4 — Deterministic Node Library.
 
-Deterministic (DET) nodes execute without calling the LLM. They perform
+Control nodes (CTRL_ prefix, legacy DET_) execute without calling the LLM. They perform
 structural operations on the flow graph: anchoring, recursion control,
 gating, pausing, checkpointing, delay, and text transformation.
 
-A node is deterministic if its ``Node_ID`` starts with the ``DET_`` prefix.
+A node is a control node if its ``Node_ID`` starts with ``CTRL_`` (or legacy ``DET_``) prefix.
 The swarm worker checks ``is_deterministic_node()`` and routes to
 ``execute_deterministic_node()`` instead of the AI pipeline.
 
@@ -46,6 +46,7 @@ from maccre_core.utils.path_resolver import get_datacenter_path
 logger = logging.getLogger(__name__)
 
 DET_PREFIX = "DET_"
+CTRL_PREFIX = "CTRL_"
 
 
 class DeterministicNodeType(Enum):
@@ -60,13 +61,20 @@ class DeterministicNodeType(Enum):
 
 
 def is_deterministic_node(node_id: str) -> bool:
-    """Return True if a node_id uses the DET_ prefix convention."""
-    return node_id.strip().upper().startswith(DET_PREFIX)
+    """Return True if a node_id uses the CTRL_ or legacy DET_ prefix convention."""
+    upper = node_id.strip().upper()
+    return upper.startswith(CTRL_PREFIX) or upper.startswith(DET_PREFIX)
 
 
 def _resolve_node_type(node_id: str) -> DeterministicNodeType | None:
-    """Map a node_id string to its DeterministicNodeType enum, if valid."""
+    """Map a node_id string to its DeterministicNodeType enum, if valid.
+
+    Supports both CTRL_ and legacy DET_ prefixes.
+    """
     upper = node_id.strip().upper()
+    # Normalize CTRL_ prefix to DET_ for enum matching
+    if upper.startswith(CTRL_PREFIX):
+        upper = DET_PREFIX + upper[len(CTRL_PREFIX):]
     # Match longest prefix first to avoid DET_GATE matching DET_GATEWAY etc.
     for ntype in DeterministicNodeType:
         if upper.startswith(ntype.value):

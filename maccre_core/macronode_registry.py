@@ -106,6 +106,10 @@ _MIGRATE_TEMPLATE_COLS: list[str] = [
     "ALTER TABLE macronode_registry ADD COLUMN template_config TEXT DEFAULT NULL",
 ]
 
+_MIGRATE_DEPRECATED_COL: list[str] = [
+    "ALTER TABLE macronode_registry ADD COLUMN deprecated INTEGER DEFAULT 0",
+]
+
 
 class SQLiteMacroNodeStore(MacroNodeStore):
     """SQLite-backed MacroNode registry. Thread-safe via check_same_thread=False."""
@@ -120,7 +124,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
         try:
             conn.execute(_CREATE_SQL)
             conn.execute(_CREATE_EPHEMERAL_SQL)
-            for stmt in _MIGRATE_TEMPLATE_COLS:
+            for stmt in _MIGRATE_TEMPLATE_COLS + _MIGRATE_DEPRECATED_COL:
                 try:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
@@ -234,13 +238,18 @@ class SQLiteMacroNodeStore(MacroNodeStore):
             "last_used": row[9],
         }
 
-    def list_all(self) -> list[dict[str, Any]]:
+    def list_all(self, include_deprecated: bool = False) -> list[dict[str, Any]]:
+        """Return summary list. Excludes deprecated entries unless include_deprecated=True."""
         conn = self._conn()
         try:
-            rows = conn.execute(
-                "SELECT name, description, is_template, template_type, created_at, last_used "
-                "FROM macronode_registry ORDER BY last_used DESC"
-            ).fetchall()
+            query = (
+                "SELECT name, description, is_template, template_type, created_at, last_used, "
+                "COALESCE(deprecated, 0) FROM macronode_registry"
+            )
+            if not include_deprecated:
+                query += " WHERE COALESCE(deprecated, 0) = 0"
+            query += " ORDER BY last_used DESC"
+            rows = conn.execute(query).fetchall()
         finally:
             conn.close()
         return [
@@ -251,6 +260,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
                 "template_type": r[3] or "",
                 "created_at": r[4],
                 "last_used": r[5],
+                "deprecated": bool(r[6]),
             }
             for r in rows
         ]
@@ -264,6 +274,34 @@ class SQLiteMacroNodeStore(MacroNodeStore):
             conn.close()
         if cur.rowcount == 0:
             raise KeyError(f"MacroNode '{name}' not found — nothing deleted.")
+
+    def deprecate(self, name: str) -> None:
+        """Mark a MacroNode as deprecated (soft-delete)."""
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "UPDATE macronode_registry SET deprecated = 1 WHERE name = ?",
+                (name.strip(),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        if cur.rowcount == 0:
+            raise KeyError(f"MacroNode '{name}' not found — nothing deprecated.")
+
+    def restore(self, name: str) -> None:
+        """Restore a deprecated MacroNode."""
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "UPDATE macronode_registry SET deprecated = 0 WHERE name = ?",
+                (name.strip(),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        if cur.rowcount == 0:
+            raise KeyError(f"MacroNode '{name}' not found — nothing restored.")
 
     def _touch(self, name: str) -> None:
         conn = self._conn()

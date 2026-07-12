@@ -1422,7 +1422,6 @@ class AgentStudioChatScreen(ModalScreen):
             project_select = self.query_one("#studio-project-select", Select)
             if project_select.value:
                 self.app.active_project = project_select.value
-                self.app.update_app_title()
         except Exception:
             pass
             
@@ -2339,7 +2338,16 @@ class NexusPlex(App[None]):
         try:
             from maccre_core.macronode_registry import SQLiteMacroNodeStore, _db_path
             store = SQLiteMacroNodeStore(_db_path(self.active_project))
-            store.save(result["name"], result)
+            store.save(
+                name=result["name"],
+                topology_rows=result.get("topology_rows", []),
+                roster_rows=result.get("roster_rows"),
+                description=result.get("description", ""),
+                is_template=result.get("is_template", False),
+                agent_slots=result.get("agent_slots"),
+                template_type=result.get("template_type", ""),
+                template_config=result.get("template_config"),
+            )
             self.app.notify(f"Saved MacroNode: {result['name']}")
             self.refresh_projects()
         except Exception as e:
@@ -3819,7 +3827,7 @@ class NexusPlex(App[None]):
             self.write_agent_log(f"[dim]{traceback.format_exc()}[/dim]")
         finally:
             self.is_session_active = False
-            self.call_from_thread(self._finish_flow_execution)
+            self.call_from_thread(self._finish_flow)
             root_logger.removeHandler(tui_handler)
             root_logger.setLevel(original_level)
 
@@ -3998,7 +4006,7 @@ class NexusPlex(App[None]):
 
         # Populate active flow sequence
         self.active_flow_steps = loaded_steps
-        self._refresh_flow_line()
+        self._refresh_active_flow_sequence()
 
         # Populate payload
         self._pending_payload_path = initial_payload
