@@ -455,20 +455,44 @@ class FlowRunner:
                         return current_payload
                         
                 topo_rows = macro_def.get("topology_rows", [])
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, step.payload_mode, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
+                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, step.payload_mode, step_index=idx, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
                 build_topology(hydrated_lists)
                 
-                # Check if tasks exist for this job_id and any node in this topology.
-                # If they do, they might be open/paused. If they don't, we need to inject.
+                # Check task status for this step's topology nodes.
+                # Tasks are stored with _S{idx} suffixes (e.g., CTRL_PAUSE_MANUAL_S1).
                 nodes_in_topo = [r[0] for r in hydrated_lists]
                 placeholders = ",".join(["?"] * len(nodes_in_topo))
-                task_count = conn.execute(f"SELECT COUNT(*) FROM task_queue WHERE job_id = ? AND current_node IN ({placeholders})", [job_id] + nodes_in_topo).fetchone()[0]
                 
-                if task_count == 0:
-                    start_nodes = self._find_starting_nodes(topo_rows)
+                # Count tasks by status category
+                task_rows = conn.execute(
+                    f"SELECT lock_status FROM task_queue WHERE job_id = ? AND current_node IN ({placeholders})",
+                    [job_id] + nodes_in_topo,
+                ).fetchall()
+                total_tasks = len(task_rows)
+                completed_tasks = sum(1 for r in task_rows if r[0] in ("completed", "cancelled"))
+                open_tasks = sum(1 for r in task_rows if r[0] == "open")
+                paused_tasks = sum(1 for r in task_rows if r[0] == "paused")
+                
+                if total_tasks > 0 and completed_tasks == total_tasks:
+                    # All tasks for this step already finished — skip it
+                    logger.info(f"[FLOW_ENGINE] Step {idx+1} ('{step.macronode_name}') already completed ({completed_tasks} task(s)). Skipping.")
+                    latest_ledger = self._find_final_ledger_path(job_id, topo_rows)
+                    if latest_ledger:
+                        current_payload = latest_ledger
+                    if step_callback is not None:
+                        try:
+                            step_callback(idx, current_payload)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    continue
+                
+                if total_tasks == 0:
+                    start_nodes = self._find_starting_nodes(topo_rows, step_index=idx)
                     for start_node in start_nodes:
                         broker.inject_task(job_id=job_id, payload_path=current_payload, starting_node=start_node)
                         logger.info(f"[FLOW_ENGINE] Queued entrypoint for resume: {start_node}")
+                else:
+                    logger.info(f"[FLOW_ENGINE] Step {idx+1}: {open_tasks} open, {paused_tasks} paused, {completed_tasks} completed task(s). Resuming worker.")
                 
                 db_path = str(get_datacenter_path("swarm_queue.db"))
                 worker = UniversalSwarmWorker()
