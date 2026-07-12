@@ -24,13 +24,13 @@ The swarm worker checks ``is_deterministic_node()`` and routes to
 
 Node Types
 ----------
-``DET_ANCHOR``      Entry marker — passes payload through unchanged.
-``DET_RECURSION``   Loop-back control with counter tracking.
-``DET_PAUSE``       Halts execution, sets task to ``paused`` for manual resume.
-``DET_GATE``        Conditional gate — blocks unless prerequisite nodes complete.
-``DET_CHECKPOINT``  Snapshots current payload to a checkpoint file.
-``DET_DELAY``       Sleeps for a configurable number of seconds.
-``DET_TRANSFORM``   Applies a static text wrapper/template to the payload.
+``CTRL_ANCHOR``      Entry marker — passes payload through unchanged.
+``CTRL_RECURSION``   Loop-back control with counter tracking.
+``CTRL_PAUSE``       Halts execution, sets task to ``paused`` for manual resume.
+``CTRL_GATE``        Conditional gate — blocks unless prerequisite nodes complete.
+``CTRL_CHECKPOINT``  Snapshots current payload to a checkpoint file.
+``CTRL_DELAY``       Sleeps for a configurable number of seconds.
+``CTRL_TRANSFORM``   Applies a static text wrapper/template to the payload.
 """
 from __future__ import annotations
 
@@ -45,19 +45,19 @@ from maccre_core.utils.path_resolver import get_datacenter_path
 
 logger = logging.getLogger(__name__)
 
-DET_PREFIX = "DET_"
 CTRL_PREFIX = "CTRL_"
+DET_PREFIX = "DET_"  # Legacy alias — kept for backward compat in saved topologies
 
 
 class DeterministicNodeType(Enum):
     """Enum of all supported deterministic node types."""
-    ANCHOR = "DET_ANCHOR"
-    RECURSION = "DET_RECURSION"
-    PAUSE = "DET_PAUSE"
-    GATE = "DET_GATE"
-    CHECKPOINT = "DET_CHECKPOINT"
-    DELAY = "DET_DELAY"
-    TRANSFORM = "DET_TRANSFORM"
+    ANCHOR = "CTRL_ANCHOR"
+    RECURSION = "CTRL_RECURSION"
+    PAUSE = "CTRL_PAUSE"
+    GATE = "CTRL_GATE"
+    CHECKPOINT = "CTRL_CHECKPOINT"
+    DELAY = "CTRL_DELAY"
+    TRANSFORM = "CTRL_TRANSFORM"
 
 
 def is_deterministic_node(node_id: str) -> bool:
@@ -72,9 +72,9 @@ def _resolve_node_type(node_id: str) -> DeterministicNodeType | None:
     Supports both CTRL_ and legacy DET_ prefixes.
     """
     upper = node_id.strip().upper()
-    # Normalize CTRL_ prefix to DET_ for enum matching
-    if upper.startswith(CTRL_PREFIX):
-        upper = DET_PREFIX + upper[len(CTRL_PREFIX):]
+    # Normalize legacy DET_ prefix to CTRL_ for enum matching
+    if upper.startswith(DET_PREFIX):
+        upper = CTRL_PREFIX + upper[len(DET_PREFIX):]
     # Match longest prefix first to avoid DET_GATE matching DET_GATEWAY etc.
     for ntype in DeterministicNodeType:
         if upper.startswith(ntype.value):
@@ -109,7 +109,7 @@ def execute_deterministic_node(
     """Execute a deterministic node and return the result.
 
     Args:
-        node_id: The full Node_ID string (e.g., ``DET_CHECKPOINT_1``).
+        node_id: The full Node_ID string (e.g., ``CTRL_CHECKPOINT_1``).
         task: The task dict from the broker (contains payload_path, job_id, etc.).
         topology_config: Optional node config from topology.csv row dict.
 
@@ -140,8 +140,8 @@ def _handle_anchor(
     job_id: str,
     config: dict[str, Any],
 ) -> DeterministicNodeResult:
-    """DET_ANCHOR — Pass-through entry marker. No transformation."""
-    logger.info(f"[DET_ANCHOR] {node_id}: Pass-through. Payload unchanged.")
+    """CTRL_ANCHOR — Pass-through entry marker. No transformation."""
+    logger.info(f"[CTRL_ANCHOR] {node_id}: Pass-through. Payload unchanged.")
     return DeterministicNodeResult(
         output_payload_path=payload_path,
         log_message=f"ANCHOR node {node_id}: payload forwarded unchanged.",
@@ -154,7 +154,7 @@ def _handle_recursion(
     job_id: str,
     config: dict[str, Any],
 ) -> DeterministicNodeResult:
-    """DET_RECURSION — Loop-back control with iteration counter.
+    """CTRL_RECURSION — Loop-back control with iteration counter.
 
     Uses ``loop_iteration_count`` from the task and ``Max_Recursion`` from
     topology config to decide whether to loop back or proceed to next.
@@ -169,7 +169,7 @@ def _handle_recursion(
             loop_target = str(config.get("Next_Node", "END")).split("|")[0].strip()
 
         logger.info(
-            f"[DET_RECURSION] {node_id}: Iteration {iteration + 1}/{max_recursion} "
+            f"[CTRL_RECURSION] {node_id}: Iteration {iteration + 1}/{max_recursion} "
             f"— looping back to {loop_target}"
         )
         return DeterministicNodeResult(
@@ -178,7 +178,7 @@ def _handle_recursion(
             log_message=f"RECURSION {iteration + 1}/{max_recursion}: looping to {loop_target}",
         )
     else:
-        logger.info(f"[DET_RECURSION] {node_id}: Max recursion ({max_recursion}) reached — proceeding.")
+        logger.info(f"[CTRL_RECURSION] {node_id}: Max recursion ({max_recursion}) reached — proceeding.")
         return DeterministicNodeResult(
             output_payload_path=payload_path,
             log_message=f"RECURSION complete after {max_recursion} iterations.",
@@ -191,8 +191,8 @@ def _handle_pause(
     job_id: str,
     config: dict[str, Any],
 ) -> DeterministicNodeResult:
-    """DET_PAUSE — Halt execution. Task set to 'paused' for manual resume."""
-    logger.info(f"[DET_PAUSE] {node_id}: Flow paused. Awaiting manual resume.")
+    """CTRL_PAUSE — Halt execution. Task set to 'paused' for manual resume."""
+    logger.info(f"[CTRL_PAUSE] {node_id}: Flow paused. Awaiting manual resume.")
     return DeterministicNodeResult(
         output_payload_path=payload_path,
         should_pause=True,
@@ -206,14 +206,14 @@ def _handle_gate(
     job_id: str,
     config: dict[str, Any],
 ) -> DeterministicNodeResult:
-    """DET_GATE — Conditional gate.
+    """CTRL_GATE — Conditional gate.
 
     The gate checks if the payload file exists and has content.
     If empty or missing, it blocks (returns the same node as next_node
     so the broker re-queues it). Otherwise, passes through.
     """
     if not payload_path or payload_path == "none":
-        logger.info(f"[DET_GATE] {node_id}: No payload — gate BLOCKED.")
+        logger.info(f"[CTRL_GATE] {node_id}: No payload — gate BLOCKED.")
         return DeterministicNodeResult(
             output_payload_path=payload_path,
             next_node=node_id,  # Re-queue self
@@ -222,14 +222,14 @@ def _handle_gate(
 
     path = Path(payload_path)
     if not path.exists() or path.stat().st_size == 0:
-        logger.info(f"[DET_GATE] {node_id}: Payload empty or missing — gate BLOCKED.")
+        logger.info(f"[CTRL_GATE] {node_id}: Payload empty or missing — gate BLOCKED.")
         return DeterministicNodeResult(
             output_payload_path=payload_path,
             next_node=node_id,
             log_message=f"GATE {node_id}: blocked — empty payload.",
         )
 
-    logger.info(f"[DET_GATE] {node_id}: Gate PASSED.")
+    logger.info(f"[CTRL_GATE] {node_id}: Gate PASSED.")
     return DeterministicNodeResult(
         output_payload_path=payload_path,
         log_message=f"GATE {node_id}: passed.",
@@ -242,20 +242,20 @@ def _handle_checkpoint(
     job_id: str,
     config: dict[str, Any],
 ) -> DeterministicNodeResult:
-    """DET_CHECKPOINT — Snapshot current payload to a checkpoint file."""
+    """CTRL_CHECKPOINT — Snapshot current payload to a checkpoint file."""
     checkpoint_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_file = checkpoint_dir / f"{node_id}_checkpoint.md"
 
     if payload_path and payload_path != "none" and Path(payload_path).exists():
         shutil.copy2(payload_path, checkpoint_file)
-        logger.info(f"[DET_CHECKPOINT] {node_id}: Snapshot saved → {checkpoint_file}")
+        logger.info(f"[CTRL_CHECKPOINT] {node_id}: Snapshot saved → {checkpoint_file}")
     else:
         checkpoint_file.write_text(
             f"# Checkpoint: {node_id}\n\nNo payload at checkpoint time.\n",
             encoding="utf-8",
         )
-        logger.info(f"[DET_CHECKPOINT] {node_id}: Empty checkpoint created → {checkpoint_file}")
+        logger.info(f"[CTRL_CHECKPOINT] {node_id}: Empty checkpoint created → {checkpoint_file}")
 
     return DeterministicNodeResult(
         output_payload_path=payload_path,
@@ -269,7 +269,7 @@ def _handle_delay(
     job_id: str,
     config: dict[str, Any],
 ) -> DeterministicNodeResult:
-    """DET_DELAY — Sleep for configured seconds.
+    """CTRL_DELAY — Sleep for configured seconds.
 
     Delay duration is read from ``Instruction_Override`` field (e.g., "30"
     for 30 seconds). Defaults to 5 seconds if not specified.
@@ -280,9 +280,9 @@ def _handle_delay(
     except ValueError:
         delay_seconds = 5.0
 
-    logger.info(f"[DET_DELAY] {node_id}: Sleeping for {delay_seconds}s...")
+    logger.info(f"[CTRL_DELAY] {node_id}: Sleeping for {delay_seconds}s...")
     time.sleep(delay_seconds)
-    logger.info(f"[DET_DELAY] {node_id}: Woke up after {delay_seconds}s.")
+    logger.info(f"[CTRL_DELAY] {node_id}: Woke up after {delay_seconds}s.")
 
     return DeterministicNodeResult(
         output_payload_path=payload_path,
@@ -296,7 +296,7 @@ def _handle_transform(
     job_id: str,
     config: dict[str, Any],
 ) -> DeterministicNodeResult:
-    """DET_TRANSFORM — Apply a static text template to the payload.
+    """CTRL_TRANSFORM — Apply a static text template to the payload.
 
     The template is read from ``Instruction_Override``. The placeholder
     ``{PAYLOAD}`` in the template is replaced with the actual payload content.
@@ -316,7 +316,7 @@ def _handle_transform(
     transformed = template.replace("{PAYLOAD}", payload_content)
     output_file.write_text(transformed, encoding="utf-8")
 
-    logger.info(f"[DET_TRANSFORM] {node_id}: Template applied → {output_file}")
+    logger.info(f"[CTRL_TRANSFORM] {node_id}: Template applied → {output_file}")
     return DeterministicNodeResult(
         output_payload_path=str(output_file),
         log_message=f"TRANSFORM {node_id}: output → {output_file.name}",

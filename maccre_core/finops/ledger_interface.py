@@ -52,7 +52,7 @@ class AbstractFinOpsLedger(abc.ABC):
         timestamp_iso: str
     ) -> None:
         """
-        Record an approved DET_REVIEW budget projection for future reconciliation auditing.
+        Record an approved CTRL_REVIEW budget projection for future reconciliation auditing.
         """
         pass
 

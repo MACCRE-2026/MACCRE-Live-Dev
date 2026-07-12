@@ -14,7 +14,7 @@ class BudgetProposalModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Container(classes="dialog", id="budget-proposal-dialog"):
-            yield Label("[bold cyan]DET_REVIEW: Budget Proposal[/bold cyan]", classes="pane-title")
+            yield Label("[bold cyan]CTRL_REVIEW: Budget Proposal[/bold cyan]", classes="pane-title")
             
             with Vertical(id="budget-details"):
                 yield Static(f"The queued topology contains [bold yellow]{self.node_count}[/bold yellow] nodes.")

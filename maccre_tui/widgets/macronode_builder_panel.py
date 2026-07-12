@@ -85,14 +85,14 @@ class MacroNodeBuilderPanel(Vertical):
         self.templates: list[dict] = []
         self.roster: list[str] = []
         self.special_nodes = [
-            ("DET_REVIEW", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
-            ("DET_ANCHOR", "Entry marker - passes payload through unchanged."),
-            ("DET_RECURSION", "Loop-back control with counter tracking."),
-            ("DET_PAUSE", "Halts execution, sets task to paused for manual resume."),
-            ("DET_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
-            ("DET_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
-            ("DET_DELAY", "Sleeps for a configurable number of seconds."),
-            ("DET_TRANSFORM", "Applies a static text wrapper/template to the payload."),
+            ("CTRL_REVIEW", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
+            ("CTRL_ANCHOR", "Entry marker - passes payload through unchanged."),
+            ("CTRL_RECURSION", "Loop-back control with counter tracking."),
+            ("CTRL_PAUSE", "Halts execution, sets task to paused for manual resume."),
+            ("CTRL_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
+            ("CTRL_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
+            ("CTRL_DELAY", "Sleeps for a configurable number of seconds."),
+            ("CTRL_TRANSFORM", "Applies a static text wrapper/template to the payload."),
         ]
         self.all_agents: list[str] = []
         self.current_slots: list[str] = []

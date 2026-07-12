@@ -1,11 +1,11 @@
 import logging
-from typing import Optional, Dict, Any, Tuple
+
 from datetime import datetime, timezone
 import threading
 import time
 
 from maccre_core.finops.sqlite_ledger import SQLiteFinOpsLedger
-from maccre_core.utils.path_resolver import get_maccre_root, get_datacenter_path
+from maccre_core.utils.path_resolver import get_datacenter_path
 
 logger = logging.getLogger("maccre_core.finops")
 
@@ -55,7 +55,7 @@ class FinOpDaemon:
 
     def log_budget_approval(self, project_name: str, session_id: str, projected_cost: float) -> None:
         """
-        Log that a DET_REVIEW projection was approved.
+        Log that a CTRL_REVIEW projection was approved.
         """
         now = datetime.now(timezone.utc).isoformat()
         self.ledger.record_budget_projection(project_name, session_id, projected_cost, now)

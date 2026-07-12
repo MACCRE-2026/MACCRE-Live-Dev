@@ -2096,9 +2096,9 @@ class NexusPlex(App[None]):
                 ctrl_nodes=ctrl_nodes,
             )
 
-            # Also populate the DET_ special node list for backward compat
-            special = ["DET_REVIEW", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE",
-                       "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
+            # Also populate the CTRL_ special node list for backward compat
+            special = ["CTRL_REVIEW", "CTRL_ANCHOR", "CTRL_RECURSION", "CTRL_PAUSE",
+                       "CTRL_GATE", "CTRL_CHECKPOINT", "CTRL_DELAY", "CTRL_TRANSFORM"]
             special_sel = self.query_one("#special-select", Select)
             if special_sel:
                 special_sel.set_options([(s, s) for s in special])
@@ -2298,14 +2298,14 @@ class NexusPlex(App[None]):
         agents = load_agent_names_from_library(self.active_project)
         
         special_nodes = [
-            ("DET_REVIEW", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
-            ("DET_ANCHOR", "Entry marker - passes payload through unchanged."),
-            ("DET_RECURSION", "Loop-back control with counter tracking."),
-            ("DET_PAUSE", "Halts execution, sets task to paused for manual resume."),
-            ("DET_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
-            ("DET_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
-            ("DET_DELAY", "Sleeps for a configurable number of seconds."),
-            ("DET_TRANSFORM", "Applies a static text wrapper/template to the payload."),
+            ("CTRL_REVIEW", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
+            ("CTRL_ANCHOR", "Entry marker - passes payload through unchanged."),
+            ("CTRL_RECURSION", "Loop-back control with counter tracking."),
+            ("CTRL_PAUSE", "Halts execution, sets task to paused for manual resume."),
+            ("CTRL_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
+            ("CTRL_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
+            ("CTRL_DELAY", "Sleeps for a configurable number of seconds."),
+            ("CTRL_TRANSFORM", "Applies a static text wrapper/template to the payload."),
         ]
 
         def handle_edit_macro(result: dict | None):
@@ -2976,14 +2976,14 @@ class NexusPlex(App[None]):
         if not event.value or event.value == Select.BLANK:
             return
         desc_map = {
-            "DET_REVIEW": "Pauses execution for manual user input. Acts as a strict human-in-the-loop gate.",
-            "DET_ANCHOR": "Anchors execution state, creating a reliable fallback point if downstream nodes fail.",
-            "DET_RECURSION": "Triggers a recursive loop, rerunning the previous node sequence until conditions are met.",
-            "DET_PAUSE": "Temporarily pauses execution for a predefined amount of time or until externally unpaused.",
-            "DET_GATE": "Evaluates conditions and gates execution flow based on logical rules.",
-            "DET_CHECKPOINT": "Saves state and artifacts mid-flow, ensuring work is not lost during long executions.",
-            "DET_DELAY": "Injects an explicit delay into the execution flow.",
-            "DET_TRANSFORM": "Transforms payload data format (e.g., Markdown to JSON) before passing to next node."
+            "CTRL_REVIEW": "Pauses execution for manual user input. Acts as a strict human-in-the-loop gate.",
+            "CTRL_ANCHOR": "Anchors execution state, creating a reliable fallback point if downstream nodes fail.",
+            "CTRL_RECURSION": "Triggers a recursive loop, rerunning the previous node sequence until conditions are met.",
+            "CTRL_PAUSE": "Temporarily pauses execution for a predefined amount of time or until externally unpaused.",
+            "CTRL_GATE": "Evaluates conditions and gates execution flow based on logical rules.",
+            "CTRL_CHECKPOINT": "Saves state and artifacts mid-flow, ensuring work is not lost during long executions.",
+            "CTRL_DELAY": "Injects an explicit delay into the execution flow.",
+            "CTRL_TRANSFORM": "Transforms payload data format (e.g., Markdown to JSON) before passing to next node."
         }
         val = str(event.value)
         self.query_one("#special-info-body", Static).update(desc_map.get(val, "Special node for logic control."))
@@ -2991,7 +2991,7 @@ class NexusPlex(App[None]):
         try:
             from maccre_core.controlnode_registry import get_controlnode_store
             ctrl_store = get_controlnode_store()
-            ctrl_name = val.replace("DET_", "CTRL_")
+            ctrl_name = val.replace("DET_", "CTRL_")  # Legacy compat: normalize any remaining DET_ refs
             try:
                 ctrl_data = ctrl_store.get(ctrl_name)
             except KeyError:
@@ -3611,7 +3611,7 @@ class NexusPlex(App[None]):
             self._node_payloads[step_index] = output_path
 
         def _on_hitl_pause(step_index: int, job_id: str, payload: str) -> None:
-            """Called from flow engine thread when DET_PAUSE fires."""
+            """Called from flow engine thread when CTRL_PAUSE fires."""
             self._hitl_job_id = job_id
             self.call_from_thread(self._surface_hitl_pause, step_index, job_id, payload)
 
@@ -3777,7 +3777,7 @@ class NexusPlex(App[None]):
 
     @on(Button.Pressed, "#btn-resume-flow")
     def action_resume_flow(self) -> None:
-        """Resume a paused flow (DET_PAUSE)."""
+        """Resume a paused flow (CTRL_PAUSE)."""
         if self._flow_pause_event:
             self._flow_pause_event.set()
             try:
