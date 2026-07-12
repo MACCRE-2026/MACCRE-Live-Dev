@@ -38,6 +38,7 @@ from textual.widgets import (
 
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
 from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
+from maccre_tui.widgets.information_panel import InformationPanel
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -2049,7 +2050,7 @@ class NexusPlex(App[None]):
         yield CustomHeader(id="custom-header")
         with Horizontal(id="main-layout"):
             with Vertical(id="left-pane"):
-                yield MacroNodeBuilderPanel(self.active_project)
+                yield InformationPanel()
                 yield NexusChat()
             with Vertical(id="right-pane"):
                 with Horizontal(id="agent-manager"):
@@ -2892,6 +2893,11 @@ class NexusPlex(App[None]):
             log_widget = self.query_one("#macro-info-body", RichLog)
             log_widget.clear()
             log_widget.write(output)
+            # Also populate left-pane InformationPanel
+            try:
+                self.query_one(InformationPanel).show_macro_details(m)
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as e:
             log_widget = self.query_one("#macro-info-body", RichLog)
             log_widget.clear()
@@ -2916,6 +2922,11 @@ class NexusPlex(App[None]):
             log_widget = self.query_one("#agent-info-body", RichLog)
             log_widget.clear()
             log_widget.write(desc)
+            # Also populate left-pane InformationPanel
+            try:
+                self.query_one(InformationPanel).show_agent_details(p)
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as e:
             log_widget = self.query_one("#agent-info-body", RichLog)
             log_widget.clear()
@@ -2937,6 +2948,18 @@ class NexusPlex(App[None]):
         }
         val = str(event.value)
         self.query_one("#special-info-body", Static).update(desc_map.get(val, "Special node for logic control."))
+        # Also populate left-pane InformationPanel with control node details
+        try:
+            from maccre_core.controlnode_registry import get_controlnode_store
+            ctrl_store = get_controlnode_store()
+            ctrl_name = val.replace("DET_", "CTRL_")
+            try:
+                ctrl_data = ctrl_store.get(ctrl_name)
+            except KeyError:
+                ctrl_data = {"name": val, "category": "Flow Control", "description": desc_map.get(val, "")}
+            self.query_one(InformationPanel).show_control_node_details(ctrl_data)
+        except Exception:  # noqa: BLE001
+            pass
 
     @on(Button.Pressed, "#btn-remove-last")
     def remove_last_node(self) -> None:
