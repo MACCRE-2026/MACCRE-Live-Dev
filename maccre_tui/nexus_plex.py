@@ -40,6 +40,7 @@ from maccre_tui.widgets.session_manager_modal import SessionManagerModal
 from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_tui.widgets.information_panel import InformationPanel
 from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop
+from maccre_tui.widgets.flow_monitor_overlay import FlowMonitorCollapsed, FlowMonitorOverlay
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -2052,6 +2053,7 @@ class NexusPlex(App[None]):
         with Horizontal(id="main-layout"):
             with Vertical(id="left-pane"):
                 yield InformationPanel()
+                yield FlowMonitorOverlay(id="flow-monitor-overlay", classes="hidden")
                 yield NexusChat()
             with Vertical(id="right-pane"):
                 with Horizontal(id="agent-manager"):
@@ -2136,6 +2138,25 @@ class NexusPlex(App[None]):
             log.write(text)
         else:
             self.call_from_thread(log.write, text)
+        # Mirror to Flow Monitor Overlay if visible
+        try:
+            monitor = self.query_one(FlowMonitorOverlay)
+            if not monitor.has_class("hidden"):
+                if self._thread_id == threading.get_ident():
+                    monitor.write_log(text)
+                else:
+                    self.call_from_thread(monitor.write_log, text)
+        except Exception:  # noqa: BLE001
+            pass
+
+    @on(FlowMonitorCollapsed)
+    def _handle_monitor_collapse(self) -> None:
+        """User collapsed the Flow Monitor overlay — restore InformationPanel."""
+        try:
+            self.query_one(FlowMonitorOverlay).add_class("hidden")
+            self.query_one(InformationPanel).remove_class("hidden")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── Nexus Copilot Handlers ────────────────────────────────────────────────
     @on(Button.Pressed, "#btn-nexus-send")
@@ -3520,6 +3541,15 @@ class NexusPlex(App[None]):
         self.query_one("#btn-stop-flow", Button).disabled = False
         self.query_one("#btn-create-payload", Button).disabled = True
         
+        # Show Flow Monitor Overlay, hide InformationPanel
+        try:
+            self.query_one(InformationPanel).add_class("hidden")
+            monitor = self.query_one(FlowMonitorOverlay)
+            monitor.remove_class("hidden")
+            monitor.update_progress(0, len(self.active_flow_steps))
+        except Exception:  # noqa: BLE001
+            pass
+        
         self.write_agent_log(
             f"\n[bold cyan]--- Started Linear Flow Execution ---[/bold cyan]\n"
             f"Payload: {self._pending_payload_path}"
@@ -3669,6 +3699,13 @@ class NexusPlex(App[None]):
         self.query_one("#btn-create-payload", Button).disabled = False
         self._set_vcr_state("idle")
         self._exit_paused_state()
+        
+        # Hide Flow Monitor Overlay, restore InformationPanel
+        try:
+            self.query_one(FlowMonitorOverlay).add_class("hidden")
+            self.query_one(InformationPanel).remove_class("hidden")
+        except Exception:  # noqa: BLE001
+            pass
 
     def _surface_hitl_pause(self, step_index: int, job_id: str, payload: str) -> None:
         """Surface HITL pause to the TUI - show injection modal."""

@@ -47,6 +47,26 @@ Footer {
     background: #0d1117;
 }
 
+/* ── Flow Monitor Overlay (replaces InformationPanel during execution) ──── */
+
+FlowMonitorOverlay {
+    height: 1fr;
+    border: solid #58a6ff;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+FlowMonitorOverlay RichLog {
+    background: #0d1117;
+    border: solid #30363d;
+    scrollbar-color: #30363d;
+    scrollbar-color-hover: #58a6ff;
+}
+
+FlowMonitorOverlay ProgressBar {
+    padding: 0 1;
+}
+
 MacroNodeBuilderPanel {
     width: 100%;
     height: 1fr;
