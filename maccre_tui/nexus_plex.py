@@ -39,6 +39,7 @@ from textual.widgets import (
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
 from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_tui.widgets.information_panel import InformationPanel
+from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -2055,6 +2056,7 @@ class NexusPlex(App[None]):
             with Vertical(id="right-pane"):
                 with Horizontal(id="agent-manager"):
                     yield AgentBuilderPanel()
+                    yield MacroNodeWorkshop()
                     yield FlowExecutionPanel()
         yield Footer()
 
@@ -2095,7 +2097,20 @@ class NexusPlex(App[None]):
                 special_sel.set_options([(s, s) for s in special])
         except Exception as e:
             self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
-            
+
+        # Populate MacroNode Workshop catalog
+        try:
+            workshop = self.query_one(MacroNodeWorkshop)
+            from maccre_core.controlnode_registry import get_controlnode_store
+            ctrl_nodes = get_controlnode_store().list_all()
+            workshop.populate_catalog(
+                macros=macros if 'macros' in dir() else [],  # noqa: F841
+                agents=agents if 'agents' in dir() else [],  # noqa: F841
+                ctrl_nodes=ctrl_nodes,
+            )
+        except Exception as e:
+            self.write_nexus_log(f"[dim]Workshop catalog: {e}[/dim]")
+
         self._load_autosave_flow()
         
         # Launch Splash Screen sequence
