@@ -568,13 +568,53 @@ Button.-default:hover {
     background: #30363d;
 }
 
-/* ── FlowExecutionPanel ──────────────────────────────────────────────────── */
+/* ── MacroNodeWorkshop (replaces FlowExecutionPanel) ─────────────────────── */
 
-FlowExecutionPanel {
+MacroNodeWorkshop {
     width: 1fr;
     height: 1fr;
     padding: 0 1;
     overflow-y: auto;
+}
+
+/* ── NodeCatalog integration ─────────────────────────────────────────────── */
+
+NodeCatalog {
+    height: auto;
+    max-height: 30;
+    border: solid #30363d;
+    background: #0d1117;
+}
+
+NodeCatalog TabbedContent {
+    min-height: 8;
+}
+
+NodeCatalog ContentSwitcher {
+    min-height: 5;
+}
+
+NodeCatalog TabPane {
+    min-height: 4;
+}
+
+/* ── TopologyVisualizer integration ──────────────────────────────────────── */
+
+TopologyVisualizer {
+    height: auto;
+    min-height: 6;
+    max-height: 20;
+    border: solid #30363d;
+    background: #0d1117;
+    margin-bottom: 1;
+}
+
+TopologyVisualizer Tree {
+    height: auto;
+    min-height: 4;
+    max-height: 16;
+    scrollbar-color: #30363d;
+    scrollbar-color-hover: #58a6ff;
 }
 
 #flow-execution-top {

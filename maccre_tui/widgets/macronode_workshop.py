@@ -87,6 +87,7 @@ class MacroNodeWorkshop(Vertical):
         width: 1fr;
         height: 100%;
         overflow-y: auto;
+        padding: 0 1;
     }
     MacroNodeWorkshop > .workshop-title {
         text-style: bold;
@@ -96,28 +97,31 @@ class MacroNodeWorkshop(Vertical):
     }
     MacroNodeWorkshop .flow-controls {
         height: auto;
-        padding: 0 1;
+        padding: 0;
         margin-bottom: 0;
     }
     MacroNodeWorkshop .flow-controls Button {
-        margin-right: 1;
+        margin: 0 1 0 0;
     }
     MacroNodeWorkshop .panel-section {
         height: auto;
         padding: 0;
     }
     MacroNodeWorkshop .flow-monitor-section {
-        height: 1fr;
-        min-height: 10;
+        height: auto;
+        min-height: 12;
+        max-height: 30;
         border-top: solid $primary;
+        padding: 0;
     }
     MacroNodeWorkshop .flow-monitor-section RichLog {
-        height: 1fr;
+        height: auto;
         min-height: 8;
+        max-height: 20;
     }
     MacroNodeWorkshop .input-row {
         height: auto;
-        padding: 0 1;
+        padding: 0;
     }
     MacroNodeWorkshop .input-row Input {
         width: 1fr;

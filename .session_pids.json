@@ -154,5 +154,17 @@
     "project": "GLOBAL",
     "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
     "started": "2026-07-10T01:02:40.172458"
+  },
+  {
+    "pid": 15384,
+    "project": "GLOBAL",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
+    "started": "2026-07-12T05:35:36.800245"
+  },
+  {
+    "pid": 15756,
+    "project": "GLOBAL",
+    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
+    "started": "2026-07-12T05:47:44.516638"
   }
 ]

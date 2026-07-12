@@ -75,7 +75,7 @@ class NodeCatalog(Vertical):
     DEFAULT_CSS = """
     NodeCatalog {
         height: auto;
-        max-height: 24;
+        max-height: 30;
         border: solid $primary;
         padding: 0;
     }
@@ -86,14 +86,21 @@ class NodeCatalog(Vertical):
     }
     NodeCatalog TabbedContent {
         height: auto;
-        max-height: 22;
+        min-height: 10;
+        max-height: 26;
+    }
+    NodeCatalog ContentSwitcher {
+        height: auto;
+        min-height: 6;
     }
     NodeCatalog TabPane {
         height: auto;
+        min-height: 5;
         padding: 0 1;
     }
     NodeCatalog .catalog-row {
         height: auto;
+        min-height: 3;
         padding: 0;
     }
     NodeCatalog Select {
