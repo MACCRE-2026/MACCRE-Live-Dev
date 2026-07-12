@@ -2447,7 +2447,7 @@ class NexusPlex(App[None]):
         self.query_one("#ab-output-len", Input).value = str(opts.get("output_length", 65536))
         self.query_one("#ab-top-p", Input).value = str(opts.get("top_p", 0.95))
         
-        self._update_ab_search_toggles()
+        self.query_one(AgentBuilderPanel)._update_ab_search_toggles()
         
         self.write_nexus_log(f"[bold cyan]System:[/bold cyan] Loaded agent '{name}' into builder.")
 
