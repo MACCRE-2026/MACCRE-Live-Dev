@@ -57,17 +57,15 @@ def _replace_det_in_json(json_str: str) -> str:
     return _replace_det_in_string(serialized)
 
 
-def migrate_macronode_registry() -> int:
-    """Migrate macronode_registry.db topology_json fields."""
-    db_path = get_datacenter_path("macronode_registry.db")
-    if not Path(db_path).exists():
-        logger.info("  ⚠ macronode_registry.db not found — skipping.")
-        return 0
-
+def _migrate_single_registry(db_path: Path) -> int:
+    """Migrate a single macronode_registry.db topology_json fields."""
     updated = 0
     with sqlite3.connect(str(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT name, topology_json FROM macronode_registry").fetchall()
+        try:
+            rows = conn.execute("SELECT name, topology_json FROM macronode_registry").fetchall()
+        except sqlite3.OperationalError:
+            return 0  # Table doesn't exist in this DB
         for row in rows:
             original = row["topology_json"] or ""
             if "DET_" not in original:
@@ -78,9 +76,23 @@ def migrate_macronode_registry() -> int:
                     "UPDATE macronode_registry SET topology_json = ? WHERE name = ?",
                     (migrated, row["name"]),
                 )
-                logger.info(f"  ✓ Migrated template: {row['name']}")
+                logger.info(f"  ✓ Migrated template: {row['name']} ({db_path.parent.name})")
                 updated += 1
         conn.commit()
+    return updated
+
+
+def migrate_macronode_registry() -> int:
+    """Migrate ALL macronode_registry.db files across all project directories."""
+    datacenter_root = get_datacenter_path("")
+    if not Path(datacenter_root).exists():
+        logger.info("  ⚠ DATACENTER root not found — skipping.")
+        return 0
+
+    updated = 0
+    for db_file in Path(datacenter_root).rglob("macronode_registry.db"):
+        logger.info(f"  Scanning: {db_file}")
+        updated += _migrate_single_registry(db_file)
     return updated
 
 
