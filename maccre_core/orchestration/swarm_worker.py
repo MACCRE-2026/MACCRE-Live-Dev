@@ -922,7 +922,7 @@ All file paths must strictly resolve to these five silos:
                     default_temp: float,
                 ) -> tuple[str, str, float, str]:
                     """Return (system_prompt, model_id, temperature, tools_str) for *name*."""
-                    if name.strip().upper() == "DET_REVIEW":
+                    if name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
                         return "You are the Human user. Provide your input.", "manual", 0.0, "none"
 
                     _sys = ""

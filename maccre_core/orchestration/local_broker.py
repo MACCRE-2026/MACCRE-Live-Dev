@@ -389,7 +389,7 @@ class LocalMessageBroker(MessageBroker):
         discard the duplicate at the SQLite C-engine level.
         """
         # ── LIVE SWARM INTERCEPT ──────────────────────────────────────────────
-        if next_node_str.strip().upper() == "DET_REVIEW":
+        if next_node_str.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
             conn = self._get_conn()
             conn.execute(
                 "UPDATE task_queue "
@@ -514,7 +514,7 @@ class LocalMessageBroker(MessageBroker):
         row_id, old_payload, current_node, source_payload = row
         payload = new_payload_path or old_payload
         
-        if str(current_node).startswith("DET_PAUSE"):
+        if str(current_node).upper().startswith("CTRL_PAUSE") or str(current_node).upper().startswith("DET_PAUSE"):
             # PAUSE nodes have no action other than pausing. 
             # If we reopen them, they'll just pause again. Route them to the next node.
             # In a macro flow, the Next_Node is END. For now, we assume END.
