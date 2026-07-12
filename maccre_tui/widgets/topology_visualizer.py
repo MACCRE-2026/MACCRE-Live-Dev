@@ -137,7 +137,7 @@ class TopologyVisualizer(Vertical):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._nodes: dict[str, TopologyNodeData] = {}
+        self._topo_nodes: dict[str, TopologyNodeData] = {}
         self._tree_node_map: dict[str, TreeNode[TopologyNodeData]] = {}
         self._animation_timer: object | None = None
         self._animation_frame: int = 0
@@ -166,7 +166,7 @@ class TopologyVisualizer(Vertical):
         Each dict should have: Node_ID, Next_Node, Wait_For (optional),
         Role (optional), and any other metadata.
         """
-        self._nodes.clear()
+        self._topo_nodes.clear()
         self._tree_node_map.clear()
 
         for i, step in enumerate(steps):
@@ -178,7 +178,7 @@ class TopologyVisualizer(Vertical):
 
             is_ctrl = node_id.upper().startswith("CTRL_") or node_id.upper().startswith("DET_")
 
-            self._nodes[node_id] = TopologyNodeData(
+            self._topo_nodes[node_id] = TopologyNodeData(
                 node_id=node_id,
                 role=str(step.get("Role", step.get("role", node_id))),
                 next_nodes=next_nodes,
@@ -191,13 +191,13 @@ class TopologyVisualizer(Vertical):
         self._rebuild_tree()
         # Hide empty message
         try:
-            self.query_one("#topo-empty-msg", Static).display = len(self._nodes) == 0
+            self.query_one("#topo-empty-msg", Static).display = len(self._topo_nodes) == 0
         except Exception:  # noqa: BLE001
             pass
 
     def clear(self) -> None:
         """Clear the topology."""
-        self._nodes.clear()
+        self._topo_nodes.clear()
         self._tree_node_map.clear()
         tree = self.query_one("#topo-tree", Tree)
         tree.clear()
@@ -209,23 +209,23 @@ class TopologyVisualizer(Vertical):
 
     def set_node_state(self, node_id: str, state: NodeState) -> None:
         """Update the visual state of a specific node."""
-        if node_id in self._nodes:
-            self._nodes[node_id].state = state
+        if node_id in self._topo_nodes:
+            self._topo_nodes[node_id].state = state
             self._update_node_label(node_id)
 
     def set_active_node(self, node_id: str) -> None:
         """Set a node as active, marking previous as completed."""
-        for nid, ndata in self._nodes.items():
+        for nid, ndata in self._topo_nodes.items():
             if ndata.state == NodeState.ACTIVE:
                 ndata.state = NodeState.COMPLETED
                 self._update_node_label(nid)
-        if node_id in self._nodes:
-            self._nodes[node_id].state = NodeState.ACTIVE
+        if node_id in self._topo_nodes:
+            self._topo_nodes[node_id].state = NodeState.ACTIVE
             self._update_node_label(node_id)
 
     def mark_all_completed(self) -> None:
         """Mark all nodes as completed (post-flow)."""
-        for nid, ndata in self._nodes.items():
+        for nid, ndata in self._topo_nodes.items():
             if ndata.state in (NodeState.ACTIVE, NodeState.QUEUED, NodeState.IDLE):
                 ndata.state = NodeState.COMPLETED
                 self._update_node_label(nid)
@@ -256,17 +256,17 @@ class TopologyVisualizer(Vertical):
         tree.clear()
         self._tree_node_map.clear()
 
-        if not self._nodes:
+        if not self._topo_nodes:
             return
 
         # Find root nodes (not referenced as Next_Node by anyone, or index 0)
         all_next: set[str] = set()
-        for ndata in self._nodes.values():
+        for ndata in self._topo_nodes.values():
             all_next.update(ndata.next_nodes)
 
-        roots = [nid for nid in self._nodes if nid not in all_next]
+        roots = [nid for nid in self._topo_nodes if nid not in all_next]
         if not roots:
-            roots = [next(iter(self._nodes))]
+            roots = [next(iter(self._topo_nodes))]
 
         visited: set[str] = set()
         for root_id in roots:
@@ -278,15 +278,15 @@ class TopologyVisualizer(Vertical):
         self, parent: TreeNode[Any], node_id: str, visited: set[str]
     ) -> None:
         """Recursively add a node and its children to the tree."""
-        if node_id in visited or node_id not in self._nodes:
-            if node_id in visited and node_id in self._nodes:
+        if node_id in visited or node_id not in self._topo_nodes:
+            if node_id in visited and node_id in self._topo_nodes:
                 # Back-edge (loop) — show as reference
-                label = self._render_label(self._nodes[node_id], is_backref=True)
-                parent.add_leaf(label, data=self._nodes[node_id])
+                label = self._render_label(self._topo_nodes[node_id], is_backref=True)
+                parent.add_leaf(label, data=self._topo_nodes[node_id])
             return
 
         visited.add(node_id)
-        ndata = self._nodes[node_id]
+        ndata = self._topo_nodes[node_id]
         label = self._render_label(ndata)
         tree_node = parent.add(label, data=ndata)
         self._tree_node_map[node_id] = tree_node
@@ -328,16 +328,16 @@ class TopologyVisualizer(Vertical):
 
     def _update_node_label(self, node_id: str) -> None:
         """Re-render a single node's label after state change."""
-        if node_id in self._tree_node_map and node_id in self._nodes:
+        if node_id in self._tree_node_map and node_id in self._topo_nodes:
             tree_node = self._tree_node_map[node_id]
-            tree_node.set_label(self._render_label(self._nodes[node_id]))
+            tree_node.set_label(self._render_label(self._topo_nodes[node_id]))
 
     def _tick_animation(self) -> None:
         """Animation frame tick — pulse active nodes."""
         self._animation_frame = (self._animation_frame + 1) % len(_PULSE_FRAMES)
         symbol = _PULSE_FRAMES[self._animation_frame]
 
-        for nid, ndata in self._nodes.items():
+        for nid, ndata in self._topo_nodes.items():
             if ndata.state == NodeState.ACTIVE and nid in self._tree_node_map:
                 tree_node = self._tree_node_map[nid]
                 parts: list[tuple[str, str]] = [
@@ -358,12 +358,12 @@ class TopologyVisualizer(Vertical):
     @property
     def node_count(self) -> int:
         """Return the number of nodes in the topology."""
-        return len(self._nodes)
+        return len(self._topo_nodes)
 
     @property
     def active_node(self) -> str | None:
         """Return the currently active node ID, if any."""
-        for nid, ndata in self._nodes.items():
+        for nid, ndata in self._topo_nodes.items():
             if ndata.state == NodeState.ACTIVE:
                 return nid
         return None
