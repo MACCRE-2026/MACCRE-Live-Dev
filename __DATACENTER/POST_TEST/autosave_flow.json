@@ -1,20 +1,20 @@
 [
   {
-    "macronode_name": "OSINT_Analyst",
-    "agent_mapping": {},
-    "payload_mode": "Unified Ledger",
-    "custom_instructions": "",
-    "agent_tools_overrides": {}
-  },
-  {
-    "macronode_name": "Regular_Joe",
-    "agent_mapping": {},
-    "payload_mode": "Unified Ledger",
-    "custom_instructions": "",
-    "agent_tools_overrides": {}
-  },
-  {
     "macronode_name": "OSINT_Research_x3",
+    "agent_mapping": {},
+    "payload_mode": "Unified Ledger",
+    "custom_instructions": "",
+    "agent_tools_overrides": {}
+  },
+  {
+    "macronode_name": "DET_REVIEW",
+    "agent_mapping": {},
+    "payload_mode": "Unified Ledger",
+    "custom_instructions": "",
+    "agent_tools_overrides": {}
+  },
+  {
+    "macronode_name": "Writer_Pipe-Blind",
     "agent_mapping": {},
     "payload_mode": "Unified Ledger",
     "custom_instructions": "",

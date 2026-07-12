@@ -137,7 +137,7 @@ class FlowMonitorOverlay(Vertical):
 
         yield Label("[dim]Stage: Idle[/dim]", id="monitor-stage-readout", classes="monitor-stage")
 
-        yield RichLog(id="monitor-exec-log", wrap=True, markup=True, highlight=False)
+        yield RichLog(id="monitor-exec-log", wrap=True, markup=True, highlight=True)
 
         with Horizontal(classes="monitor-progress-row"):
             yield Label("0 / 0", id="monitor-progress-label")

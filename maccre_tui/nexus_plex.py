@@ -1400,6 +1400,7 @@ class CustomHeader(Horizontal):
     def compose(self) -> ComposeResult:
         from maccre_tui.widgets.onionbook_modal import FinOpsBuddy
         with Horizontal(id="header-left"):
+            yield Button("📊 Monitor", variant="primary", id="btn-expand-monitor", classes="hidden")
             yield Button("New Project", variant="success", id="btn-new-project")
             yield Select([], prompt="Project...", id="btn-select-project-dropdown")
         with Horizontal(id="header-center"):
@@ -2151,10 +2152,21 @@ class NexusPlex(App[None]):
 
     @on(FlowMonitorCollapsed)
     def _handle_monitor_collapse(self) -> None:
-        """User collapsed the Flow Monitor overlay — restore InformationPanel."""
+        """User collapsed the Flow Monitor overlay — restore InformationPanel, show header button."""
         try:
             self.query_one(FlowMonitorOverlay).add_class("hidden")
             self.query_one(InformationPanel).remove_class("hidden")
+            self.query_one("#btn-expand-monitor", Button).remove_class("hidden")
+        except Exception:  # noqa: BLE001
+            pass
+
+    @on(Button.Pressed, "#btn-expand-monitor")
+    def _handle_monitor_expand(self) -> None:
+        """User clicked header button to re-expand the Flow Monitor overlay."""
+        try:
+            self.query_one("#btn-expand-monitor", Button).add_class("hidden")
+            self.query_one(InformationPanel).add_class("hidden")
+            self.query_one(FlowMonitorOverlay).remove_class("hidden")
         except Exception:  # noqa: BLE001
             pass
 
@@ -3700,10 +3712,11 @@ class NexusPlex(App[None]):
         self._set_vcr_state("idle")
         self._exit_paused_state()
         
-        # Hide Flow Monitor Overlay, restore InformationPanel
+        # Hide Flow Monitor Overlay + header button, restore InformationPanel
         try:
             self.query_one(FlowMonitorOverlay).add_class("hidden")
             self.query_one(InformationPanel).remove_class("hidden")
+            self.query_one("#btn-expand-monitor", Button).add_class("hidden")
         except Exception:  # noqa: BLE001
             pass
 
