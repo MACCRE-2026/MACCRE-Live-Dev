@@ -3047,6 +3047,15 @@ class NexusPlex(App[None]):
                 self.query_one("#btn-stop-flow", Button).disabled = False
                 self.query_one("#btn-create-payload", Button).disabled = True
                 
+                # Show Flow Monitor Overlay, hide InformationPanel
+                try:
+                    self.query_one(InformationPanel).add_class("hidden")
+                    monitor = self.query_one(FlowMonitorOverlay)
+                    monitor.remove_class("hidden")
+                    monitor.update_stage(f"[bold cyan]Resuming {job_id}[/bold cyan]")
+                except Exception:  # noqa: BLE001
+                    pass
+                
                 self._flow_cancel_event = threading.Event()
                 self._flow_pause_event = threading.Event()
                 self._flow_pause_event.set()
@@ -3686,6 +3695,11 @@ class NexusPlex(App[None]):
             while len(self._node_payloads) <= step_index:
                 self._node_payloads.append("")
             self._node_payloads[step_index] = output_path
+            self.call_from_thread(self._update_monitor_progress, step_index + 1, max(step_index + 1, 1))
+
+        def _on_node_started(step_index: int, macronode_name: str) -> None:
+            """Called when a MacroNode step begins — update topology and monitor."""
+            self.call_from_thread(self._highlight_active_node, step_index, macronode_name)
 
         def _on_hitl_pause(step_index: int, hitl_job_id: str, payload: str) -> None:
             self._hitl_job_id = hitl_job_id
@@ -3702,7 +3716,8 @@ class NexusPlex(App[None]):
                 pause_event=self._flow_pause_event,
                 step_callback=_on_step_complete,
                 hitl_callback=_on_hitl_pause,
-                job_started_callback=_on_job_started
+                job_started_callback=_on_job_started,
+                node_started_callback=_on_node_started,
             )
             if self._flow_cancel_event.is_set():
                 self.write_agent_log("[yellow]Flow execution was cancelled by user.[/yellow]")

@@ -382,6 +382,7 @@ class FlowRunner:
         step_callback: Callable[[int, str], None] | None = None,
         hitl_callback: Callable[[int, str, str], None] | None = None,
         job_started_callback: Callable[[str], None] | None = None,
+        node_started_callback: Callable[[int, str], None] | None = None,
     ) -> str:
         """Resume a failed or paused flow from its last known step."""
         os.environ["MACCRE_ACTIVE_PROJECT"] = self.project_name
@@ -435,6 +436,13 @@ class FlowRunner:
                     pause_event.wait()
 
                 logger.info(f"\n[FLOW_ENGINE] === RESUMING STEP {idx+1}/{len(steps)}: MacroNode '{step.macronode_name}' ===")
+
+                # Notify TUI that this step is starting (for live topology highlighting)
+                if node_started_callback is not None:
+                    try:
+                        node_started_callback(idx, step.macronode_name)
+                    except Exception:  # noqa: BLE001
+                        pass
                 
                 # 1. Load MacroNode
                 if step.macronode_name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
@@ -1185,28 +1193,39 @@ def generate_unified_thoughts_ledger(job_id: str) -> str:
         except Exception:
             continue
 
-        import json
-        parsed_content = []
+        import json as _json_mod
+        # ── Parse JSON-formatted log lines ─────────────────────────
+        # Each line is a JSON object with a "message" field. Extract all
+        # message fields and reassemble them into a single content string.
+        # This handles multi-line tagged messages (e.g. <api_thought>\n...\n</api_thought>)
+        # that span a single JSON "message" value.
+        parsed_messages: list[str] = []
         for line in raw_content.splitlines():
-            if line.strip().startswith("{"):
+            stripped = line.strip()
+            if stripped.startswith("{"):
                 try:
-                    obj = json.loads(line)
+                    obj = _json_mod.loads(stripped)
                     if "message" in obj:
-                        parsed_content.append(obj["message"])
+                        parsed_messages.append(str(obj["message"]))
+                    else:
+                        parsed_messages.append(stripped)
                 except Exception:
-                    parsed_content.append(line)
+                    parsed_messages.append(line)
             else:
-                parsed_content.append(line)
-        content = "\n".join(parsed_content)
+                parsed_messages.append(line)
+        content = "\n".join(parsed_messages)
 
-        # Extract thoughts and tools
+        # Extract thoughts, generation logs, and tools
         thought_matches = list(re.finditer(r"<(?:api_)?thought>(.*?)</(?:api_)?thought>", content, re.DOTALL | re.IGNORECASE))
+        gen_log_matches = list(re.finditer(r"<generation_log>(.*?)</generation_log>", content, re.DOTALL | re.IGNORECASE))
         # Support both legacy [TOOL CALL...] format and the newer <tool_call> format
         tool_matches = list(re.finditer(r"<tool_call>(.*?)</tool_call>|(\[TOOL CALL REQUESTED:.*?\])(?=\n\[TOOL|\n<|\n\Z|\Z)", content, re.DOTALL | re.IGNORECASE))
         
-        all_matches = []
+        all_matches: list[tuple[int, str, str]] = []
         for tm in thought_matches:
             all_matches.append((tm.start(), "thought", tm.group(1).strip()))
+        for tm in gen_log_matches:
+            all_matches.append((tm.start(), "generation", tm.group(1).strip()))
         for tm in tool_matches:
             text = tm.group(1) if tm.group(1) is not None else tm.group(2)
             all_matches.append((tm.start(), "tool", text.strip()))
@@ -1220,6 +1239,8 @@ def generate_unified_thoughts_ledger(job_id: str) -> str:
             has_content = True
             if mtype == "thought":
                 turn_parts.append("#### 🤔 Thought")
+            elif mtype == "generation":
+                turn_parts.append("#### 📡 Generation")
             else:
                 turn_parts.append("#### 🛠️ Tool Call")
             turn_parts.append(f"```\n{text}\n```\n")
