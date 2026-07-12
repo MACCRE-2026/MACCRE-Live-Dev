@@ -19,7 +19,9 @@ Combines:
   - Flow Control buttons (Launch, Stop, Resume, Rewind, etc.)
   - Flow Monitor (execution log + context injection)
 
-This panel replaces the old FlowExecutionPanel.
+Uses LEGACY widget IDs from FlowExecutionPanel so that all existing
+NexusPlex handlers work without any modification. This is the canonical
+replacement for FlowExecutionPanel.
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ from textual.widgets import (
     Input,
     Label,
     RichLog,
+    Static,
 )
 
 from maccre_tui.widgets.node_catalog import CatalogSelectionChanged, NodeAddRequested, NodeCatalog
@@ -73,7 +76,11 @@ class WorkshopNodeConfigRequested(Message):
 # ── MacroNode Workshop ───────────────────────────────────────────────────────
 
 class MacroNodeWorkshop(Vertical):
-    """Right-side workshop for building and executing MacroNode topologies."""
+    """Right-side workshop for building and executing MacroNode topologies.
+
+    All widget IDs match the legacy FlowExecutionPanel so existing NexusPlex
+    handlers (launch, stop, resume, VCR, payload, etc.) work unchanged.
+    """
 
     DEFAULT_CSS = """
     MacroNodeWorkshop {
@@ -94,6 +101,10 @@ class MacroNodeWorkshop(Vertical):
     }
     MacroNodeWorkshop .flow-controls Button {
         margin-right: 1;
+    }
+    MacroNodeWorkshop .panel-section {
+        height: auto;
+        padding: 0;
     }
     MacroNodeWorkshop .flow-monitor-section {
         height: 1fr;
@@ -129,6 +140,20 @@ class MacroNodeWorkshop(Vertical):
         width: 30;
         margin-left: 1;
     }
+    MacroNodeWorkshop .vcr-btn {
+        min-width: 4;
+        max-width: 4;
+    }
+    MacroNodeWorkshop .vcr-instructions {
+        color: $text-muted;
+        padding: 0 1;
+    }
+    MacroNodeWorkshop .btn-proceed-anyway {
+        margin: 0 1;
+    }
+    MacroNodeWorkshop .hidden {
+        display: none;
+    }
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -138,45 +163,77 @@ class MacroNodeWorkshop(Vertical):
     def compose(self) -> ComposeResult:
         yield Label("⚙  MacroNode Workshop", classes="workshop-title")
 
-        # Node Catalog
+        # ── Node Catalog (tabbed: MacroNodes | Agents | Control) ──────
         yield NodeCatalog()
 
-        # Topology Visualizer
+        # ── Topology Visualizer ───────────────────────────────────────
         yield TopologyVisualizer()
 
-        # Topology Actions
-        with Horizontal(classes="topo-actions"):
-            yield Button("Remove Last", variant="warning", id="btn-ws-remove-last")
-            yield Button("Clear", variant="error", id="btn-ws-clear-topo")
+        # ── Topology Actions (legacy IDs) ─────────────────────────────
+        with Horizontal(classes="topo-actions", id="flow-line-actions"):
+            yield Button("Remove Last Node", variant="warning", id="btn-remove-last")
+            yield Button("Clear Flow", variant="error", id="btn-clear-flow")
             yield Input(
-                placeholder="Session Name…",
-                id="ws-session-name",
+                placeholder="Name Session...",
+                id="main-name-session-input",
                 classes="session-name-input",
                 disabled=True,
             )
 
-        # Flow Controls
-        with Horizontal(classes="flow-controls"):
-            yield Button("Launch Flow", variant="success", id="btn-ws-launch")
-            yield Button("Stop", variant="error", id="btn-ws-stop", disabled=True)
-            yield Button("Resume", variant="success", id="btn-ws-resume", disabled=True)
-            yield Button("Rewind", variant="warning", id="btn-ws-rewind")
-            yield Button("Create Payload", variant="primary", id="btn-ws-payload")
-            yield Button("Session Mgr", variant="primary", id="btn-ws-sessions")
-            yield Button("Chat Studio", variant="default", id="btn-ws-chat")
-            yield Button("File Cabinet", variant="warning", id="btn-ws-files")
+        # ── Active Flow Sequence (legacy flow-line) ───────────────────
+        yield Label("Active Flow Sequence", id="active-flow-sequence-label")
+        with Horizontal(classes="flow-controls", id="flow-line-container"):
+            yield Button("⏸", id="btn-vcr", classes="vcr-btn vcr-btn--idle", disabled=True)
+            with Horizontal(id="active-flow-sequence"):
+                yield Static("No flow loaded.", classes="flow-seq-text")
 
-        # Flow Monitor
-        with Vertical(classes="flow-monitor-section"):
-            with Horizontal():
-                yield Label("Flow Monitor", classes="workshop-title")
-                yield Button("Copy", id="btn-ws-copy-monitor")
-            yield Label("Stage: [dim]Idle[/dim]", id="ws-stage-readout", classes="flow-stage-readout")
-            yield RichLog(id="ws-execution-log", wrap=True, highlight=True, markup=True)
+        # ── Flow Controls (legacy IDs) ────────────────────────────────
+        with Horizontal(classes="flow-controls"):
+            yield Button("Launch Flow", variant="success", id="btn-launch-flow")
+            yield Button("Stop Flow", variant="error", id="btn-stop-flow", disabled=True)
+            yield Button("Resume Flow", variant="success", id="btn-resume-flow", disabled=True)
+            yield Button("Rewind Flow", variant="warning", id="btn-rewind-flow", disabled=False)
+            yield Button("Create Payload", variant="primary", id="btn-create-payload")
+            yield Button("Session Manager", variant="primary", id="btn-session-manager")
+            yield Button("Chat Studio", variant="default", id="btn-agent-chat")
+            yield Button("File Cabinet", variant="warning", id="btn-file-cabinet")
+
+        # ── Flow Monitor (legacy IDs) ─────────────────────────────────
+        with Vertical(classes="panel-section", id="flow-monitor-section"):
+            with Horizontal(id="flow-monitor-header-row"):
+                yield Label("Flow Monitor", classes="pane-title")
+                yield Button("Copy", id="btn-copy-monitor")
+            yield Label(
+                "Stage: [dim]Idle[/dim]",
+                id="flow-stage-readout",
+                classes="flow-stage-readout",
+            )
+            yield RichLog(
+                id="flow-execution-log",
+                wrap=True,
+                highlight=True,
+                markup=True,
+            )
+
+            # VCR Instructions
+            with Horizontal(id="vcr-transport-row"):
+                yield Static(
+                    "[dim]While paused: click a node → ○ radios appear → "
+                    "left = inject before (+ Live Chat) · right = inject after (fork) → "
+                    "orange arrow = open injection modal → ▶ to resume[/dim]",
+                    id="vcr-instructions",
+                    classes="vcr-instructions",
+                )
+
+            # Pre-flight override (hidden by default)
+            yield Button(
+                "⚠ Proceed Anyway", id="btn-proceed-anyway",
+                variant="warning", classes="btn-proceed-anyway hidden",
+            )
 
             with Horizontal(classes="input-row"):
-                yield Input(placeholder="Inject context to flow...", id="ws-input")
-                yield Button("↗", id="btn-ws-expand-input", variant="primary")
+                yield Input(placeholder="Inject context to flow...", id="fe-input")
+                yield Button("↗", id="btn-expand-input", variant="primary", classes="btn-icon")
 
     # ── Catalog Integration ───────────────────────────────────────────────
 
@@ -191,45 +248,22 @@ class MacroNodeWorkshop(Vertical):
 
         # Set default Next_Node
         if self._flow_steps:
-            # Point last node to this new one
             self._flow_steps[-1]["Next_Node"] = event.node_id
         step["Next_Node"] = "END"
 
         self._flow_steps.append(step)
         self._sync_visualizer()
-        logger.info(f"[Workshop] Added {event.node_type}: {event.node_id}")
+        logger.info("[Workshop] Added %s: %s", event.node_type, event.node_id)
 
     @on(CatalogSelectionChanged)
     def _handle_catalog_preview(self, event: CatalogSelectionChanged) -> None:
         """Forward catalog selection to parent for info panel population."""
-        # The parent NexusPlex will handle populating InformationPanel
         self.post_message(event)
 
     @on(TopologyNodeSelected)
     def _handle_topo_node_selected(self, event: TopologyNodeSelected) -> None:
         """Forward topology node selection."""
         self.post_message(event)
-
-    # ── Topology Actions ──────────────────────────────────────────────────
-
-    @on(Button.Pressed, "#btn-ws-remove-last")
-    def _remove_last(self) -> None:
-        if self._flow_steps:
-            self._flow_steps.pop()
-            if self._flow_steps:
-                self._flow_steps[-1]["Next_Node"] = "END"
-            self._sync_visualizer()
-
-    @on(Button.Pressed, "#btn-ws-clear-topo")
-    def _clear_topo(self) -> None:
-        self._flow_steps.clear()
-        self._sync_visualizer()
-        try:
-            name_input = self.query_one("#ws-session-name", Input)
-            name_input.disabled = True
-            name_input.value = ""
-        except Exception:  # noqa: BLE001
-            pass
 
     # ── Internal ──────────────────────────────────────────────────────────
 
@@ -258,14 +292,14 @@ class MacroNodeWorkshop(Vertical):
     def write_monitor_log(self, text: str) -> None:
         """Write to the flow monitor log."""
         try:
-            self.query_one("#ws-execution-log", RichLog).write(text)
+            self.query_one("#flow-execution-log", RichLog).write(text)
         except Exception:  # noqa: BLE001
             pass
 
     def set_stage_readout(self, text: str) -> None:
         """Update the stage readout label."""
         try:
-            self.query_one("#ws-stage-readout", Label).update(text)
+            self.query_one("#flow-stage-readout", Label).update(text)
         except Exception:  # noqa: BLE001
             pass
 

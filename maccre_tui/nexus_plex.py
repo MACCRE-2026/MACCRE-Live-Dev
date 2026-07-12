@@ -2057,7 +2057,6 @@ class NexusPlex(App[None]):
                 with Horizontal(id="agent-manager"):
                     yield AgentBuilderPanel()
                     yield MacroNodeWorkshop()
-                    yield FlowExecutionPanel()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -2076,40 +2075,32 @@ class NexusPlex(App[None]):
 
         self.set_active_project("")
 
-        # Populate inline flow editor selects
+        # Populate flow editor selects via Workshop catalog
         try:
             from maccre_core.macronode_registry import get_macronode_store
             from maccre_core.agent_library import get_agent_store
+            from maccre_core.controlnode_registry import get_controlnode_store
+
             store = get_macronode_store()
             macros = store.list_all()
-            macro_sel = self.query_one("#macro-select", Select)
-            if macro_sel:
-                macro_sel.set_options([(m.get("name", "Unknown"), m.get("name", "Unknown")) for m in macros])
-            
             agents = get_agent_store("GLOBAL").get_names()
-            agent_sel = self.query_one("#agent-select", Select)
-            if agent_sel:
-                agent_sel.set_options([(a, a) for a in agents])
-                
-            special = ["DET_REVIEW", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
+            ctrl_nodes = get_controlnode_store().list_all()
+
+            workshop = self.query_one(MacroNodeWorkshop)
+            workshop.populate_catalog(
+                macros=macros,
+                agents=agents,
+                ctrl_nodes=ctrl_nodes,
+            )
+
+            # Also populate the DET_ special node list for backward compat
+            special = ["DET_REVIEW", "DET_ANCHOR", "DET_RECURSION", "DET_PAUSE",
+                       "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"]
             special_sel = self.query_one("#special-select", Select)
             if special_sel:
                 special_sel.set_options([(s, s) for s in special])
         except Exception as e:
             self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
-
-        # Populate MacroNode Workshop catalog
-        try:
-            workshop = self.query_one(MacroNodeWorkshop)
-            from maccre_core.controlnode_registry import get_controlnode_store
-            ctrl_nodes = get_controlnode_store().list_all()
-            workshop.populate_catalog(
-                macros=macros if 'macros' in dir() else [],  # noqa: F841
-                agents=agents if 'agents' in dir() else [],  # noqa: F841
-                ctrl_nodes=ctrl_nodes,
-            )
-        except Exception as e:
-            self.write_nexus_log(f"[dim]Workshop catalog: {e}[/dim]")
 
         self._load_autosave_flow()
         
