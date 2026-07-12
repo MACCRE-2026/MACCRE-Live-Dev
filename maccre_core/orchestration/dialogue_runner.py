@@ -30,6 +30,7 @@ Usage (swarm_worker.py):
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,7 +84,7 @@ class _AgentSession:
         if self.model == "manual":
             raise ManualInputRequired(participant_label=self.label)
 
-        response_text, cost, _ = router.generate(
+        response_text, cost, api_thought = router.generate(
             model_name=self.model,
             payload=message,
             system_prompt=self.system_prompt,
@@ -93,6 +94,13 @@ class _AgentSession:
             expect_multiple_reads=True,
         )
         self.total_cost += cost
+
+        # ── Emit thoughts for unified_thoughts_ledger extraction ──────────
+        if api_thought:
+            logger.info("<api_thought>\n%s\n</api_thought>", api_thought)
+        pbr_thoughts = re.findall(r"<thought>(.*?)</thought>", response_text, re.DOTALL)
+        for t in pbr_thoughts:
+            logger.info("<thought>\n%s\n</thought>", t.strip())
 
         # Append this exchange to history so the NEXT call has full context.
         # Format: user turn = what we sent, model turn = what it replied.
