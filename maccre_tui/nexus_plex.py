@@ -1407,7 +1407,7 @@ class CustomHeader(Horizontal):
     def compose(self) -> ComposeResult:
         from maccre_tui.widgets.onionbook_modal import FinOpsBuddy
         with Horizontal(id="header-left"):
-            yield Button("📊 Monitor", variant="primary", id="btn-expand-monitor", classes="hidden")
+            yield Button("📊 Monitor", variant="primary", id="btn-expand-monitor")
             yield Button("New Project", variant="success", id="btn-new-project")
             yield Select([], prompt="Project...", id="btn-select-project-dropdown")
         with Horizontal(id="header-center"):
@@ -2625,21 +2625,27 @@ class NexusPlex(App[None]):
 
     @on(FlowMonitorCollapsed)
     def _handle_monitor_collapse(self) -> None:
-        """User collapsed the Flow Monitor overlay — restore InformationPanel, show header button."""
+        """User collapsed the Flow Monitor overlay — restore InformationPanel."""
         try:
             self.query_one(FlowMonitorOverlay).add_class("hidden")
             self.query_one(InformationPanel).remove_class("hidden")
-            self.query_one("#btn-expand-monitor", Button).remove_class("hidden")
         except Exception:  # noqa: BLE001
             pass
 
     @on(Button.Pressed, "#btn-expand-monitor")
     def _handle_monitor_expand(self) -> None:
-        """User clicked header button to re-expand the Flow Monitor overlay."""
+        """Toggle the Flow Monitor overlay visibility."""
         try:
-            self.query_one("#btn-expand-monitor", Button).add_class("hidden")
-            self.query_one(InformationPanel).add_class("hidden")
-            self.query_one(FlowMonitorOverlay).remove_class("hidden")
+            monitor = self.query_one(FlowMonitorOverlay)
+            info = self.query_one(InformationPanel)
+            if monitor.has_class("hidden"):
+                # Show monitor, hide info panel
+                info.add_class("hidden")
+                monitor.remove_class("hidden")
+            else:
+                # Hide monitor, show info panel
+                monitor.add_class("hidden")
+                info.remove_class("hidden")
         except Exception:  # noqa: BLE001
             pass
 

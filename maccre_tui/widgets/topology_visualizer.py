@@ -182,7 +182,7 @@ class TopologyVisualizer(Vertical):
     DEFAULT_CSS = """
     TopologyVisualizer {
         height: auto;
-        min-height: 8;
+        min-height: 10;
         border: solid $primary;
         padding: 0;
         margin-bottom: 1;
@@ -194,7 +194,8 @@ class TopologyVisualizer(Vertical):
         padding: 0 1;
     }
     TopologyVisualizer > Tree {
-        height: 8;
+        height: auto;
+        min-height: 6;
         scrollbar-size: 1 1;
     }
     TopologyVisualizer > .topo-empty {
@@ -208,7 +209,7 @@ class TopologyVisualizer(Vertical):
         ("ctrl+up", "move_node_up", "Move node up"),
         ("ctrl+down", "move_node_down", "Move node down"),
         ("ctrl+e", "toggle_expand", "Toggle MacroNode expansion"),
-        ("enter", "open_config", "Open node config"),
+        ("ctrl+enter", "open_config", "Open node config"),
     ]
 
     def __init__(self, **kwargs: Any) -> None:
