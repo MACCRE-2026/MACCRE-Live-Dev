@@ -2144,6 +2144,38 @@ class NodeConfigModal(ModalScreen[dict | None]):
                                 value=self._node_config.get("regex_remove", ""),
                                 id="cfg-regex-remove",
                             )
+                    elif self.node_name.startswith("CTRL_CONDITIONAL_ROUTE"):
+                        import json as _cjson
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Keyword Map:")
+                            yield TextArea(
+                                text=_cjson.dumps(self._node_config.get("keyword_map", {}), indent=2),
+                                id="cfg-cr-keyword-map",
+                            )
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Score Threshold:")
+                            yield Input(
+                                value=str(self._node_config.get("score_threshold", 0.7)),
+                                id="cfg-score-threshold",
+                            )
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Default Target:")
+                            yield Input(
+                                value=self._node_config.get("default_target", "END"),
+                                id="cfg-cr-default-target",
+                            )
+                        with Horizontal(classes="tether-field"):
+                            yield Label("High Target:")
+                            yield Input(
+                                value=self._node_config.get("high_target", ""),
+                                id="cfg-high-target",
+                            )
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Low Target:")
+                            yield Input(
+                                value=self._node_config.get("low_target", ""),
+                                id="cfg-low-target",
+                            )
 
             
             with Horizontal(id="payload-modal-buttons"):
@@ -2306,6 +2338,20 @@ class NodeConfigModal(ModalScreen[dict | None]):
                     mc = self.query_one("#cfg-max-chars", Input).value.strip()
                     tether_config["max_chars"] = int(mc) if mc else 0
                     tether_config["regex_remove"] = self.query_one("#cfg-regex-remove", Input).value.strip()
+                except Exception:  # noqa: BLE001
+                    pass
+            elif self.node_name.startswith("CTRL_CONDITIONAL_ROUTE"):
+                try:
+                    import json as _cjson
+                    km = self.query_one("#cfg-cr-keyword-map", TextArea).text.strip()
+                    tether_config["keyword_map"] = _cjson.loads(km) if km else {}
+                    st = self.query_one("#cfg-score-threshold", Input).value.strip()
+                    tether_config["score_threshold"] = float(st) if st else 0.7
+                    tether_config["default_target"] = (
+                        self.query_one("#cfg-cr-default-target", Input).value.strip() or "END"
+                    )
+                    tether_config["high_target"] = self.query_one("#cfg-high-target", Input).value.strip()
+                    tether_config["low_target"] = self.query_one("#cfg-low-target", Input).value.strip()
                 except Exception:  # noqa: BLE001
                     pass
 

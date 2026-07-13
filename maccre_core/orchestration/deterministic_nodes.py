@@ -37,6 +37,7 @@ Node Types
 ``CTRL_BRANCH``      Keyword-based conditional routing to downstream nodes.
 ``CTRL_FILTER``      Applies filter rules (strip sections, truncate, regex) to payload.
 ``CTRL_CLEANUP``     Deletes temporary files matching glob patterns.
+``CTRL_CONDITIONAL_ROUTE``  4-vector fallback routing: structured → keyword → score → fuzzy.
 """
 from __future__ import annotations
 
@@ -73,6 +74,7 @@ class DeterministicNodeType(Enum):
     BRANCH = "CTRL_BRANCH"
     FILTER = "CTRL_FILTER"
     CLEANUP = "CTRL_CLEANUP"
+    CONDITIONAL_ROUTE = "CTRL_CONDITIONAL_ROUTE"
 
 
 def is_deterministic_node(node_id: str) -> bool:
@@ -652,6 +654,148 @@ def _handle_cleanup(
     )
 
 
+# ── Wave 4: Conditional Route — 4-Vector Fallback Chain ──────────────────────
+
+
+def _levenshtein(s1: str, s2: str) -> int:
+    """Compute Levenshtein edit distance between two strings (pure Python)."""
+    if len(s1) < len(s2):
+        return _levenshtein(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    prev_row: list[int] = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr_row: list[int] = [i + 1]
+        for j, c2 in enumerate(s2):
+            insert = prev_row[j + 1] + 1
+            delete = curr_row[j] + 1
+            substitute = prev_row[j] + (0 if c1 == c2 else 1)
+            curr_row.append(min(insert, delete, substitute))
+        prev_row = curr_row
+    return prev_row[-1]
+
+
+def _try_structured_route(payload: str) -> str | None:
+    """Vector 1 — Parse ``[ROUTE_TO: X]`` tag from payload."""
+    match = re.search(r'\[ROUTE_TO:\s*(.+?)\]', payload)
+    return match.group(1).strip() if match else None
+
+
+def _try_keyword_route(payload: str, keyword_map: dict[str, str]) -> str | None:
+    """Vector 2 — Case-insensitive keyword substring match."""
+    payload_lower = payload.lower()
+    for keyword, target in keyword_map.items():
+        if keyword.lower() in payload_lower:
+            return target
+    return None
+
+
+def _try_score_route(payload: str, score_threshold: float, config: dict[str, Any]) -> str | None:
+    """Vector 3 — Parse ``[SCORE: X.XX]`` tag and route by threshold."""
+    match = re.search(r'\[SCORE:\s*([\d.]+)\]', payload)
+    if not match:
+        return None
+    try:
+        score = float(match.group(1))
+    except ValueError:
+        return None
+    default_fallback: str = config.get("default_target", "END")
+    if score >= score_threshold:
+        return config.get("high_target", default_fallback)
+    return config.get("low_target", default_fallback)
+
+
+def _try_fuzzy_route(payload: str, available_targets: list[str], max_distance: int = 3) -> str | None:
+    """Vector 4 — Fuzzy-match a ``[ROUTE_TO: X]`` tag against available targets via Levenshtein."""
+    match = re.search(r'\[ROUTE_TO:\s*(.+?)\]', payload)
+    if not match:
+        return None
+    raw_target: str = match.group(1).strip()
+    # Only engage fuzzy if it's NOT an exact match (Vector 1 would have caught it)
+    if raw_target in available_targets:
+        return None
+    best_target: str | None = None
+    best_dist: int = max_distance + 1
+    for candidate in available_targets:
+        dist = _levenshtein(raw_target, candidate)
+        if dist < best_dist:
+            best_dist = dist
+            best_target = candidate
+    if best_dist <= max_distance:
+        return best_target
+    return None
+
+
+def _handle_conditional_route(
+    node_id: str,
+    payload_path: str,
+    job_id: str,
+    config: dict[str, Any],
+    predecessor_payloads: list[str],
+) -> DeterministicNodeResult:
+    """CTRL_CONDITIONAL_ROUTE — 4-vector fallback routing chain.
+
+    Tries routing vectors in priority order:
+      1. Structured ``[ROUTE_TO: X]`` tag (exact match).
+      2. Keyword gate — case-insensitive substring scan.
+      3. Score threshold — ``[SCORE: X.XX]`` tag vs. threshold.
+      4. Fuzzy — Levenshtein distance against available targets.
+    Returns on first successful match; falls back to ``default_target``.
+    """
+    # ── Read configuration ────────────────────────────────────────────────
+    all_vectors: list[str] = ["structured", "keyword", "score", "fuzzy"]
+    route_vectors: list[str] = config.get("route_vectors", all_vectors)
+    keyword_map: dict[str, str] = config.get("keyword_map", {})
+    score_threshold: float = float(config.get("score_threshold", 0.7))
+    default_target: str = str(config.get("default_target", "END")).strip()
+    available_targets: list[str] = config.get("available_targets", [])
+    max_distance: int = int(config.get("fuzzy_max_distance", 3))
+
+    payload = _read_payload(payload_path)
+    matched_target: str | None = None
+    matched_vector: str = "default"
+
+    # ── Execute vectors in priority order ─────────────────────────────────
+    for vector in route_vectors:
+        vec = vector.strip().lower()
+        if vec == "structured":
+            result = _try_structured_route(payload)
+            if result is not None:
+                # Confirm exact match exists in available_targets (if provided)
+                if not available_targets or result in available_targets:
+                    matched_target = result
+                    matched_vector = "structured"
+                    break
+        elif vec == "keyword":
+            result = _try_keyword_route(payload, keyword_map)
+            if result is not None:
+                matched_target = result
+                matched_vector = "keyword"
+                break
+        elif vec == "score":
+            result = _try_score_route(payload, score_threshold, config)
+            if result is not None:
+                matched_target = result
+                matched_vector = "score"
+                break
+        elif vec == "fuzzy":
+            result = _try_fuzzy_route(payload, available_targets, max_distance)
+            if result is not None:
+                matched_target = result
+                matched_vector = "fuzzy"
+                break
+
+    final_target = matched_target or default_target
+    logger.info(
+        f"[CTRL_CONDITIONAL_ROUTE] {node_id}: vector={matched_vector} → {final_target}"
+    )
+    return DeterministicNodeResult(
+        output_payload_path=payload_path,
+        next_nodes=[final_target],
+        log_message=f"CONDITIONAL_ROUTE {node_id}: vector={matched_vector} → {final_target}.",
+    )
+
+
 # ── Handler Registry ─────────────────────────────────────────────────────────
 
 # Type alias for handler functions
@@ -671,4 +815,5 @@ _NODE_HANDLERS: dict[DeterministicNodeType, _HandlerFn] = {
     DeterministicNodeType.BRANCH: _handle_branch,
     DeterministicNodeType.FILTER: _handle_filter,
     DeterministicNodeType.CLEANUP: _handle_cleanup,
+    DeterministicNodeType.CONDITIONAL_ROUTE: _handle_conditional_route,
 }
