@@ -2598,7 +2598,10 @@ class NexusPlex(App[None]):
 
     def write_agent_log(self, text: str) -> None:
         import threading
-        log = self.query_one("#flow-execution-log", RichLog)
+        try:
+            log = self.query_one("#flow-execution-log", RichLog)
+        except Exception:  # noqa: BLE001
+            return  # Widget not mounted — skip silently
         if self._thread_id == threading.get_ident():
             log.write(text)
         else:
