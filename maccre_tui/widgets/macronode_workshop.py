@@ -83,6 +83,15 @@ class WorkshopNodeConfigRequested(Message):
         self.node_data = node_data
 
 
+class ScatterCompanionHint(Message):
+    """Hint that a CTRL_SCATTER was added and needs a companion sink node."""
+
+    def __init__(self, tether_id: str, scatter_node: str) -> None:
+        super().__init__()
+        self.tether_id = tether_id
+        self.scatter_node = scatter_node
+
+
 # ── MacroNode Workshop ───────────────────────────────────────────────────────
 
 class MacroNodeWorkshop(Vertical):
@@ -158,6 +167,8 @@ class MacroNodeWorkshop(Vertical):
         super().__init__(**kwargs)
         self._flow_steps: list[dict[str, Any]] = []
         self._flow_dict = FlowDictBuffer()
+        self._tether_counter: int = 0
+        self._pending_scatters: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Label("⚙  MacroNode Workshop", classes="workshop-title")
@@ -215,6 +226,8 @@ class MacroNodeWorkshop(Vertical):
         step: dict[str, Any] = {
             "Node_ID": event.node_id,
             "type": event.node_type,
+            "tether_id": "",
+            "flow_line_id": "",
         }
         step.update(event.node_data)
 
@@ -222,6 +235,73 @@ class MacroNodeWorkshop(Vertical):
         if self._flow_steps:
             self._flow_steps[-1]["Next_Node"] = event.node_id
         step["Next_Node"] = "END"
+
+        # ── Tether field defaults for CTRL_ nodes ────────────────────
+        if event.node_id.startswith("CTRL_"):
+            step.setdefault("config", {})
+
+            if event.node_id.startswith("CTRL_SCATTER"):
+                # Auto-assign tether ID
+                self._tether_counter += 1
+                tether_id = f"tether_{chr(96 + self._tether_counter)}"  # tether_a, tether_b, ...
+                step["tether_id"] = tether_id
+                step["config"].update({
+                    "scatter_targets": [],
+                    "scatter_mode": "full_copy",
+                    "tether_id": tether_id,
+                })
+                self._pending_scatters.append(tether_id)
+                logger.info("[Workshop] CTRL_SCATTER assigned tether_id=%s", tether_id)
+                # Notify user to add a companion CTRL_MERGE
+                self.post_message(
+                    ScatterCompanionHint(tether_id=tether_id, scatter_node=event.node_id)
+                )
+
+            elif event.node_id.startswith("CTRL_MERGE"):
+                # Auto-tether to most recent un-paired CTRL_SCATTER
+                if self._pending_scatters:
+                    tether_id = self._pending_scatters.pop()
+                    step["tether_id"] = tether_id
+                    step["config"]["tether_id"] = tether_id
+                    step["config"]["merge_mode"] = "structured"
+                    logger.info("[Workshop] CTRL_MERGE auto-tethered to %s", tether_id)
+                else:
+                    step["config"]["merge_mode"] = "structured"
+                    logger.warning("[Workshop] CTRL_MERGE added with no pending SCATTER to tether")
+
+            elif event.node_id.startswith("CTRL_CONCAT"):
+                step["config"]["delimiter"] = "\n---\n"
+
+            elif event.node_id.startswith("CTRL_BRANCH"):
+                step["config"].update({
+                    "keyword_map": {},
+                    "default_target": "END",
+                })
+
+            elif event.node_id.startswith("CTRL_CONDITIONAL_ROUTE"):
+                step["config"].update({
+                    "route_vectors": ["structured", "keyword", "score", "fuzzy"],
+                    "keyword_map": {},
+                    "score_threshold": 0.7,
+                    "default_target": "END",
+                })
+
+            elif event.node_id.startswith("CTRL_FILTER"):
+                step["config"].update({
+                    "strip_sections": [],
+                    "max_chars": 0,
+                    "regex_remove": "",
+                })
+
+            elif event.node_id.startswith("CTRL_CLEANUP"):
+                step["config"].update({
+                    "glob_patterns": ["*.tmp", "*.bak"],
+                    "cleanup_dir": "",
+                })
+
+            # Store config in flow dict buffer
+            self._flow_dict.set_node_config(event.node_id, step["config"])
+            self._emit_dict_update()
 
         self._flow_steps.append(step)
         self._sync_visualizer()
@@ -279,6 +359,8 @@ class MacroNodeWorkshop(Vertical):
     def reset_flow_dict(self, session_name: str = "") -> None:
         """Reset the flow dict buffer (e.g., on Clear Flow)."""
         self._flow_dict = FlowDictBuffer(session_name=session_name)
+        self._tether_counter = 0
+        self._pending_scatters = []
         self._emit_dict_update()
 
     def load_flow_dict(self, buf: FlowDictBuffer) -> None:

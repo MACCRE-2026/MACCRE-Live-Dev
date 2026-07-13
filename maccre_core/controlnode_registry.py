@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS controlnode_registry (
 _DEFAULT_HANDLER_MODULE = "maccre_core.orchestration.deterministic_nodes"
 
 _BUILTIN_NODES: list[dict[str, Any]] = [
-    # ── Active (8) ────────────────────────────────────────────────────────────
+    # ── Active (14) ───────────────────────────────────────────────────────────
     {
         "name": "CTRL_ANCHOR",
         "category": "Flow Control",
@@ -170,39 +170,86 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
         "handler_func": "_handle_recursion",
         "status": "active",
     },
-    # ── Coming Soon (15) ──────────────────────────────────────────────────────
+    # ── Active — Wave 3 data-flow / routing nodes ─────────────────────────────
     {
         "name": "CTRL_MERGE",
         "category": "Data Flow",
         "description": "Merges multiple upstream payloads into a single output.",
-        "handler_module": "",
-        "handler_func": "",
-        "status": "ComingSoon",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_merge",
+        "status": "active",
+        "config_schema": {
+            "merge_mode": {"type": "string", "enum": ["structured", "concat"], "default": "structured"},
+            "merge_delimiter": {"type": "string", "default": "\n---\n"},
+        },
     },
     {
         "name": "CTRL_CONCAT",
         "category": "Data Flow",
         "description": "Concatenates payloads in topological order.",
-        "handler_module": "",
-        "handler_func": "",
-        "status": "ComingSoon",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_concat",
+        "status": "active",
+        "config_schema": {
+            "concat_delimiter": {"type": "string", "default": "\n"},
+        },
     },
     {
         "name": "CTRL_SCATTER",
         "category": "Data Flow",
         "description": "Fans out a single payload to multiple downstream nodes.",
-        "handler_module": "",
-        "handler_func": "",
-        "status": "ComingSoon",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_scatter",
+        "status": "active",
+        "config_schema": {
+            "scatter_targets": {"type": "array", "items": {"type": "string"}, "default": []},
+            "scatter_mode": {"type": "string", "enum": ["full_copy", "chunk_split"], "default": "full_copy"},
+        },
     },
     {
         "name": "CTRL_BRANCH",
         "category": "Routing",
-        "description": "Routes payload to one of several downstream nodes based on conditions.",
-        "handler_module": "",
-        "handler_func": "",
-        "status": "ComingSoon",
+        "description": "Routes payload to one of several downstream nodes based on keyword conditions.",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_branch",
+        "status": "active",
+        "config_schema": {
+            "keyword_map": {"type": "object", "additionalProperties": {"type": "string"}, "default": {}},
+            "default_target": {"type": "string", "default": "END"},
+        },
     },
+    {
+        "name": "CTRL_FILTER",
+        "category": "Data Flow",
+        "description": "Filters payload content — strip sections, regex removal, truncation.",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_filter",
+        "status": "active",
+        "config_schema": {
+            "filter_rules": {
+                "type": "object",
+                "properties": {
+                    "strip_sections": {"type": "array", "items": {"type": "string"}, "default": []},
+                    "max_chars": {"type": "integer", "default": 0},
+                    "regex_remove": {"type": "string", "default": ""},
+                },
+                "default": {},
+            },
+        },
+    },
+    {
+        "name": "CTRL_CLEANUP",
+        "category": "State Management",
+        "description": "Deletes temporary files matching glob patterns in the job ledger.",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_cleanup",
+        "status": "active",
+        "config_schema": {
+            "glob_patterns": {"type": "array", "items": {"type": "string"}, "default": ["*.tmp"]},
+            "cleanup_dir": {"type": "string", "default": ""},
+        },
+    },
+    # ── Coming Soon (9) ───────────────────────────────────────────────────────
     {
         "name": "CTRL_CONDITIONAL_ROUTE",
         "category": "Routing",
@@ -252,14 +299,6 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
         "status": "ComingSoon",
     },
     {
-        "name": "CTRL_FILTER",
-        "category": "Data Flow",
-        "description": "Filters payload content based on configurable predicates.",
-        "handler_module": "",
-        "handler_func": "",
-        "status": "ComingSoon",
-    },
-    {
         "name": "CTRL_EXTRACT",
         "category": "Data Flow",
         "description": "Extracts structured data from unstructured payload content.",
@@ -271,14 +310,6 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
         "name": "CTRL_WEBHOOK",
         "category": "External",
         "description": "Sends payload to an external webhook endpoint.",
-        "handler_module": "",
-        "handler_func": "",
-        "status": "ComingSoon",
-    },
-    {
-        "name": "CTRL_CLEANUP",
-        "category": "State Management",
-        "description": "Cleans up temporary files and state after flow completion.",
         "handler_module": "",
         "handler_func": "",
         "status": "ComingSoon",
@@ -328,7 +359,7 @@ class SQLiteControlNodeStore(ControlNodeStore):
                     node["name"],
                     node["category"],
                     node["description"],
-                    "{}",
+                    json.dumps(node.get("config_schema", {})),
                     node["handler_module"],
                     node["handler_func"],
                     1,

@@ -129,6 +129,8 @@ class LocalMessageBroker(MessageBroker):
                 lock_status          TEXT DEFAULT 'open',
                 locked_by            TEXT,
                 actual_cost          REAL DEFAULT 0.0,
+                flow_line_id         TEXT DEFAULT '',
+                tether_id            TEXT DEFAULT '',
                 created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(job_id, current_node)
             )
@@ -148,6 +150,8 @@ class LocalMessageBroker(MessageBroker):
             "ALTER TABLE task_queue ADD COLUMN source_payload_path TEXT DEFAULT ''",
             "ALTER TABLE task_queue ADD COLUMN loop_iteration_count INTEGER DEFAULT 0",
             "ALTER TABLE task_queue ADD COLUMN completed_at TIMESTAMP",
+            "ALTER TABLE task_queue ADD COLUMN flow_line_id TEXT DEFAULT ''",
+            "ALTER TABLE task_queue ADD COLUMN tether_id TEXT DEFAULT ''",
         ):
             try:
                 conn.execute(_col_sql)
@@ -301,6 +305,7 @@ class LocalMessageBroker(MessageBroker):
         for row in open_tasks:
             task = dict(row)
             node_id: str = task["current_node"]
+            task_tether_id: str = str(task.get("tether_id", "") or "")
 
             # Resolve wait_for from topology — unknown nodes default to 'none'
             try:
@@ -317,15 +322,30 @@ class LocalMessageBroker(MessageBroker):
                     if n.strip()
                 ]
                 placeholders = ",".join(["?"] * len(required_nodes))
-                cursor.execute(
-                    f"""
-                    SELECT current_node, lock_status
-                    FROM task_queue
-                    WHERE job_id = ? AND current_node IN ({placeholders})
-                    ORDER BY id ASC
-                    """,
-                    [task["job_id"]] + required_nodes,
-                )
+
+                # Tether-scoped gather: when the current task carries a tether_id,
+                # only check predecessor completion within the same tether scope.
+                if task_tether_id:
+                    cursor.execute(
+                        f"""
+                        SELECT current_node, lock_status
+                        FROM task_queue
+                        WHERE job_id = ? AND current_node IN ({placeholders})
+                              AND tether_id = ?
+                        ORDER BY id ASC
+                        """,
+                        [task["job_id"]] + required_nodes + [task_tether_id],
+                    )
+                else:
+                    cursor.execute(
+                        f"""
+                        SELECT current_node, lock_status
+                        FROM task_queue
+                        WHERE job_id = ? AND current_node IN ({placeholders})
+                        ORDER BY id ASC
+                        """,
+                        [task["job_id"]] + required_nodes,
+                    )
                 rows = cursor.fetchall()
                 
                 # Keep only the latest status for each node
@@ -337,7 +357,9 @@ class LocalMessageBroker(MessageBroker):
                 if any(stat == "failed" for stat in latest_status.values()):
                     # A dependency failed. We must abort this node to prevent ghost ledgers
                     import logging  # noqa: PLC0415
-                    logging.getLogger("maccre_core").error(f"[BROKER] Upstream dependency for {node_id} failed. Aborting {node_id}.")
+                    logging.getLogger("maccre_core").error(
+                        f"[BROKER] Upstream dependency for {node_id} failed. Aborting {node_id}."
+                    )
                     cursor.execute(
                         "UPDATE task_queue SET lock_status = 'cancelled' WHERE id = ?",
                         (task["id"],)
@@ -611,6 +633,18 @@ class LocalMessageBroker(MessageBroker):
                 (job_id, payload_path, payload_path, node),
             )
         conn.commit()
+
+    # ── Tether-Scoped Queries ──────────────────────────────────────────────────
+
+    def get_completed_by_tether(self, job_id: str, tether_id: str) -> list[dict[str, Any]]:
+        """Get all completed tasks for a given job that share the same tether_id."""
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM task_queue WHERE job_id = ? AND tether_id = ? AND lock_status = 'completed'",
+            (job_id, tether_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     # ── Stream 4: ZMQ PUB/SUB Live Event Bus ──────────────────────────────────
     def broadcast_topology_event(self, event_type: str, payload: dict[str, str]) -> None:

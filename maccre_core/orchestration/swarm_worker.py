@@ -766,11 +766,95 @@ All file paths must strictly resolve to these five silos:
             # fan-in nodes (e.g. GRETCHEN_ED1) to call read_file in a sequential
             # tool-call loop — a pattern that causes 2.5 Pro to repeat the first call
             # indefinitely.  All source material arrives pre-loaded in context.
+            #
+            # Tether-scoped fan-in (Phase 5): when the current node carries a
+            # tether_id, we query the broker for all completed tasks sharing that
+            # tether scope and inject their payloads — instead of iterating the
+            # static Wait_For list. This ensures parallel flow lines don't
+            # contaminate each other's gathered artifacts.
+            _tether_id: str = str(node_config.get("tether_id", "") or "")
             _wait_for_str: str = str(node_config.get("wait_for", "") or "")
             _wait_for_nodes: list[str] = [
                 n.strip() for n in _wait_for_str.replace("|", ",").split(",") if n.strip() and n.strip().lower() != "none"
             ]
-            if _wait_for_nodes:
+
+            if _tether_id and _wait_for_nodes and isinstance(self.broker, LocalMessageBroker):
+                # ── Tether-scoped fan-in: collect only from matching tether ──
+                _gathered_blocks: list[str] = []
+                _completed_peers = self.broker.get_completed_by_tether(
+                    job_id=job_id,
+                    tether_id=_tether_id,
+                )
+                _peer_nodes: set[str] = {str(r.get("current_node", "")) for r in _completed_peers}
+                # Only inject predecessors that are both in our Wait_For list AND completed in our tether
+                for _pred_node in _wait_for_nodes:
+                    if _pred_node not in _peer_nodes:
+                        continue
+                    try:
+                        _pred_cfg = self.topology.get_node_config(_pred_node) if self.topology else {}
+                        _pred_art_rel: str = str(_pred_cfg.get("artifact_path", "") or "")
+                        _art_content = None
+                        _resolved_path_str = ""
+
+                        if _pred_art_rel:
+                            _pred_art_rel = _pred_art_rel.replace("{SESSION_ID}", job_id)
+                            _ART_PFX = "04_Code_Artifacts/"
+                            if _pred_art_rel.startswith(_ART_PFX) and job_id not in _pred_art_rel:
+                                _pred_art_rel = f"{_ART_PFX}{job_id}/{_pred_art_rel[len(_ART_PFX):]}"
+                            _pred_art_abs = get_datacenter_path(*_pred_art_rel.split("/"))
+                            if _pred_art_abs.exists():
+                                _art_content = _pred_art_abs.read_text(encoding="utf-8")
+                                _resolved_path_str = _pred_art_rel
+
+                        if _art_content is None:
+                            # Fallback: use the payload_path from the completed tether peer row
+                            _peer_row = next(
+                                (r for r in _completed_peers if r.get("current_node") == _pred_node), None
+                            )
+                            if _peer_row and _peer_row.get("payload_path"):
+                                _peer_payload = str(_peer_row["payload_path"])
+                                if Path(_peer_payload).exists():
+                                    _art_content = Path(_peer_payload).read_text(encoding="utf-8")
+                                    _resolved_path_str = _peer_payload
+
+                        if _art_content is None:
+                            import glob  # noqa: PLC0415
+                            _ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+                            _ledger_pattern = str(_ledger_dir / f"{_pred_node}_*.md")
+                            _matches = glob.glob(_ledger_pattern)
+                            if _matches:
+                                _art_content = Path(_matches[0]).read_text(encoding="utf-8")
+                                _resolved_path_str = f"03_Agent_Ledgers/{job_id}/{Path(_matches[0]).name}"
+
+                        if _art_content is not None:
+                            _gathered_blocks.append(
+                                f"[GATHERED ARTIFACT: {_pred_node}]\n{_art_content}\n[END ARTIFACT: {_pred_node}]"
+                            )
+                            logger.info(
+                                f"[{AGENT_ID}] Tether-scoped inject from {_pred_node} "
+                                f"(tether={_tether_id}): {_resolved_path_str}"
+                            )
+                        else:
+                            logger.warning(
+                                f"[{AGENT_ID}] WARNING: tether artifact/ledger not found for {_pred_node}"
+                            )
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.warning(
+                            f"[{AGENT_ID}] WARNING: could not inject tether artifact for {_pred_node}: {_exc}"
+                        )
+                if _gathered_blocks:
+                    payload_content = (
+                        "\n\n".join(_gathered_blocks)
+                        + "\n\n"
+                        + payload_content
+                    )
+                    logger.info(
+                        f"[{AGENT_ID}] Tether fan-in: injected {len(_gathered_blocks)} "
+                        f"gathered artifact(s) for tether={_tether_id}."
+                    )
+
+            elif _wait_for_nodes:
+                # ── Standard fan-in: collect from all matching Wait_For predecessors ──
                 _gathered_blocks: list[str] = []
                 for _pred_node in _wait_for_nodes:
                     try:

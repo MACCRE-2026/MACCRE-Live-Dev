@@ -41,7 +41,7 @@ from textual.widgets import (
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
 from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_tui.widgets.information_panel import InformationPanel
-from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop, WorkshopDictUpdated
+from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop, ScatterCompanionHint, WorkshopDictUpdated
 from maccre_tui.widgets.flow_monitor_overlay import FlowMonitorCollapsed, FlowMonitorOverlay
 from maccre_tui.widgets.topology_visualizer import TopologyVisualizer
 from maccre_core.orchestration.nexus_agent import NexusAgent
@@ -1992,9 +1992,29 @@ class NodeConfigModal(ModalScreen[dict | None]):
     #node-tools-input {
         width: 1fr;
     }
+    #cfg-tether-config {
+        height: auto;
+        margin-top: 1;
+        border: solid $warning;
+        padding: 1;
+    }
+    .tether-field {
+        height: 3;
+        margin-bottom: 1;
+    }
+    .tether-field Label {
+        width: 20;
+    }
     """
     
-    def __init__(self, node_name: str, current_payload_mode: str = "Unified Ledger", current_instructions: str = "", active_project: str = "", agents_in_node: list[str] = None, baked_tools: dict = None, current_agent_tools_overrides: dict = None, **kwargs):
+    def __init__(
+        self, node_name: str, current_payload_mode: str = "Unified Ledger",
+        current_instructions: str = "", active_project: str = "",
+        agents_in_node: list[str] | None = None, baked_tools: dict[str, str] | None = None,
+        current_agent_tools_overrides: dict[str, str] | None = None,
+        node_config: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.node_name = node_name
         self.current_payload_mode = current_payload_mode
@@ -2005,6 +2025,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
         self.current_agent_tools_overrides = current_agent_tools_overrides or {}
         self.agent_profiles: dict[str, dict[str, Any]] = {}
         self._agent_overrides_dict: dict[str, dict[str, Any]] = {}
+        self._node_config: dict[str, Any] = node_config or {}
         
         if self.agents_in_node and self.active_project:
             try:
@@ -2063,9 +2084,66 @@ class NodeConfigModal(ModalScreen[dict | None]):
 
             yield Label("Node-Specific Custom Instructions (Appended to System Prompt):", classes="node-cfg-row")
             yield TextArea(text=self.current_instructions, id="cfg-custom-instructions")
-            
-            yield Label("Node-Specific Payload Injection (Overrides Flow Payload):", classes="node-cfg-row")
-            yield TextArea(text="", id="cfg-payload-injection") # TODO: load from FlowStep if we add it
+
+            # ── Tether config section (CTRL_ nodes only) ─────────────
+            if self.node_name.startswith("CTRL_"):
+                with Vertical(id="cfg-tether-config"):
+                    yield Label(f"[bold]Control Node Config: {self.node_name}[/bold]", classes="category-title")
+                    with Horizontal(classes="tether-field"):
+                        yield Label("Tether ID:")
+                        yield Input(
+                            value=self._node_config.get("tether_id", ""),
+                            id="cfg-tether-id",
+                        )
+                    if self.node_name.startswith("CTRL_SCATTER"):
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Scatter Mode:")
+                            yield Select(
+                                [("Full Copy", "full_copy"), ("Chunk Split", "chunk_split")],
+                                value=self._node_config.get("scatter_mode", "full_copy"),
+                                id="cfg-scatter-mode",
+                            )
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Targets (comma):")
+                            yield Input(
+                                value=",".join(self._node_config.get("scatter_targets", [])),
+                                id="cfg-scatter-targets",
+                            )
+                    elif self.node_name.startswith("CTRL_MERGE"):
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Merge Mode:")
+                            yield Select(
+                                [("Structured", "structured"), ("Concat", "concat")],
+                                value=self._node_config.get("merge_mode", "structured"),
+                                id="cfg-merge-mode",
+                            )
+                    elif self.node_name.startswith("CTRL_BRANCH"):
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Keyword Map:")
+                            import json as _json
+                            yield TextArea(
+                                text=_json.dumps(self._node_config.get("keyword_map", {}), indent=2),
+                                id="cfg-keyword-map",
+                            )
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Default Target:")
+                            yield Input(
+                                value=self._node_config.get("default_target", "END"),
+                                id="cfg-default-target",
+                            )
+                    elif self.node_name.startswith("CTRL_FILTER"):
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Max Chars (0=no limit):")
+                            yield Input(
+                                value=str(self._node_config.get("max_chars", 0)),
+                                id="cfg-max-chars",
+                            )
+                        with Horizontal(classes="tether-field"):
+                            yield Label("Regex Remove:")
+                            yield Input(
+                                value=self._node_config.get("regex_remove", ""),
+                                id="cfg-regex-remove",
+                            )
 
             
             with Horizontal(id="payload-modal-buttons"):
@@ -2196,12 +2274,48 @@ class NodeConfigModal(ModalScreen[dict | None]):
         except Exception:
             pass
 
+        # Collect tether config if this is a CTRL_ node
+        tether_config: dict[str, Any] = dict(self._node_config)
+        if self.node_name.startswith("CTRL_"):
+            try:
+                tether_config["tether_id"] = self.query_one("#cfg-tether-id", Input).value.strip()
+            except Exception:  # noqa: BLE001
+                pass
+            if self.node_name.startswith("CTRL_SCATTER"):
+                try:
+                    tether_config["scatter_mode"] = str(self.query_one("#cfg-scatter-mode", Select).value)
+                    targets_str = self.query_one("#cfg-scatter-targets", Input).value.strip()
+                    tether_config["scatter_targets"] = [t.strip() for t in targets_str.split(",") if t.strip()]
+                except Exception:  # noqa: BLE001
+                    pass
+            elif self.node_name.startswith("CTRL_MERGE"):
+                try:
+                    tether_config["merge_mode"] = str(self.query_one("#cfg-merge-mode", Select).value)
+                except Exception:  # noqa: BLE001
+                    pass
+            elif self.node_name.startswith("CTRL_BRANCH"):
+                try:
+                    import json as _json
+                    km_text = self.query_one("#cfg-keyword-map", TextArea).text.strip()
+                    tether_config["keyword_map"] = _json.loads(km_text) if km_text else {}
+                    tether_config["default_target"] = self.query_one("#cfg-default-target", Input).value.strip() or "END"
+                except Exception:  # noqa: BLE001
+                    pass
+            elif self.node_name.startswith("CTRL_FILTER"):
+                try:
+                    mc = self.query_one("#cfg-max-chars", Input).value.strip()
+                    tether_config["max_chars"] = int(mc) if mc else 0
+                    tether_config["regex_remove"] = self.query_one("#cfg-regex-remove", Input).value.strip()
+                except Exception:  # noqa: BLE001
+                    pass
+
         self.dismiss({
             "name": new_name,
             "payload_mode": new_mode,
             "custom_instructions": new_instr,
             "agent_tools_overrides": self.current_agent_tools_overrides,
             "agent_overrides": self._agent_overrides_dict,
+            "node_config": tether_config,
         })
 
 
@@ -3307,6 +3421,16 @@ class NexusPlex(App[None]):
             self.query_one(InformationPanel).show_flow_dict_preview(event.preview_json)
         except Exception:  # noqa: BLE001
             pass
+
+    @on(ScatterCompanionHint)
+    def _handle_scatter_hint(self, event: ScatterCompanionHint) -> None:
+        """Notify user to add a companion CTRL_MERGE for the new CTRL_SCATTER."""
+        self.notify(
+            f"CTRL_SCATTER [{event.tether_id}] added. "
+            f"Add a CTRL_MERGE to complete the tether pair.",
+            severity="information",
+            timeout=5,
+        )
 
     @on(Button.Pressed, "#btn-remove-last")
     def remove_last_node(self) -> None:
