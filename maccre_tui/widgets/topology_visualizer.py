@@ -181,7 +181,7 @@ class TopologyVisualizer(Vertical):
 
     DEFAULT_CSS = """
     TopologyVisualizer {
-        height: auto;
+        height: 1fr;
         min-height: 10;
         border: solid $primary;
         padding: 0;
@@ -194,8 +194,8 @@ class TopologyVisualizer(Vertical):
         padding: 0 1;
     }
     TopologyVisualizer > Tree {
+        height: 1fr;
         min-height: 6;
-        max-height: 60;
         scrollbar-size: 1 1;
     }
     TopologyVisualizer > .topo-empty {
@@ -388,11 +388,6 @@ class TopologyVisualizer(Vertical):
 
         tree.root.expand_all()
 
-        # Dynamically size the tree to fit content (avoids auto-height layout loops)
-        node_count = len(self._topo_nodes)
-        desired = max(6, min(node_count * 2 + 2, 60))
-        tree.styles.height = desired
-
     def _add_subtree(
         self, parent: TreeNode[Any], node_id: str, visited: set[str]
     ) -> None:
@@ -525,9 +520,10 @@ class TopologyVisualizer(Vertical):
     # ── Event Handlers ────────────────────────────────────────────────────
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[TopologyNodeData]) -> None:
-        """Handle node click — post selection message."""
+        """Handle node click — show brief info via notify, no message posting."""
         if event.node.data and isinstance(event.node.data, TopologyNodeData):
-            self.post_message(TopologyNodeSelected(event.node.data))
+            nd = event.node.data
+            self.notify(f"{nd.node_id} ({'CTRL' if nd.is_control_node else 'Agent'})", timeout=2)
 
     @property
     def node_count(self) -> int:
