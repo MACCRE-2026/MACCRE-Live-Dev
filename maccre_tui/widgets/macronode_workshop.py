@@ -356,6 +356,9 @@ class MacroNodeWorkshop(Vertical):
         self._flow_dict.set_agent_profile(agent_name, profile)
         self._emit_dict_update()
 
+    # Alias for consistency with NexusPlex callers
+    update_agent_profile = set_agent_override
+
     def reset_flow_dict(self, session_name: str = "") -> None:
         """Reset the flow dict buffer (e.g., on Clear Flow)."""
         self._flow_dict = FlowDictBuffer(session_name=session_name)

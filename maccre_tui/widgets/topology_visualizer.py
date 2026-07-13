@@ -19,6 +19,10 @@ styling. Supports:
   - Pulsing animation for active nodes via set_interval
   - Click-to-select for node inspection
   - Orthogonal dimension display (branches, loops, scatter/gather)
+  - Color coding for node types, control categories, and states (Task 34)
+  - Flow line branch rendering with nested indentation (Task 35)
+  - Tether label badges on scatter/merge nodes (Task 36)
+  - MacroNode inner topology expansion toggle (Task 37)
 """
 from __future__ import annotations
 
@@ -61,6 +65,10 @@ class TopologyNodeData:
     state: NodeState = NodeState.IDLE
     is_control_node: bool = False
     step_index: int = -1
+    flow_line_id: str = ""
+    tether_id: str = ""
+    is_macronode: bool = False
+    inner_steps: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -81,6 +89,67 @@ _STATE_SYMBOLS: dict[NodeState, tuple[str, str]] = {
 }
 
 _PULSE_FRAMES: list[str] = ["●", "◉", "○", "◉"]
+
+
+# ── Node Color Coding (Task 34) ──────────────────────────────────────────────
+
+_NODE_COLORS: dict[str, str] = {
+    # Node types
+    "agent": "#58a6ff",                  # Blue for agent nodes
+    "macronode": "#d2a8ff",              # Purple for macronode containers
+    # Control nodes by category
+    "CTRL_SCATTER": "#f0883e",           # Orange for scatter
+    "CTRL_MERGE": "#f0883e",             # Orange for merge (same as scatter pair)
+    "CTRL_BRANCH": "#e3b341",            # Gold for deterministic branch
+    "CTRL_CONDITIONAL_ROUTE": "#ffa657", # Amber for probabilistic route
+    "CTRL_FILTER": "#79c0ff",            # Light blue for filter
+    "CTRL_CLEANUP": "#7ee787",           # Green for cleanup
+    "CTRL_CONCAT": "#79c0ff",            # Light blue for concat
+    "CTRL_REVIEW": "#f85149",            # Red for HITL review
+    "CTRL_PAUSE": "#f85149",             # Red for HITL pause
+    "CTRL_CHECKPOINT": "#7ee787",        # Green for checkpoint
+    "CTRL_RECURSION": "#d2a8ff",         # Purple for recursion
+    "CTRL_PAYLOAD_INJECT": "#79c0ff",    # Light blue
+    "CTRL_END": "#8b949e",               # Gray for end
+    # States (used as override when state is non-idle)
+    "running": "#ffa657",                # Amber pulse for active
+    "completed": "#3fb950",              # Green for completed
+    "failed": "#f85149",                 # Red for failed
+    "paused": "#e3b341",                 # Gold for paused
+    "pending": "#8b949e",                # Gray for pending
+}
+
+# Map NodeState enum values to _NODE_COLORS state keys for override lookup
+_STATE_TO_COLOR_KEY: dict[NodeState, str] = {
+    NodeState.ACTIVE: "running",
+    NodeState.COMPLETED: "completed",
+    NodeState.FAILED: "failed",
+    NodeState.PAUSED: "paused",
+    NodeState.QUEUED: "pending",
+}
+
+
+def _resolve_node_color(ndata: TopologyNodeData) -> str:
+    """Resolve the hex color for a node based on state override, then node_id prefix match."""
+    # State override takes priority for non-idle nodes
+    color_key = _STATE_TO_COLOR_KEY.get(ndata.state)
+    if color_key and color_key in _NODE_COLORS:
+        return _NODE_COLORS[color_key]
+
+    # MacroNode type
+    if ndata.is_macronode:
+        return _NODE_COLORS.get("macronode", "#d2a8ff")
+
+    # Prefix match against CTRL_ keys (longest prefix wins)
+    upper_id = ndata.node_id.upper()
+    best_match = ""
+    best_color = _NODE_COLORS.get("agent", "#58a6ff")  # default = agent blue
+    for key, color in _NODE_COLORS.items():
+        if upper_id.startswith(key.upper()) and len(key) > len(best_match):
+            best_match = key
+            best_color = color
+
+    return best_color
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────
@@ -135,6 +204,13 @@ class TopologyVisualizer(Vertical):
     }
     """
 
+    BINDINGS = [
+        ("ctrl+up", "move_node_up", "Move node up"),
+        ("ctrl+down", "move_node_down", "Move node down"),
+        ("ctrl+e", "toggle_expand", "Toggle MacroNode expansion"),
+        ("enter", "open_config", "Open node config"),
+    ]
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._topo_nodes: dict[str, TopologyNodeData] = {}
@@ -142,6 +218,7 @@ class TopologyVisualizer(Vertical):
         self._animation_timer: object | None = None
         self._animation_frame: int = 0
         self._is_animating: bool = False
+        self._expand_states: dict[str, bool] = {}  # Task 37: MacroNode expansion tracking
 
     def compose(self) -> ComposeResult:
         yield Label("⬡  Topology", classes="topo-title")
@@ -178,6 +255,20 @@ class TopologyVisualizer(Vertical):
 
             is_ctrl = node_id.upper().startswith("CTRL_") or node_id.upper().startswith("DET_")
 
+            # Task 35/36: Extract flow_line_id and tether_id from step metadata
+            flow_line_id = str(step.get("flow_line_id", "") or "")
+            tether_id_val = str(step.get("tether_id", "") or "")
+            # Nested config may also carry tether_id
+            if not tether_id_val:
+                cfg = step.get("config", {})
+                if isinstance(cfg, dict):
+                    tether_id_val = str(cfg.get("tether_id", "") or "")
+
+            # Task 37: Detect MacroNode (has inner_steps or type=macronode)
+            node_type = str(step.get("type", "") or "").lower()
+            inner_steps_raw: list[dict[str, Any]] = step.get("inner_steps", []) or []
+            is_macro = node_type == "macronode" or bool(inner_steps_raw)
+
             self._topo_nodes[node_id] = TopologyNodeData(
                 node_id=node_id,
                 role=str(step.get("Role", step.get("role", node_id))),
@@ -185,6 +276,10 @@ class TopologyVisualizer(Vertical):
                 wait_for=wait_for,
                 is_control_node=is_ctrl,
                 step_index=i,
+                flow_line_id=flow_line_id,
+                tether_id=tether_id_val,
+                is_macronode=is_macro,
+                inner_steps=inner_steps_raw,
                 metadata=step,
             )
 
@@ -206,6 +301,7 @@ class TopologyVisualizer(Vertical):
         except Exception:  # noqa: BLE001
             pass
         self.stop_animation()
+        self._expand_states.clear()
 
     def set_node_state(self, node_id: str, state: NodeState) -> None:
         """Update the visual state of a specific node."""
@@ -247,6 +343,23 @@ class TopologyVisualizer(Vertical):
             except Exception:  # noqa: BLE001
                 pass
             self._animation_timer = None
+
+    # ── MacroNode Expansion (Task 37) ─────────────────────────────────────────
+
+    def toggle_expansion(self, node_id: str) -> None:
+        """Toggle the expansion state of a MacroNode's inner topology."""
+        if node_id not in self._topo_nodes:
+            return
+        ndata = self._topo_nodes[node_id]
+        if not ndata.is_macronode:
+            return
+        self._expand_states[node_id] = not self._expand_states.get(node_id, False)
+        logger.debug("MacroNode '%s' expansion toggled to %s", node_id, self._expand_states[node_id])
+        self._rebuild_tree()
+
+    def is_expanded(self, node_id: str) -> bool:
+        """Return whether a MacroNode is currently expanded."""
+        return self._expand_states.get(node_id, False)
 
     # ── Internal ──────────────────────────────────────────────────────────
 
@@ -291,6 +404,16 @@ class TopologyVisualizer(Vertical):
         tree_node = parent.add(label, data=ndata)
         self._tree_node_map[node_id] = tree_node
 
+        # Task 37: Render inner MacroNode topology when expanded
+        if ndata.is_macronode and self._expand_states.get(node_id, False) and ndata.inner_steps:
+            for inner_step in ndata.inner_steps:
+                inner_id = str(inner_step.get("Node_ID", inner_step.get("node_id", "?")))
+                inner_label = Text.assemble(
+                    ("  ├─ ", "dim"),
+                    (inner_id, "dim italic"),
+                )
+                tree_node.add_leaf(inner_label)
+
         for next_id in ndata.next_nodes:
             if next_id.upper() != "END":
                 self._add_subtree(tree_node, next_id, visited)
@@ -298,8 +421,16 @@ class TopologyVisualizer(Vertical):
     def _render_label(
         self, ndata: TopologyNodeData, is_backref: bool = False
     ) -> Text:
-        """Create a Rich Text label for a node with state styling."""
-        symbol, style = _STATE_SYMBOLS.get(ndata.state, ("?", ""))
+        """Create a Rich Text label for a node with state styling.
+
+        Integrates:
+          - Task 34: Color coding via _resolve_node_color()
+          - Task 35: Flow line ID prefix with nesting indentation
+          - Task 36: Tether badge suffix
+          - Task 37: MacroNode [+]/[-] expansion indicator
+        """
+        symbol, base_style = _STATE_SYMBOLS.get(ndata.state, ("?", ""))
+        node_color = _resolve_node_color(ndata)
 
         if is_backref:
             return Text.assemble(
@@ -308,12 +439,38 @@ class TopologyVisualizer(Vertical):
                 (" (loop)", "dim yellow"),
             )
 
-        parts: list[tuple[str, str]] = [(f"{symbol} ", style)]
+        parts: list[tuple[str, str]] = []
 
+        # Task 35: Flow line branch prefix
+        if ndata.flow_line_id:
+            # Nested flow lines (containing ".") get extra indentation
+            indent = "  " if "." in ndata.flow_line_id else ""
+            parts.append((f"{indent}{ndata.flow_line_id}: ", "dim cyan italic"))
+
+        # State symbol
+        parts.append((f"{symbol} ", base_style))
+
+        # Task 37: MacroNode expansion indicator
+        if ndata.is_macronode:
+            expand_char = "[-]" if self._expand_states.get(ndata.node_id, False) else "[+]"
+            parts.append((f"{expand_char} ", f"{node_color} bold"))
+
+        # Node name with color coding (Task 34)
         if ndata.is_control_node:
-            parts.append((ndata.node_id, f"{style} bold"))
+            parts.append((ndata.node_id, f"{node_color} bold"))
         else:
-            parts.append((ndata.node_id, style))
+            parts.append((ndata.node_id, node_color))
+
+        # Task 36: Tether badge
+        if ndata.tether_id:
+            parts.append((f" [tether:{ndata.tether_id}]", "dim #f0883e italic"))
+
+        # Task 40: Recursion iteration display
+        if ndata.node_id.upper().startswith("CTRL_RECURSION"):
+            cur_iter = ndata.metadata.get("current_iteration", 0)
+            max_iter = ndata.metadata.get("max_recursion", ndata.metadata.get("Max_Recursion", 0))
+            if max_iter:
+                parts.append((f" [iter {cur_iter}/{max_iter}]", "dim #d2a8ff"))
 
         if ndata.role and ndata.role != ndata.node_id:
             parts.append((f" ({ndata.role})", "dim"))
@@ -340,10 +497,21 @@ class TopologyVisualizer(Vertical):
         for nid, ndata in self._topo_nodes.items():
             if ndata.state == NodeState.ACTIVE and nid in self._tree_node_map:
                 tree_node = self._tree_node_map[nid]
-                parts: list[tuple[str, str]] = [
-                    (f"{symbol} ", "bold green"),
-                    (ndata.node_id, "bold green"),
-                ]
+                active_color = _NODE_COLORS.get("running", "#ffa657")
+                parts: list[tuple[str, str]] = []
+                # Task 35: Flow line prefix in animation frames too
+                if ndata.flow_line_id:
+                    indent = "  " if "." in ndata.flow_line_id else ""
+                    parts.append((f"{indent}{ndata.flow_line_id}: ", "dim cyan italic"))
+                parts.append((f"{symbol} ", f"bold {active_color}"))
+                # Task 37: MacroNode indicator during animation
+                if ndata.is_macronode:
+                    expand_char = "[-]" if self._expand_states.get(nid, False) else "[+]"
+                    parts.append((f"{expand_char} ", f"{active_color} bold"))
+                parts.append((ndata.node_id, f"bold {active_color}"))
+                # Task 36: Tether badge
+                if ndata.tether_id:
+                    parts.append((f" [tether:{ndata.tether_id}]", "dim #f0883e italic"))
                 if ndata.role and ndata.role != ndata.node_id:
                     parts.append((f" ({ndata.role})", "dim"))
                 tree_node.set_label(Text.assemble(*parts))
@@ -367,3 +535,51 @@ class TopologyVisualizer(Vertical):
             if ndata.state == NodeState.ACTIVE:
                 return nid
         return None
+
+    # ── Keyboard Actions (Task 39) ───────────────────────────────────────
+
+    def action_move_node_up(self) -> None:
+        """Swap the selected node with the one above it."""
+        tree = self.query_one("#topo-tree", Tree)
+        cursor = tree.cursor_node
+        if not cursor or not cursor.data or not isinstance(cursor.data, TopologyNodeData):
+            return
+        nid = cursor.data.node_id
+        keys = list(self._topo_nodes.keys())
+        idx = keys.index(nid) if nid in keys else -1
+        if idx > 0:
+            keys[idx - 1], keys[idx] = keys[idx], keys[idx - 1]
+            self._topo_nodes = {k: self._topo_nodes[k] for k in keys}
+            self._rebuild_tree()
+
+    def action_move_node_down(self) -> None:
+        """Swap the selected node with the one below it."""
+        tree = self.query_one("#topo-tree", Tree)
+        cursor = tree.cursor_node
+        if not cursor or not cursor.data or not isinstance(cursor.data, TopologyNodeData):
+            return
+        nid = cursor.data.node_id
+        keys = list(self._topo_nodes.keys())
+        idx = keys.index(nid) if nid in keys else -1
+        if 0 <= idx < len(keys) - 1:
+            keys[idx], keys[idx + 1] = keys[idx + 1], keys[idx]
+            self._topo_nodes = {k: self._topo_nodes[k] for k in keys}
+            self._rebuild_tree()
+
+    def action_toggle_expand(self) -> None:
+        """Toggle MacroNode inner topology expansion."""
+        tree = self.query_one("#topo-tree", Tree)
+        cursor = tree.cursor_node
+        if not cursor or not cursor.data or not isinstance(cursor.data, TopologyNodeData):
+            return
+        nid = cursor.data.node_id
+        if cursor.data.is_macronode:
+            self.toggle_expansion(nid)
+
+    def action_open_config(self) -> None:
+        """Open config modal for the selected node."""
+        tree = self.query_one("#topo-tree", Tree)
+        cursor = tree.cursor_node
+        if not cursor or not cursor.data or not isinstance(cursor.data, TopologyNodeData):
+            return
+        self.post_message(TopologyNodeDoubleClicked(cursor.data))

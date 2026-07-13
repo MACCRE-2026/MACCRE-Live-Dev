@@ -43,7 +43,11 @@ from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_tui.widgets.information_panel import InformationPanel
 from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop, ScatterCompanionHint, WorkshopDictUpdated
 from maccre_tui.widgets.flow_monitor_overlay import FlowMonitorCollapsed, FlowMonitorOverlay
-from maccre_tui.widgets.topology_visualizer import TopologyVisualizer
+from maccre_tui.widgets.topology_visualizer import (
+    TopologyNodeDoubleClicked,
+    TopologyNodeSelected,
+    TopologyVisualizer,
+)
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -3477,6 +3481,72 @@ class NexusPlex(App[None]):
             severity="information",
             timeout=5,
         )
+
+    @on(TopologyNodeDoubleClicked)
+    def _handle_topology_double_click(self, event: TopologyNodeDoubleClicked) -> None:
+        """Open NodeConfigModal when a topology node is double-clicked."""
+        nd = event.node_data
+        # Find the node in active_flow_steps to get agents and config
+        node_config: dict[str, Any] = {}
+        agents: list[str] = []
+        for step in self.active_flow_steps:
+            if step.macronode_name == nd.node_id:
+                node_config = getattr(step, "config", {}) or nd.metadata.get("config", {})
+                agents = getattr(step, "agent_slots", [])
+                break
+
+        def _apply_config(result: dict[str, Any] | None) -> None:
+            if result is None:
+                return
+            # Update flow step with new config
+            for step in self.active_flow_steps:
+                if step.macronode_name == nd.node_id:
+                    if hasattr(step, "config"):
+                        step.config = result.get("node_config", {})
+                    break
+            # Update flow dict buffer with overrides
+            try:
+                workshop = self.query_one(MacroNodeWorkshop)
+                overrides = result.get("agent_overrides", {})
+                for aname, profile in overrides.items():
+                    workshop.update_agent_profile(aname, profile)
+            except Exception:  # noqa: BLE001
+                pass
+
+        self.push_screen(
+            NodeConfigModal(
+                node_name=nd.node_id,
+                agents_in_node=agents,
+                active_project=self.active_project,
+                node_config=node_config,
+            ),
+            _apply_config,
+        )
+
+    @on(TopologyNodeSelected)
+    def _handle_topology_select(self, event: TopologyNodeSelected) -> None:
+        """Populate InformationPanel when a topology node is clicked."""
+        nd = event.node_data
+        try:
+            info = self.query_one(InformationPanel)
+            if nd.is_control_node:
+                info.show_control_node_details({
+                    "name": nd.node_id,
+                    "category": "Flow Control",
+                    "status": nd.state.value,
+                    "description": nd.role,
+                    "config_schema": nd.metadata,
+                })
+            else:
+                info.show_agent_details({
+                    "name": nd.node_id,
+                    "model": nd.metadata.get("model", "default"),
+                    "temperature": nd.metadata.get("temperature", 1.0),
+                    "system_instruction": nd.role,
+                    "tools": nd.metadata.get("tools", []),
+                })
+        except Exception:  # noqa: BLE001
+            pass
 
     @on(Button.Pressed, "#btn-remove-last")
     def remove_last_node(self) -> None:
