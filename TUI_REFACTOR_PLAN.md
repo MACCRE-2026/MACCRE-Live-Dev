@@ -80,7 +80,90 @@ This is textbook Strangler Fig: the old system's struggles birthed the patterns 
 - Flow Monitor as overlay panel
 - Full DET_ → CTRL_ rename
 
-### Phase 5: Evolution
-- Implement new Control Node primitives (CTRL_MERGE, CTRL_SCATTER, etc.)
-- Refactor template builders to use Control Node compositions
-- Nexus Copilot sandbox integration
+### Phase 5: Control Node Evolution + Tethering + Session Dictionary
+*(Active — see `implementation_plan.md` for detailed 40-item breakdown)*
+
+#### 5.1 Control Node Implementations (7 Priority Nodes)
+- Implement handlers in `deterministic_nodes.py` for: CTRL_MERGE, CTRL_SCATTER, CTRL_CONCAT, CTRL_BRANCH, CTRL_CONDITIONAL_ROUTE, CTRL_FILTER, CTRL_CLEANUP
+- Update `controlnode_registry.py` seeds → status `active`, populate handler refs + config schemas
+- Extend fan-in artifact collection in `swarm_worker.py` to run for CTRL_ nodes (tether-scoped)
+
+#### 5.2 Node Tethering + Flow Lines
+- `tether_id` system linking SCATTER↔sink pairs (MERGE, CONCAT, BRANCH, CONDITIONAL_ROUTE)
+- `FlowLineID` parentage tracking with dot-delimited nesting for nested scatters
+- Auto-tethering logic when sink nodes are added to topology
+- CTRL_SCATTER companion auto-create option (pre-tethered MERGE/CONCAT/BRANCH/CONDITIONAL_ROUTE)
+- `flow_line_id` column in `task_queue` table, tether-scoped Wait_For in broker
+
+#### 5.3 Session Dictionary (Flow .dict)
+- Extend Chat Studio `.dict` pattern to Flow sessions (`_flow_meta` + agent profiles)
+- In-memory dict buffer built as nodes are added, displayed in InformationPanel
+- `AgentProfileOverridesModal` — per-agent session-specific config (mirrors ChatBuilderPane)
+- Tool Assignments checkmark selection in overrides modal
+- Dict written on Launch, loaded on Resume, override precedence: dict > CSV > DB
+
+#### 5.4 Dual-Pass Conditional Routing (Quadrivector Failback)
+- Pass 1: Agent free-form response (unimpeded, normal temp)
+- Pass 2: Same agent structured extraction (temp=0.1, `response_schema` with `route_to` field)
+- Failback chain: Structured Output → Keyword Gate → Score Threshold → Fuzzy ROUTE_TO
+- CTRL_CONDITIONAL_ROUTE config section in NodeConfig Modal
+
+#### 5.5 Session Manager — Dual MacroNode Save
+- "Save Topology as MacroNode" (fully configured) + "Save as MacroNode Template" (blank slots)
+- `MacroNodeNameModal` naming popup (no canonization required)
+- Source logic: completed session selected → use session; none selected → use Topology Visualizer
+- `save_mode` field in MacroNode registry: `"configured"` vs `"template"`
+
+#### 5.6 Topology Visualizer Expansion
+- Intuitive color coding system (cyan agents, magenta CTRL_, blue tethers, yellow flow lines)
+- Flow line branch rendering (FL_α_0, FL_α_1, etc.)
+- Tether label rendering (⟨tether:α⟩ with Greek letter pairing)
+- MacroNode inner topology expansion
+- Double-click node → NodeConfig Modal
+- Keyboard shortcuts for node repositioning (Ctrl+↑↓←→)
+
+#### 5.7 Workshop Cleanup
+- Remove duplicate Flow Monitor section from MacroNodeWorkshop
+- Verify Flow Monitor collapse/expand button in header works during live flow + resume
+
+---
+
+### Phase 6: Polish, Overlays, & Advanced Topology UX
+*(Deferred from Phase 5 — stretch goals and refinements)*
+
+#### 6.1 NodeConfig Overlay Conversion
+- Convert `NodeConfigModal` from modal screen to `NodeConfigOverlay(Vertical)` widget
+- Overlay covers AgentBuilder area while leaving MacroNodeWorkshop visible
+- Requires significant CSS/layout refactoring of `NexusPlex.compose()` right-pane structure
+
+#### 6.2 Topology Visualizer — Drag-and-Drop
+- Replace keyboard shortcuts with true drag-and-drop node repositioning
+- Requires custom canvas widget or Tree widget extension beyond Textual's native capabilities
+- Evaluate Textual's roadmap for canvas/drag support vs. custom implementation
+
+#### 6.3 Remaining CTRL_ Node Placeholders
+- Implement remaining control node stubs currently seeded in `controlnode_registry.db`:
+  - `CTRL_WEBHOOK` — HTTP event trigger for external system integration
+  - `CTRL_EDGE_SYNC` — Local Edge LLM pairing for offloading to edge devices via Google Drive polling
+  - `CTRL_CHAT` — Interactive HITL chat node (DET_CHAT from Era 2 roadmap Phase 4)
+    - Chat w/ Preceding Agent (Beginning/End)
+    - Chat w/ Next Agent (Pre-Payload/Post-Payload)
+    - Group Chat with ephemeral agent support
+    - Injectable while session is paused
+  - Any additional CTRL_ primitives identified during Phase 5 testing
+
+#### 6.4 Template System Modernization
+- Refactor existing template builders (cascade, hologram, chord, crucible) to use CTRL_ compositions where applicable
+- Template skeleton preview in Topology Visualizer when template selected from catalog
+- Guided template mode — user selects template pattern, Topology Visualizer shows the skeleton with empty slots to fill
+
+#### 6.5 Nexus Copilot Sandbox Integration
+- Nexus agent awareness of topology structure for intelligent debugging
+- Nexus-driven topology modification suggestions
+- DeadFlow analysis via Nexus with auto-repair capability
+
+#### 6.6 Advanced Topology UX
+- Paused-session Flow Line injection (clickable pointers between nodes for live topology modification)
+- Red "✕" node removal while paused or pre-launch
+- Topology diff view (show what changed between sessions)
+- Topology versioning (undo/redo for topology edits)
