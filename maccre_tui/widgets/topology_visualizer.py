@@ -194,8 +194,8 @@ class TopologyVisualizer(Vertical):
         padding: 0 1;
     }
     TopologyVisualizer > Tree {
-        height: auto;
         min-height: 6;
+        max-height: 60;
         scrollbar-size: 1 1;
     }
     TopologyVisualizer > .topo-empty {
@@ -387,6 +387,11 @@ class TopologyVisualizer(Vertical):
             self._add_subtree(tree.root, root_id, visited)
 
         tree.root.expand_all()
+
+        # Dynamically size the tree to fit content (avoids auto-height layout loops)
+        node_count = len(self._topo_nodes)
+        desired = max(6, min(node_count * 2 + 2, 60))
+        tree.styles.height = desired
 
     def _add_subtree(
         self, parent: TreeNode[Any], node_id: str, visited: set[str]
