@@ -3810,6 +3810,11 @@ class NexusPlex(App[None]):
         
         if not self.active_flow_steps:
             container.mount(Static("No flow loaded.", classes="flow-seq-text"))
+            # Clear the TopologyVisualizer when flow is empty
+            try:
+                self.query_one(TopologyVisualizer).clear()
+            except Exception:  # noqa: BLE001
+                pass
             return
             
         vcr_disabled = (self._vcr_state == "idle")
@@ -3843,20 +3848,47 @@ class NexusPlex(App[None]):
         try:
             viz = self.query_one(TopologyVisualizer)
             topo_steps: list[dict[str, Any]] = []
+
+            # Look up MacroNode registry once
+            try:
+                from maccre_core.macronode_registry import get_macronode_store
+                macro_store = get_macronode_store()
+            except Exception:  # noqa: BLE001
+                macro_store = None
+
             for i, step in enumerate(self.active_flow_steps):
                 name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
-                next_node = "END"
+                node_id = f"{name}_{i}"  # Unique ID to prevent duplicate-name collisions
+                next_id = "END"
                 if i < len(self.active_flow_steps) - 1:
                     ns = self.active_flow_steps[i + 1]
-                    next_node = ns.macronode_name if hasattr(ns, "macronode_name") else str(ns)
+                    next_name = ns.macronode_name if hasattr(ns, "macronode_name") else str(ns)
+                    next_id = f"{next_name}_{i + 1}"
                 config = getattr(step, "config", {}) or {}
+
+                # Detect node type and inner topology
+                is_ctrl = name.upper().startswith("CTRL_")
+                node_type = "control" if is_ctrl else "agent"
+                inner_steps: list[dict[str, Any]] = []
+
+                if macro_store and not is_ctrl:
+                    try:
+                        macro_data = macro_store.load(name)
+                        if macro_data and macro_data.get("topology"):
+                            node_type = "macronode"
+                            inner_steps = macro_data["topology"]
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 topo_steps.append({
-                    "Node_ID": name,
+                    "Node_ID": node_id,
                     "Role": name,
-                    "Next_Node": next_node,
+                    "Next_Node": next_id,
                     "Wait_For": "",
                     "tether_id": config.get("tether_id", ""),
                     "flow_line_id": config.get("flow_line_id", ""),
+                    "type": node_type,
+                    "inner_steps": inner_steps,
                 })
             if topo_steps:
                 viz.load_topology(topo_steps)

@@ -121,6 +121,11 @@ class MacroNodeWorkshop(Vertical):
         layout: horizontal;
         margin-bottom: 1;
     }
+    MacroNodeWorkshop #flow-line-container {
+        height: auto;
+        min-height: 8;
+        overflow-x: auto;
+    }
     MacroNodeWorkshop .flow-controls Button {
         margin: 0 1 0 0;
     }

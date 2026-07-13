@@ -457,10 +457,11 @@ class TopologyVisualizer(Vertical):
             parts.append((f"{expand_char} ", f"{node_color} bold"))
 
         # Node name with color coding (Task 34)
+        display_name = ndata.role if ndata.role else ndata.node_id
         if ndata.is_control_node:
-            parts.append((ndata.node_id, f"{node_color} bold"))
+            parts.append((display_name, f"{node_color} bold"))
         else:
-            parts.append((ndata.node_id, node_color))
+            parts.append((display_name, node_color))
 
         # Task 36: Tether badge
         if ndata.tether_id:
@@ -478,9 +479,17 @@ class TopologyVisualizer(Vertical):
 
         # Show flow arrows for next nodes
         if ndata.next_nodes and ndata.next_nodes != ["END"]:
-            targets = ", ".join(n for n in ndata.next_nodes if n.upper() != "END")
-            if targets:
-                parts.append((f" → {targets}", "dim cyan"))
+            display_targets: list[str] = []
+            for n in ndata.next_nodes:
+                if n.upper() == "END":
+                    continue
+                # Look up role for display if available
+                if n in self._topo_nodes:
+                    display_targets.append(self._topo_nodes[n].role or n)
+                else:
+                    display_targets.append(n)
+            if display_targets:
+                parts.append((f" → {', '.join(display_targets)}", "dim cyan"))
 
         return Text.assemble(*parts)
 
@@ -520,10 +529,16 @@ class TopologyVisualizer(Vertical):
     # ── Event Handlers ────────────────────────────────────────────────────
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[TopologyNodeData]) -> None:
-        """Handle node click — show brief info via notify, no message posting."""
-        if event.node.data and isinstance(event.node.data, TopologyNodeData):
-            nd = event.node.data
-            self.notify(f"{nd.node_id} ({'CTRL' if nd.is_control_node else 'Agent'})", timeout=2)
+        """Handle node click — toggle macronode expansion, show brief info."""
+        if not event.node.data or not isinstance(event.node.data, TopologyNodeData):
+            return
+        nd = event.node.data
+        # Toggle macronode expansion on click
+        if nd.is_macronode:
+            self.toggle_expansion(nd.node_id)
+        label = nd.role or nd.node_id
+        kind = "CTRL" if nd.is_control_node else ("MacroNode" if nd.is_macronode else "Agent")
+        self.notify(f"{label} ({kind})  [Ctrl+Enter → Configure]", timeout=3)
 
     @property
     def node_count(self) -> int:
