@@ -85,13 +85,22 @@ class MacroNodeBuilderPanel(Vertical):
         self.templates: list[dict] = []
         self.roster: list[str] = []
         self.special_nodes = [
-            ("CTRL_REVIEW", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
             ("CTRL_ANCHOR", "Entry marker - passes payload through unchanged."),
-            ("CTRL_RECURSION", "Loop-back control with counter tracking."),
-            ("CTRL_PAUSE", "Halts execution, sets task to paused for manual resume."),
-            ("CTRL_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
+            ("CTRL_BRANCH", "Deterministic keyword-based routing to matching branch."),
             ("CTRL_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
+            ("CTRL_CLEANUP", "Deletes temp files matching glob patterns."),
+            ("CTRL_CONCAT", "Flat concatenation of predecessor payloads."),
+            ("CTRL_CONDITIONAL_ROUTE", "LLM-output-based routing with 4-vector fallback."),
             ("CTRL_DELAY", "Sleeps for a configurable number of seconds."),
+            ("CTRL_END", "Terminal node - marks flow completion."),
+            ("CTRL_FILTER", "Payload filtering: strip sections, regex, truncate."),
+            ("CTRL_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
+            ("CTRL_MERGE", "Fan-in: collects scatter branch outputs (structured/concat)."),
+            ("CTRL_PAUSE", "Halts execution, sets task to paused for manual resume."),
+            ("CTRL_PAYLOAD_INJECT", "Injects a static payload into the flow."),
+            ("CTRL_RECURSION", "Loop-back control with counter tracking."),
+            ("CTRL_REVIEW", "Live swarm intercept - pauses for manual user input."),
+            ("CTRL_SCATTER", "Fan-out: distributes payload to parallel branches."),
             ("CTRL_TRANSFORM", "Applies a static text wrapper/template to the payload."),
         ]
         self.all_agents: list[str] = []

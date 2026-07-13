@@ -2560,12 +2560,18 @@ class NexusPlex(App[None]):
                 ctrl_nodes=ctrl_nodes,
             )
 
-            # Also populate the CTRL_ special node list for backward compat
-            special = ["CTRL_REVIEW", "CTRL_ANCHOR", "CTRL_RECURSION", "CTRL_PAUSE",
-                       "CTRL_GATE", "CTRL_CHECKPOINT", "CTRL_DELAY", "CTRL_TRANSFORM"]
+            # Also populate the CTRL_ special node list from the registry
+            special = [n.get("name", n.get("node_id", "")) for n in ctrl_nodes if n.get("name") or n.get("node_id")]
+            if not special:
+                # Fallback if registry is empty
+                special = ["CTRL_REVIEW", "CTRL_ANCHOR", "CTRL_RECURSION", "CTRL_PAUSE",
+                           "CTRL_GATE", "CTRL_CHECKPOINT", "CTRL_DELAY", "CTRL_TRANSFORM",
+                           "CTRL_SCATTER", "CTRL_MERGE", "CTRL_CONCAT", "CTRL_BRANCH",
+                           "CTRL_FILTER", "CTRL_CLEANUP", "CTRL_CONDITIONAL_ROUTE",
+                           "CTRL_PAYLOAD_INJECT", "CTRL_END"]
             special_sel = self.query_one("#special-select", Select)
             if special_sel:
-                special_sel.set_options([(s, s) for s in special])
+                special_sel.set_options([(s, s) for s in sorted(special)])
         except Exception as e:
             self.write_nexus_log(f"[red]Error populating selects: {e}[/red]")
 
@@ -2765,13 +2771,22 @@ class NexusPlex(App[None]):
         agents = load_agent_names_from_library(self.active_project)
         
         special_nodes = [
-            ("CTRL_REVIEW", "Live swarm intercept - pauses the task in awaiting_orders for manual resume."),
             ("CTRL_ANCHOR", "Entry marker - passes payload through unchanged."),
-            ("CTRL_RECURSION", "Loop-back control with counter tracking."),
-            ("CTRL_PAUSE", "Halts execution, sets task to paused for manual resume."),
-            ("CTRL_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
+            ("CTRL_BRANCH", "Deterministic keyword-based routing to matching branch."),
             ("CTRL_CHECKPOINT", "Snapshots current payload to a checkpoint file."),
+            ("CTRL_CLEANUP", "Deletes temp files matching glob patterns."),
+            ("CTRL_CONCAT", "Flat concatenation of predecessor payloads."),
+            ("CTRL_CONDITIONAL_ROUTE", "LLM-output-based routing with 4-vector fallback."),
             ("CTRL_DELAY", "Sleeps for a configurable number of seconds."),
+            ("CTRL_END", "Terminal node - marks flow completion."),
+            ("CTRL_FILTER", "Payload filtering: strip sections, regex, truncate."),
+            ("CTRL_GATE", "Conditional gate - blocks unless prerequisite nodes complete."),
+            ("CTRL_MERGE", "Fan-in: collects scatter branch outputs (structured/concat)."),
+            ("CTRL_PAUSE", "Halts execution, sets task to paused for manual resume."),
+            ("CTRL_PAYLOAD_INJECT", "Injects a static payload into the flow."),
+            ("CTRL_RECURSION", "Loop-back control with counter tracking."),
+            ("CTRL_REVIEW", "Live swarm intercept - pauses for manual user input."),
+            ("CTRL_SCATTER", "Fan-out: distributes payload to parallel branches."),
             ("CTRL_TRANSFORM", "Applies a static text wrapper/template to the payload."),
         ]
 
@@ -3443,14 +3458,23 @@ class NexusPlex(App[None]):
         if not event.value or event.value == Select.BLANK:
             return
         desc_map = {
-            "CTRL_REVIEW": "Pauses execution for manual user input. Acts as a strict human-in-the-loop gate.",
             "CTRL_ANCHOR": "Anchors execution state, creating a reliable fallback point if downstream nodes fail.",
-            "CTRL_RECURSION": "Triggers a recursive loop, rerunning the previous node sequence until conditions are met.",
-            "CTRL_PAUSE": "Temporarily pauses execution for a predefined amount of time or until externally unpaused.",
-            "CTRL_GATE": "Evaluates conditions and gates execution flow based on logical rules.",
+            "CTRL_BRANCH": "Deterministic keyword-based routing. Scans payload for keywords and routes to matching branch.",
             "CTRL_CHECKPOINT": "Saves state and artifacts mid-flow, ensuring work is not lost during long executions.",
+            "CTRL_CLEANUP": "Deletes temporary files matching glob patterns in the job ledger directory.",
+            "CTRL_CONCAT": "Flat concatenation of predecessor payloads with configurable delimiter.",
+            "CTRL_CONDITIONAL_ROUTE": "Probabilistic LLM-output routing with 4-vector fallback chain.",
             "CTRL_DELAY": "Injects an explicit delay into the execution flow.",
-            "CTRL_TRANSFORM": "Transforms payload data format (e.g., Markdown to JSON) before passing to next node."
+            "CTRL_END": "Terminal node — marks flow completion and stops execution.",
+            "CTRL_FILTER": "Payload filtering: strip sections by header, regex removal, character truncation.",
+            "CTRL_GATE": "Evaluates conditions and gates execution flow based on logical rules.",
+            "CTRL_MERGE": "Fan-in: collects tether-scoped scatter branch outputs (structured or concat mode).",
+            "CTRL_PAUSE": "Temporarily pauses execution until externally unpaused.",
+            "CTRL_PAYLOAD_INJECT": "Injects a static payload into the flow, replacing or augmenting the current payload.",
+            "CTRL_RECURSION": "Triggers a recursive loop, rerunning the previous node sequence until conditions are met.",
+            "CTRL_REVIEW": "Pauses execution for manual user input. Acts as a strict human-in-the-loop gate.",
+            "CTRL_SCATTER": "Fan-out: distributes payload to parallel branches with full_copy or chunk_split modes.",
+            "CTRL_TRANSFORM": "Transforms payload data format (e.g., Markdown to JSON) before passing to next node.",
         }
         val = str(event.value)
         self.query_one("#special-info-body", Static).update(desc_map.get(val, "Control node for logic control."))
@@ -3808,6 +3832,32 @@ class NexusPlex(App[None]):
         # Batch mount the new widgets
         container.mount(*widgets_to_mount)
         self._save_autosave_flow()
+
+        # Update the Topology Visualizer tree
+        try:
+            viz = self.query_one(TopologyVisualizer)
+            topo_steps: list[dict[str, Any]] = []
+            for i, step in enumerate(self.active_flow_steps):
+                name = step.macronode_name if hasattr(step, "macronode_name") else str(step)
+                next_node = "END"
+                if i < len(self.active_flow_steps) - 1:
+                    ns = self.active_flow_steps[i + 1]
+                    next_node = ns.macronode_name if hasattr(ns, "macronode_name") else str(ns)
+                config = getattr(step, "config", {}) or {}
+                topo_steps.append({
+                    "Node_ID": name,
+                    "Role": name,
+                    "Next_Node": next_node,
+                    "Wait_For": "",
+                    "tether_id": config.get("tether_id", ""),
+                    "flow_line_id": config.get("flow_line_id", ""),
+                })
+            if topo_steps:
+                viz.load_topology(topo_steps)
+            else:
+                viz.clear()
+        except Exception:  # noqa: BLE001
+            pass
 
     @on(Button.Pressed, ".active-node-btn")
     def action_configure_node(self, event: Button.Pressed) -> None:
