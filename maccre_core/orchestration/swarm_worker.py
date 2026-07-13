@@ -863,6 +863,49 @@ All file paths must strictly resolve to these five silos:
                 except Exception:  # noqa: BLE001
                     pass  # Non-fatal — grounding simply won't activate
 
+            # ── Flow Dictionary Overrides (host node — highest priority) ──────
+            # Same MACCRE_CUSTOM_DICT mechanism used in _load_agent_cfg for
+            # dialogue participants.  Applied AFTER topology CSV + agent library
+            # DB so dict overrides always win.
+            _host_dict_path = os.environ.get("MACCRE_CUSTOM_DICT", "")
+            _flow_dict_profile: dict[str, Any] = {}
+            if _host_dict_path and os.path.exists(_host_dict_path):
+                try:
+                    with open(_host_dict_path, "r", encoding="utf-8") as _hdf:
+                        _host_full_dict: dict[str, Any] = json.load(_hdf)
+                    # Skip _flow_meta key, look for agent-keyed entries
+                    _flow_dict_profile = _host_full_dict.get(agent_name, {})
+                except Exception as _hde:  # noqa: BLE001
+                    logger.error(f"[{AGENT_ID}] Failed to load flow dict for {agent_name}: {_hde}")
+            if _flow_dict_profile:
+                system_prompt = _flow_dict_profile.get("system_prompt", system_prompt)
+                model_id = _flow_dict_profile.get("model", model_id)
+                _flow_temp = float(_flow_dict_profile.get("temperature", node_config.get("temperature", 1.0)))
+                node_config["temperature"] = _flow_temp
+                tools_str = _flow_dict_profile.get("tools_allowed", tools_str)
+                _fd_host_ai: dict[str, Any] = _flow_dict_profile.get("ai_studio_options", {})
+                if _fd_host_ai:
+                    ai_options = _fd_host_ai
+
+                # Inject search tools based on UI toggles (mirrors Chat Studio path)
+                _t_list = [
+                    t_.strip()
+                    for t_ in tools_str.replace("|", ",").split(",")
+                    if t_.strip() and t_.strip() != "none"
+                ]
+                if ai_options.get("grounding_google_search"):
+                    if "google_search" not in _t_list:
+                        _t_list.append("google_search")
+                elif "google_search" in _t_list:
+                    _t_list.remove("google_search")
+                if ai_options.get("grounding_brave_search"):
+                    if "search_web" not in _t_list:
+                        _t_list.append("search_web")
+                elif "search_web" in _t_list:
+                    _t_list.remove("search_web")
+                tools_str = ",".join(_t_list) if _t_list else "none"
+                logger.info(f"[{AGENT_ID}] Flow dict override applied for host '{agent_name}'")
+
             if tools_str and tools_str.lower() != "none":
                 system_prompt += (
                     "\n\n[TOOL AWARENESS]\n"
@@ -981,6 +1024,46 @@ All file paths must strictly resolve to these five silos:
                             )
                             _mdl = str(_pd.get("model", _mdl) or _mdl)
                             _tmp = float(_pd.get("temperature", _tmp) or _tmp)
+
+                    # ── Flow Dictionary Overrides (highest priority) ──────────
+                    # MACCRE_CUSTOM_DICT is a JSON file keyed by agent name with
+                    # full agent profile + ai_studio_options.  Dict wins over
+                    # both topology CSV and agent library DB.
+                    _custom_dict_path = os.environ.get("MACCRE_CUSTOM_DICT", "")
+                    if _custom_dict_path and os.path.exists(_custom_dict_path):
+                        try:
+                            with open(_custom_dict_path, "r", encoding="utf-8") as _df:
+                                _full_dict: dict[str, Any] = _json.load(_df)
+                            # Skip _flow_meta key, look for agent-keyed entries
+                            _flow_profile: dict[str, Any] = _full_dict.get(name, {})
+                            if _flow_profile:
+                                _sys = _flow_profile.get("system_prompt", _sys)
+                                _mdl = _flow_profile.get("model", _mdl)
+                                _tmp = float(_flow_profile.get("temperature", _tmp))
+                                _tls = _flow_profile.get("tools_allowed", _tls)
+                                _fd_ai_opts: dict[str, Any] = _flow_profile.get("ai_studio_options", {})
+
+                                # Inject search tools based on UI toggles (mirrors Chat Studio path)
+                                _t_list = [
+                                    _t.strip()
+                                    for _t in _tls.replace("|", ",").split(",")
+                                    if _t.strip() and _t.strip() != "none"
+                                ]
+                                if _fd_ai_opts.get("grounding_google_search"):
+                                    if "google_search" not in _t_list:
+                                        _t_list.append("google_search")
+                                elif "google_search" in _t_list:
+                                    _t_list.remove("google_search")
+                                if _fd_ai_opts.get("grounding_brave_search"):
+                                    if "search_web" not in _t_list:
+                                        _t_list.append("search_web")
+                                elif "search_web" in _t_list:
+                                    _t_list.remove("search_web")
+                                _tls = ",".join(_t_list) if _t_list else "none"
+                                logger.info(f"[{AGENT_ID}] Flow dict override applied for '{name}'")
+                        except Exception as _fde:  # noqa: BLE001
+                            logger.error(f"[{AGENT_ID}] Failed to load flow dict for {name}: {_fde}")
+
                     return _sys, _mdl, _tmp, _tls
 
                 # ── Detect pair vs group by presence of pipe separator ─────────

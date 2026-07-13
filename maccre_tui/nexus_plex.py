@@ -8,6 +8,8 @@ Nexus Copilot while manipulating and tracking MACCREv2 topologies.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import sys
 import threading
 from pathlib import Path
@@ -39,7 +41,7 @@ from textual.widgets import (
 from maccre_tui.widgets.session_manager_modal import SessionManagerModal
 from maccre_tui.widgets.macronode_builder_panel import MacroNodeBuilderPanel
 from maccre_tui.widgets.information_panel import InformationPanel
-from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop
+from maccre_tui.widgets.macronode_workshop import MacroNodeWorkshop, WorkshopDictUpdated
 from maccre_tui.widgets.flow_monitor_overlay import FlowMonitorCollapsed, FlowMonitorOverlay
 from maccre_tui.widgets.topology_visualizer import TopologyVisualizer
 from maccre_core.orchestration.nexus_agent import NexusAgent
@@ -1661,7 +1663,273 @@ class CreatePayloadModal(ModalScreen[dict]):
         self.dismiss(result)
 
 
+class AgentProfileOverridesModal(ModalScreen[dict | None]):
+    """Session-specific agent configuration modal mirroring Chat Studio ChatBuilderPane fields.
 
+    Allows per-session overrides of model, temperature, thinking level, tools,
+    system instructions, and advanced settings without modifying the base
+    agent_library.db profile.
+    """
+
+    CSS = """
+    AgentProfileOverridesModal {
+        align: center middle;
+        background: $background 80%;
+    }
+    #ovr-container {
+        width: 90%;
+        max-width: 140;
+        height: auto;
+        max-height: 90vh;
+        background: $surface;
+        border: solid $primary;
+        padding: 1 2;
+        overflow-y: auto;
+    }
+    .ovr-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    .ovr-section-title {
+        text-style: bold;
+        color: #e6edf3;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+    .ovr-row {
+        height: auto;
+        margin-bottom: 1;
+    }
+    .ovr-switch-row {
+        height: 3;
+    }
+    """
+
+    def __init__(
+        self,
+        agent_name: str,
+        agent_profile: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._agent_name: str = agent_name
+        self._agent_profile: dict[str, Any] = agent_profile or {}
+        self._system_prompt: str = self._agent_profile.get("system_prompt", "")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="ovr-container"):
+            yield Label(f"Agent Profile Overrides: {self._agent_name}", classes="ovr-title")
+            yield Label(f"Base: {self._agent_name} (agent_library.db)")
+            yield Label("[dim]Session-specific – base profile NOT modified[/dim]")
+
+            # -- Model Section --
+            yield Label("── Model ──", classes="ovr-section-title")
+            with Horizontal(classes="ovr-row"):
+                yield Label("Model: ")
+                yield Select([], prompt="Select model…", id="ovr-model")
+            with Horizontal(classes="ovr-row"):
+                yield Label("Temperature: ")
+                yield Input(value="0.7", id="ovr-temp")
+            with Horizontal(classes="ovr-row"):
+                yield Label("Thinking: ")
+                yield Select(
+                    [("None", "none"), ("Low", "low"), ("High", "high")],
+                    value="none",
+                    id="ovr-thinking",
+                )
+
+            # -- System Instructions Section --
+            yield Label("── System Instructions ──", classes="ovr-section-title")
+            yield Button(
+                "Edit System Instructions",
+                variant="primary",
+                id="ovr-edit-instructions",
+            )
+
+            # -- Tool Assignments Section --
+            yield Label("── Tool Assignments ──", classes="ovr-section-title")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Google Search")
+                yield Switch(value=False, id="ovr-gsearch")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Brave Search")
+                yield Switch(value=False, id="ovr-bsearch")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Local Memory")
+                yield Switch(value=False, id="ovr-msearch")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("FinOps Ledger")
+                yield Switch(value=False, id="ovr-fsearch")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Google Maps")
+                yield Switch(value=False, id="ovr-gmaps")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("URL Context")
+                yield Switch(value=False, id="ovr-url")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Exclusionary Search")
+                yield Switch(value=False, id="ovr-exclusionary")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Funnel Search")
+                yield Switch(value=False, id="ovr-funnel")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Code Execution")
+                yield Switch(value=False, id="ovr-code")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Structured Outputs")
+                yield Switch(value=False, id="ovr-structured")
+            with Horizontal(classes="ovr-switch-row"):
+                yield Label("Function Calling")
+                yield Switch(value=False, id="ovr-function")
+
+            # -- Advanced Section --
+            yield Label("── Advanced ──", classes="ovr-section-title")
+            with Horizontal(classes="ovr-row"):
+                yield Label("Output Length: ")
+                yield Input(value="65536", id="ovr-output-len")
+            with Horizontal(classes="ovr-row"):
+                yield Label("Top P: ")
+                yield Input(value="0.95", id="ovr-top-p")
+            with Horizontal(classes="ovr-row"):
+                yield Label("Media Resolution: ")
+                yield Select(
+                    [("Default", "default"), ("Low", "low"), ("High", "high")],
+                    value="default",
+                    id="ovr-media",
+                )
+
+            # -- Action Buttons --
+            with Horizontal(classes="ovr-row"):
+                yield Button("Cancel", variant="error", id="ovr-cancel")
+                yield Button("Apply Overrides", variant="success", id="ovr-apply")
+
+    def on_mount(self) -> None:
+        """Populate all fields from agent_profile dict (or defaults if empty)."""
+        # Populate model dropdown
+        try:
+            models = load_model_ids()
+            sel_model = self.query_one("#ovr-model", Select)
+            sel_model.set_options([(m, m) for m in models])
+        except Exception:
+            pass
+
+        profile = self._agent_profile
+        if not profile:
+            return
+
+        # Prevent cascading event handlers during population
+        with self.prevent(Select.Changed, Input.Changed, Switch.Changed):
+            # Temperature
+            self.query_one("#ovr-temp", Input).value = str(profile.get("temperature", 0.7))
+
+            # Model
+            model_val = profile.get("model")
+            if model_val:
+                try:
+                    self.query_one("#ovr-model", Select).value = model_val
+                except Exception:
+                    pass
+
+            # System prompt
+            self._system_prompt = profile.get("system_prompt", "")
+
+            ai_opts: dict[str, Any] = profile.get("ai_studio_options", {})
+
+            # Thinking level
+            thinking_val = ai_opts.get("thinking_level", "none")
+            try:
+                self.query_one("#ovr-thinking", Select).value = thinking_val
+            except Exception:
+                pass
+
+            # Tool switches
+            self.query_one("#ovr-gsearch", Switch).value = ai_opts.get("grounding_google_search", False)
+            self.query_one("#ovr-bsearch", Switch).value = ai_opts.get("grounding_brave_search", False)
+            self.query_one("#ovr-msearch", Switch).value = ai_opts.get("grounding_local_memory", False)
+            self.query_one("#ovr-fsearch", Switch).value = ai_opts.get("finops_ledger", False)
+            self.query_one("#ovr-gmaps", Switch).value = ai_opts.get("grounding_google_maps", False)
+            self.query_one("#ovr-url", Switch).value = ai_opts.get("url_context", False)
+            self.query_one("#ovr-exclusionary", Switch).value = ai_opts.get("exclusionary_search", False)
+            self.query_one("#ovr-funnel", Switch).value = ai_opts.get("funnel_search", False)
+            self.query_one("#ovr-code", Switch).value = ai_opts.get("code_execution", False)
+            self.query_one("#ovr-structured", Switch).value = ai_opts.get("structured_outputs", False)
+            self.query_one("#ovr-function", Switch).value = ai_opts.get("function_calling", False)
+
+            # Advanced settings
+            self.query_one("#ovr-output-len", Input).value = str(ai_opts.get("output_length", 65536))
+            self.query_one("#ovr-top-p", Input).value = str(ai_opts.get("top_p", 0.95))
+
+            media_val = ai_opts.get("media_resolution", "default")
+            try:
+                self.query_one("#ovr-media", Select).value = media_val
+            except Exception:
+                pass
+
+    # -- System Instructions handler --
+    @on(Button.Pressed, "#ovr-edit-instructions")
+    def _open_system_instructions(self) -> None:
+        """Open the SystemInstructionsModal to edit the agent system prompt."""
+        def _on_instructions_result(text: str | None) -> None:
+            if text is not None:
+                self._system_prompt = text
+                btn = self.query_one("#ovr-edit-instructions", Button)
+                btn.label = "Edit System Instructions (Modified)"
+                btn.variant = "success"
+
+        self.app.push_screen(
+            SystemInstructionsModal(current_text=self._system_prompt),
+            _on_instructions_result,
+        )
+
+    # -- Cancel --
+    @on(Button.Pressed, "#ovr-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+    # -- Apply --
+    @on(Button.Pressed, "#ovr-apply")
+    def _apply(self) -> None:
+        """Build a profile dict matching Chat Studio structure and dismiss."""
+        model_sel = self.query_one("#ovr-model", Select)
+        model_value: str = str(model_sel.value) if model_sel.value and model_sel.value != Select.BLANK else ""
+
+        temp_value: str = self.query_one("#ovr-temp", Input).value.strip() or "0.7"
+        thinking_sel = self.query_one("#ovr-thinking", Select)
+        thinking_value: str = str(thinking_sel.value) if thinking_sel.value != Select.BLANK else "none"
+
+        output_len_value: str = self.query_one("#ovr-output-len", Input).value.strip() or "65536"
+        top_p_value: str = self.query_one("#ovr-top-p", Input).value.strip() or "0.95"
+
+        media_sel = self.query_one("#ovr-media", Select)
+        media_value: str = str(media_sel.value) if media_sel.value != Select.BLANK else "default"
+
+        result: dict[str, Any] = {
+            "agent_name": self._agent_name,
+            "model": model_value,
+            "system_prompt": self._system_prompt,
+            "temperature": float(temp_value),
+            "tools_allowed": "",  # Tools managed via ai_studio_options booleans
+            "ai_studio_options": {
+                "thinking_level": thinking_value,
+                "grounding_google_search": self.query_one("#ovr-gsearch", Switch).value,
+                "grounding_brave_search": self.query_one("#ovr-bsearch", Switch).value,
+                "grounding_local_memory": self.query_one("#ovr-msearch", Switch).value,
+                "finops_ledger": self.query_one("#ovr-fsearch", Switch).value,
+                "grounding_google_maps": self.query_one("#ovr-gmaps", Switch).value,
+                "url_context": self.query_one("#ovr-url", Switch).value,
+                "exclusionary_search": self.query_one("#ovr-exclusionary", Switch).value,
+                "funnel_search": self.query_one("#ovr-funnel", Switch).value,
+                "code_execution": self.query_one("#ovr-code", Switch).value,
+                "structured_outputs": self.query_one("#ovr-structured", Switch).value,
+                "function_calling": self.query_one("#ovr-function", Switch).value,
+                "output_length": int(output_len_value),
+                "top_p": float(top_p_value),
+                "media_resolution": media_value,
+            },
+        }
+        self.dismiss(result)
 
 
 class NodeConfigModal(ModalScreen[dict | None]):
@@ -1735,7 +2003,8 @@ class NodeConfigModal(ModalScreen[dict | None]):
         self.agents_in_node = agents_in_node or []
         self.baked_tools = baked_tools or {}
         self.current_agent_tools_overrides = current_agent_tools_overrides or {}
-        self.agent_profiles = {}
+        self.agent_profiles: dict[str, dict[str, Any]] = {}
+        self._agent_overrides_dict: dict[str, dict[str, Any]] = {}
         
         if self.agents_in_node and self.active_project:
             try:
@@ -1772,6 +2041,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
                         id="cfg-agent-select"
                     )
                     yield Input(value="", id="node-tools-input", disabled=True)
+                    yield Button("⚙ Overrides", id="btn-agent-overrides", variant="warning", disabled=True)
                     
                 with Horizontal(id="cfg-agent-tools-container"):
                     with Vertical(classes="flow-select-group"):
@@ -1809,6 +2079,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
         btn_add = self.query_one("#btn-add-tool", Button)
         btn_clear = self.query_one("#btn-clear-tools", Button)
         tools_input = self.query_one("#node-tools-input", Input)
+        btn_overrides = self.query_one("#btn-agent-overrides", Button)
         
         if not agent_name:
             tool_select.disabled = True
@@ -1816,11 +2087,13 @@ class NodeConfigModal(ModalScreen[dict | None]):
             btn_clear.disabled = True
             tools_input.disabled = True
             tools_input.value = ""
+            btn_overrides.disabled = True
             return
             
         tool_select.disabled = False
         btn_add.disabled = False
         btn_clear.disabled = False
+        btn_overrides.disabled = False
         tools_input.disabled = False
         
         prof = self.agent_profiles.get(agent_name, {})
@@ -1883,12 +2156,32 @@ class NodeConfigModal(ModalScreen[dict | None]):
         ]
         body.update("\n".join(info))
 
+    @on(Button.Pressed, "#btn-agent-overrides")
+    def _open_agent_overrides(self) -> None:
+        """Open the AgentProfileOverridesModal for the currently selected agent."""
+        agent_select = self.query_one("#cfg-agent-select", Select)
+        if not agent_select.value or agent_select.value == Select.BLANK:
+            return
+        agent_name = str(agent_select.value)
+        current_profile: dict[str, Any] | None = self._agent_overrides_dict.get(agent_name)
+        if current_profile is None:
+            current_profile = self.agent_profiles.get(agent_name)
+
+        def _on_overrides_result(result: dict[str, Any] | None) -> None:
+            if result is not None:
+                self._agent_overrides_dict[agent_name] = result
+
+        self.app.push_screen(
+            AgentProfileOverridesModal(agent_name=agent_name, agent_profile=current_profile),
+            _on_overrides_result,
+        )
+
     @on(Button.Pressed, "#btn-cfg-cancel")
-    def cancel(self):
+    def cancel(self) -> None:
         self.dismiss(None)
-        
+
     @on(Button.Pressed, "#btn-cfg-save")
-    def save(self):
+    def save(self) -> None:
         new_name = self.query_one("#cfg-node-name", Input).value.strip()
         new_mode = self.query_one("#cfg-payload-mode", Select).value
         new_instr = self.query_one("#cfg-custom-instructions", TextArea).text.strip()
@@ -1902,8 +2195,14 @@ class NodeConfigModal(ModalScreen[dict | None]):
                 self.current_agent_tools_overrides[agent_name] = tools_val
         except Exception:
             pass
-            
-        self.dismiss({"name": new_name, "payload_mode": new_mode, "custom_instructions": new_instr, "agent_tools_overrides": self.current_agent_tools_overrides})
+
+        self.dismiss({
+            "name": new_name,
+            "payload_mode": new_mode,
+            "custom_instructions": new_instr,
+            "agent_tools_overrides": self.current_agent_tools_overrides,
+            "agent_overrides": self._agent_overrides_dict,
+        })
 
 
 
@@ -3001,6 +3300,14 @@ class NexusPlex(App[None]):
         except Exception:  # noqa: BLE001
             pass
 
+    @on(WorkshopDictUpdated)
+    def _handle_dict_updated(self, event: WorkshopDictUpdated) -> None:
+        """Update InformationPanel with live flow dict preview."""
+        try:
+            self.query_one(InformationPanel).show_flow_dict_preview(event.preview_json)
+        except Exception:  # noqa: BLE001
+            pass
+
     @on(Button.Pressed, "#btn-remove-last")
     def remove_last_node(self) -> None:
         if self.active_flow_steps:
@@ -3062,7 +3369,24 @@ class NexusPlex(App[None]):
                 self._node_payloads = []
                 self._set_vcr_state("running")
                 self._readout_timer = self.set_interval(1.0, self._update_flow_stage_readout)
-                
+
+                # Load Flow Dictionary if it exists for this session
+                try:
+                    from maccre_core.utils.path_resolver import get_datacenter_path as _gdp  # noqa: PLC0415
+                    from maccre_core.flow_dict import FlowDictBuffer  # noqa: PLC0415
+                    dict_path = _gdp("02_Dynamic_Context", job_id) / f"Flow-{job_id}.dict"
+                    if dict_path.exists():
+                        os.environ["MACCRE_CUSTOM_DICT"] = str(dict_path)
+                        buf = FlowDictBuffer.from_file(dict_path)
+                        try:
+                            workshop = self.query_one(MacroNodeWorkshop)
+                            workshop.load_flow_dict(buf)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        self.write_agent_log(f"[dim]Flow dict loaded: {dict_path.name}[/dim]")
+                except Exception:  # noqa: BLE001
+                    pass
+
                 self.resume_linear_flow_background(job_id)
 
             elif action == "canonize":
@@ -3123,6 +3447,68 @@ class NexusPlex(App[None]):
                     self._refresh_macro_dropdown()
                 except Exception as e:
                     self.notify(f"Save template failed: {e}", severity="error")
+
+            elif action == "save_as_macronode":
+                try:
+                    import json as _json
+                    from maccre_core.utils.path_resolver import get_datacenter_path
+                    from maccre_core.macronode_registry import get_macronode_store
+
+                    template_name = result.get("template_name", job_id)
+                    template_desc = result.get("template_description", "")
+                    save_mode = result.get("save_mode", "configured")
+
+                    if job_id == "__topology_visualizer__":
+                        # Source is the current Topology Visualizer
+                        try:
+                            workshop = self.query_one(MacroNodeWorkshop)
+                            flow_steps = workshop.get_flow_steps()
+                        except Exception:  # noqa: BLE001
+                            flow_steps = []
+                        if not flow_steps:
+                            self.notify("No topology loaded in the Visualizer.", severity="error")
+                            return
+                        template_rows: list[dict[str, str]] = []
+                        for node in flow_steps:
+                            template_rows.append({
+                                "Node_ID": node.get("Node_ID", ""),
+                                "Role": node.get("Role", node.get("Node_ID", "")),
+                                "Next_Node": node.get("Next_Node", "END"),
+                                "Wait_For": node.get("Wait_For", ""),
+                            })
+                    else:
+                        # Source is a completed session
+                        topo_path = (
+                            get_datacenter_path("02_Dynamic_Context", job_id)
+                            / "as_wrapped_topology.json"
+                        )
+                        if not topo_path.exists():
+                            self.notify(f"No topology snapshot found for {job_id}", severity="error")
+                            return
+                        topo_data = _json.loads(topo_path.read_text(encoding="utf-8"))
+                        nodes_list = topo_data.get("nodes", topo_data.get("topology_rows", []))
+                        template_rows = []
+                        for node in nodes_list:
+                            template_rows.append({
+                                "Node_ID": node.get("Node_ID", ""),
+                                "Role": node.get("Role", node.get("Node_ID", "")),
+                                "Next_Node": node.get("Next_Node", "END"),
+                                "Wait_For": node.get("Wait_For", ""),
+                            })
+
+                    store = get_macronode_store(self.active_project)
+                    store.save(
+                        name=template_name,
+                        topology_rows=template_rows,
+                        description=template_desc or f"MacroNode from {job_id}",
+                        is_template=True,
+                        template_type="custom",
+                        save_mode=save_mode,
+                    )
+                    self.notify(f"Saved MacroNode: {template_name} ({save_mode})")
+                    self._refresh_macro_dropdown()
+                except Exception as e:  # noqa: BLE001
+                    self.notify(f"Save MacroNode failed: {e}", severity="error")
 
             elif action == "nexus_deadflow":
                 self.focus_nexus()
@@ -3562,6 +3948,22 @@ class NexusPlex(App[None]):
         self.query_one("#btn-launch-flow", Button).disabled = True
         self.query_one("#btn-stop-flow", Button).disabled = False
         self.query_one("#btn-create-payload", Button).disabled = True
+
+        # ── Write Flow Dictionary to disk ─────────────────────────────────
+        try:
+            from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: PLC0415
+            workshop = self.query_one(MacroNodeWorkshop)
+            flow_dict = workshop.get_flow_dict()
+            session_name = getattr(self, "_current_session_name", "") or "flow"
+            flow_dict.session_name = session_name
+            dict_dir = get_datacenter_path("02_Dynamic_Context", session_name)
+            dict_dir.mkdir(parents=True, exist_ok=True)
+            dict_path = dict_dir / f"Flow-{session_name}.dict"
+            flow_dict.write_to_file(dict_path)
+            os.environ["MACCRE_CUSTOM_DICT"] = str(dict_path)
+            self.write_agent_log(f"[dim]Flow dict written: {dict_path.name}[/dim]")
+        except Exception as e:  # noqa: BLE001
+            self.write_agent_log(f"[yellow]Flow dict write skipped: {e}[/yellow]")
         
         # Show Flow Monitor Overlay, hide InformationPanel
         try:

@@ -59,6 +59,7 @@ class MacroNodeStore(abc.ABC):
         agent_slots: list[str] | None = None,
         template_type: str = "",
         template_config: dict[str, Any] | None = None,
+        save_mode: str = "configured",
     ) -> None:
         """Upsert a named MacroNode into the store."""
 
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS macronode_registry (
     roster_json     TEXT,
     template_type   TEXT DEFAULT NULL,
     template_config TEXT DEFAULT NULL,
+    save_mode       TEXT DEFAULT 'configured',
     created_at      TEXT NOT NULL,
     last_used       TEXT NOT NULL
 );
@@ -110,6 +112,10 @@ _MIGRATE_DEPRECATED_COL: list[str] = [
     "ALTER TABLE macronode_registry ADD COLUMN deprecated INTEGER DEFAULT 0",
 ]
 
+_MIGRATE_SAVE_MODE_COL: list[str] = [
+    "ALTER TABLE macronode_registry ADD COLUMN save_mode TEXT DEFAULT 'configured'",
+]
+
 
 class SQLiteMacroNodeStore(MacroNodeStore):
     """SQLite-backed MacroNode registry. Thread-safe via check_same_thread=False."""
@@ -124,7 +130,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
         try:
             conn.execute(_CREATE_SQL)
             conn.execute(_CREATE_EPHEMERAL_SQL)
-            for stmt in _MIGRATE_TEMPLATE_COLS + _MIGRATE_DEPRECATED_COL:
+            for stmt in _MIGRATE_TEMPLATE_COLS + _MIGRATE_DEPRECATED_COL + _MIGRATE_SAVE_MODE_COL:
                 try:
                     conn.execute(stmt)
                 except sqlite3.OperationalError:
@@ -171,6 +177,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
         agent_slots: list[str] | None = None,
         template_type: str = "",
         template_config: dict[str, Any] | None = None,
+        save_mode: str = "configured",
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         slots_json = json.dumps(agent_slots) if agent_slots else "[]"
@@ -181,8 +188,9 @@ class SQLiteMacroNodeStore(MacroNodeStore):
             conn.execute(
                 """INSERT INTO macronode_registry
                    (name, description, is_template, agent_slots, topology_json,
-                    roster_json, template_type, template_config, created_at, last_used)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    roster_json, template_type, template_config, save_mode,
+                    created_at, last_used)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(name) DO UPDATE SET
                      description     = excluded.description,
                      is_template     = excluded.is_template,
@@ -191,6 +199,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
                      roster_json     = excluded.roster_json,
                      template_type   = excluded.template_type,
                      template_config = excluded.template_config,
+                     save_mode       = excluded.save_mode,
                      last_used       = excluded.last_used
                 """,
                 (
@@ -202,6 +211,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
                     json.dumps(roster_rows) if roster_rows else None,
                     tpl_type,
                     tpl_config,
+                    save_mode,
                     now,
                     now,
                 ),
@@ -215,7 +225,8 @@ class SQLiteMacroNodeStore(MacroNodeStore):
         try:
             row = conn.execute(
                 "SELECT name, description, is_template, agent_slots, topology_json, "
-                "roster_json, template_type, template_config, created_at, last_used "
+                "roster_json, template_type, template_config, created_at, last_used, "
+                "COALESCE(save_mode, 'configured') "
                 "FROM macronode_registry WHERE name = ?",
                 (name.strip(),),
             ).fetchone()
@@ -236,6 +247,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
             "template_config": json.loads(row[7]) if row[7] else None,
             "created_at": row[8],
             "last_used": row[9],
+            "save_mode": row[10],
         }
 
     def list_all(self, include_deprecated: bool = False) -> list[dict[str, Any]]:
@@ -244,7 +256,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
         try:
             query = (
                 "SELECT name, description, is_template, template_type, created_at, last_used, "
-                "COALESCE(deprecated, 0) FROM macronode_registry"
+                "COALESCE(deprecated, 0), COALESCE(save_mode, 'configured') FROM macronode_registry"
             )
             if not include_deprecated:
                 query += " WHERE COALESCE(deprecated, 0) = 0"
@@ -261,6 +273,7 @@ class SQLiteMacroNodeStore(MacroNodeStore):
                 "created_at": r[4],
                 "last_used": r[5],
                 "deprecated": bool(r[6]),
+                "save_mode": r[7],
             }
             for r in rows
         ]

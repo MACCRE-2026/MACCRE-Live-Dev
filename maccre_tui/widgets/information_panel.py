@@ -153,6 +153,7 @@ class InformationPanel(Vertical):
         yield InfoPane(pane_id="macro-info", title="MacroNode Details", collapsed=True)
         yield InfoPane(pane_id="agent-info", title="Agent Details", collapsed=True)
         yield InfoPane(pane_id="ctrl-info", title="Control Node Info", collapsed=True)
+        yield InfoPane(pane_id="flow-dict", title="Flow Dictionary", collapsed=True)
         yield InfoPane(pane_id="as-wrapped", title="As-Wrapped Preview", collapsed=True)
         yield InfoPane(
             pane_id="instructions",
@@ -266,6 +267,25 @@ class InformationPanel(Vertical):
                     lines.append(f"  {key}: {val}")
 
         pane.set_content("\n".join(lines))
+
+    def show_flow_dict_preview(self, dict_json: str) -> None:
+        """Show the live flow dictionary preview as agents are added/configured."""
+        pane = self._get_pane("flow-dict")
+        if not pane:
+            return
+        try:
+            data = json.loads(dict_json)
+            agent_count = sum(1 for k in data if k != "_flow_meta")
+            meta = data.get("_flow_meta", {})
+            tether_count = len(meta.get("tethers", {}))
+            header = f"[b]Flow Dictionary[/b] — {agent_count} agent(s)"
+            if tether_count:
+                header += f", {tether_count} tether(s)"
+            formatted = json.dumps(data, indent=2)[:3000]
+            pane.set_content(f"{header}\n```json\n{formatted}\n```")
+            pane.collapsed = False
+        except (json.JSONDecodeError, TypeError):
+            pane.set_content(dict_json[:2000] if dict_json else "")
 
     def show_as_wrapped(self, topology_json: str) -> None:
         """Show the as-wrapped topology preview during/after execution."""

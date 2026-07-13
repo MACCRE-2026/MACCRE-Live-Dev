@@ -1,12 +1,96 @@
 import json
 import uuid
+from typing import Any
+
 from textual.screen import ModalScreen
 from textual.app import ComposeResult
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Label, Select, Input, Button, RichLog
+from textual.widgets import Label, Select, Input, Button, RichLog, Static, TextArea
 from textual import on
 
 from maccre_core.orchestration.local_broker import LocalMessageBroker
+
+
+# ── MacroNode Name Modal ─────────────────────────────────────────────────────
+
+class MacroNodeNameModal(ModalScreen[dict | None]):
+    """Small popup to name and describe a MacroNode before saving."""
+
+    DEFAULT_CSS = """
+    MacroNodeNameModal {
+        align: center middle;
+        background: $background 80%;
+    }
+    #macronode-name-dialog {
+        width: 64;
+        height: auto;
+        max-height: 22;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+    .mn-title {
+        text-align: center;
+        background: $primary-darken-2;
+        color: white;
+        padding: 1;
+        margin-bottom: 1;
+    }
+    .mn-field-label {
+        margin-top: 1;
+    }
+    .mn-info {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #mn-desc-area {
+        height: 4;
+    }
+    .mn-buttons {
+        margin-top: 1;
+        align: center middle;
+    }
+    """
+
+    def __init__(self, save_mode: str = "configured", source_info: str = "", **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._save_mode = save_mode
+        self._source_info = source_info
+
+    def compose(self) -> ComposeResult:
+        mode_label = "Configured MacroNode" if self._save_mode == "configured" else "Template MacroNode"
+        yield Vertical(
+            Label("━━━ Name Your MacroNode ━━━", classes="mn-title"),
+            Label("Name:", classes="mn-field-label"),
+            Input(placeholder="MacroNode name (required)", id="mn-name-input"),
+            Label("Description:", classes="mn-field-label"),
+            TextArea(id="mn-desc-area"),
+            Label(f"Save Mode:  {mode_label}", classes="mn-info"),
+            Label(f"Source: {self._source_info}" if self._source_info else "Source: —", classes="mn-info"),
+            Horizontal(
+                Button("Cancel", id="mn-cancel", variant="error"),
+                Button("Save", id="mn-save", variant="success"),
+                classes="mn-buttons",
+            ),
+            id="macronode-name-dialog",
+        )
+
+    @on(Button.Pressed, "#mn-cancel")
+    def _cancel(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#mn-save")
+    def _save(self, event: Button.Pressed) -> None:
+        name_val = self.query_one("#mn-name-input", Input).value.strip()
+        if not name_val:
+            self.notify("Name is required.", severity="error")
+            return
+        desc_val = self.query_one("#mn-desc-area", TextArea).text.strip()
+        self.dismiss({
+            "name": name_val,
+            "description": desc_val,
+            "save_mode": self._save_mode,
+        })
 
 class SessionManagerModal(ModalScreen[dict | None]):
     """Modal for managing FlowStasis (Paused), Completed sessions, and DeadFlows."""
@@ -90,8 +174,15 @@ class SessionManagerModal(ModalScreen[dict | None]):
                     Select([], prompt="Select Completed...", id="completed-select"),
                     Horizontal(
                         Button("Canonize", id="btn-canonize-session", variant="warning", disabled=True),
-                        Button("Save as Template", id="btn-save-registry", variant="primary", disabled=True),
+                        Button("Save as MacroNode", id="btn-save-macronode", variant="primary"),
+                        Button("Save as Template", id="btn-save-template", variant="primary"),
                         classes="mt-1"
+                    ),
+                    Static(
+                        "[dim]ℹ No completed session selected — buttons will use the current "
+                        "Topology Visualizer.[/dim]",
+                        id="save-source-hint",
+                        classes="save-source-hint",
                     ),
                     classes="sm-column", id="completed-panel"
                 ),
@@ -192,8 +283,17 @@ class SessionManagerModal(ModalScreen[dict | None]):
         self.selected_completed = val
         is_named = bool(val) and not str(val).startswith("job_")
         self.query_one("#btn-canonize-session", Button).disabled = not is_named
-        self.query_one("#btn-save-registry", Button).disabled = not is_named
-        
+
+        # Update the save-source hint
+        hint = self.query_one("#save-source-hint", Static)
+        if val:
+            hint.update(f"[dim]ℹ Source: completed session '{val}'[/dim]")
+        else:
+            hint.update(
+                "[dim]ℹ No completed session selected — buttons will use the current "
+                "Topology Visualizer.[/dim]"
+            )
+
         if val:
             self.query_one("#stasis-select", Select).clear()
             self.query_one("#deadflow-select", Select).clear()
@@ -223,7 +323,6 @@ class SessionManagerModal(ModalScreen[dict | None]):
         is_named = val and not val.startswith("job_")
         if self.selected_completed:
             self.query_one("#btn-canonize-session", Button).disabled = not is_named
-            self.query_one("#btn-save-registry", Button).disabled = not is_named
 
     @on(Button.Pressed, "#btn-rename-session")
     def on_rename_session(self, event: Button.Pressed) -> None:
@@ -272,20 +371,40 @@ class SessionManagerModal(ModalScreen[dict | None]):
                     return
             self.dismiss({"action": "canonize", "job_id": job_to_canonize})
 
-    @on(Button.Pressed, "#btn-save-registry")
-    def on_save_registry(self, event: Button.Pressed) -> None:
-        """Save the completed session's topology as a reusable MacroNode template."""
+    @on(Button.Pressed, "#btn-save-macronode")
+    def on_save_macronode(self, event: Button.Pressed) -> None:
+        """Save topology as a fully configured MacroNode."""
+        self._save_as_macro(save_mode="configured")
+
+    @on(Button.Pressed, "#btn-save-template")
+    def on_save_template(self, event: Button.Pressed) -> None:
+        """Save topology as a MacroNode template with empty slots."""
+        self._save_as_macro(save_mode="template")
+
+    def _save_as_macro(self, save_mode: str) -> None:
+        """Common handler for both save buttons — pushes MacroNodeNameModal."""
+        source_info = ""
         if self.selected_completed:
-            new_name = self.query_one("#session-name-input", Input).value.strip()
-            job_to_save = self.selected_completed
-            if new_name and new_name != self.selected_completed and not new_name.startswith("job_"):
-                try:
-                    self.broker.rename_session(self.selected_completed, new_name)
-                    job_to_save = new_name
-                except Exception as e:
-                    self.notify(f"Rename failed before saving: {e}", severity="error")
-                    return
-            self.dismiss({"action": "save_as_template", "job_id": job_to_save})
+            source_info = f"Completed session: {self.selected_completed}"
+        else:
+            source_info = "Current Topology Visualizer"
+
+        def handle_name_result(result: dict | None) -> None:
+            if result is None:
+                return
+            job_id = self.selected_completed or "__topology_visualizer__"
+            self.dismiss({
+                "action": "save_as_macronode",
+                "job_id": job_id,
+                "template_name": result["name"],
+                "template_description": result.get("description", ""),
+                "save_mode": result["save_mode"],
+            })
+
+        self.app.push_screen(
+            MacroNodeNameModal(save_mode=save_mode, source_info=source_info),
+            handle_name_result,
+        )
 
     @on(Button.Pressed, "#btn-close-session-manager")
     def on_close(self, event: Button.Pressed) -> None:

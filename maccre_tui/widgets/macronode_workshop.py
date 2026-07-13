@@ -17,7 +17,8 @@ Combines:
   - NodeCatalog (tabbed browser for MacroNodes, Agents, Control Nodes)
   - TopologyVisualizer (Rich Tree DAG)
   - Flow Control buttons (Launch, Stop, Resume, Rewind, etc.)
-  - Flow Monitor (execution log + context injection)
+
+The Flow Monitor is handled by FlowMonitorOverlay in the left pane.
 
 Uses LEGACY widget IDs from FlowExecutionPanel so that all existing
 NexusPlex handlers work without any modification. This is the canonical
@@ -28,6 +29,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from maccre_core.flow_dict import FlowDictBuffer
+
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -36,7 +39,6 @@ from textual.widgets import (
     Button,
     Input,
     Label,
-    RichLog,
     Static,
 )
 
@@ -62,6 +64,14 @@ class WorkshopFlowStop(Message):
 
 class WorkshopFlowResume(Message):
     """User wants to resume a paused flow."""
+
+
+class WorkshopDictUpdated(Message):
+    """Fired when the flow dict buffer changes, so parent can refresh preview."""
+
+    def __init__(self, preview_json: str) -> None:
+        super().__init__()
+        self.preview_json = preview_json
 
 
 class WorkshopNodeConfigRequested(Message):
@@ -109,31 +119,6 @@ class MacroNodeWorkshop(Vertical):
         height: auto;
         padding: 0;
     }
-    MacroNodeWorkshop .flow-monitor-section {
-        height: 20;
-        border-top: solid $primary;
-        padding: 0;
-        margin-top: 1;
-    }
-    MacroNodeWorkshop .flow-monitor-section RichLog {
-        height: 12;
-    }
-    MacroNodeWorkshop .input-row {
-        height: 3;
-        layout: horizontal;
-    }
-    MacroNodeWorkshop .input-row Input {
-        width: 90%;
-    }
-    MacroNodeWorkshop .input-row Button {
-        width: 8%;
-        min-width: 4;
-    }
-    MacroNodeWorkshop .flow-stage-readout {
-        height: 1;
-        padding: 0 1;
-        color: $text-muted;
-    }
     MacroNodeWorkshop .topo-actions {
         height: 3;
         layout: horizontal;
@@ -150,10 +135,16 @@ class MacroNodeWorkshop(Vertical):
         min-width: 4;
         max-width: 4;
     }
-    MacroNodeWorkshop .vcr-instructions {
-        height: 2;
-        color: $text-muted;
-        padding: 0 1;
+    MacroNodeWorkshop .input-row {
+        height: 3;
+        layout: horizontal;
+    }
+    MacroNodeWorkshop .input-row Input {
+        width: 90%;
+    }
+    MacroNodeWorkshop .input-row Button {
+        width: 8%;
+        min-width: 4;
     }
     MacroNodeWorkshop .btn-proceed-anyway {
         margin: 0 1;
@@ -166,6 +157,7 @@ class MacroNodeWorkshop(Vertical):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._flow_steps: list[dict[str, Any]] = []
+        self._flow_dict = FlowDictBuffer()
 
     def compose(self) -> ComposeResult:
         yield Label("⚙  MacroNode Workshop", classes="workshop-title")
@@ -205,42 +197,15 @@ class MacroNodeWorkshop(Vertical):
             yield Button("Chat Studio", variant="default", id="btn-agent-chat")
             yield Button("File Cabinet", variant="warning", id="btn-file-cabinet")
 
-        # ── Flow Monitor (legacy IDs) ─────────────────────────────────
-        with Vertical(classes="panel-section", id="flow-monitor-section"):
-            with Horizontal(id="flow-monitor-header-row"):
-                yield Label("Flow Monitor", classes="pane-title")
-                yield Button("Copy", id="btn-copy-monitor")
-            yield Label(
-                "Stage: [dim]Idle[/dim]",
-                id="flow-stage-readout",
-                classes="flow-stage-readout",
-            )
-            yield RichLog(
-                id="flow-execution-log",
-                wrap=True,
-                highlight=True,
-                markup=True,
-            )
+        # ── Pre-flight Override + Context Injection (legacy IDs) ──────
+        yield Button(
+            "\u26a0 Proceed Anyway", id="btn-proceed-anyway",
+            variant="warning", classes="btn-proceed-anyway hidden",
+        )
+        with Horizontal(classes="input-row"):
+            yield Input(placeholder="Inject context to flow...", id="fe-input")
+            yield Button("\u2197", id="btn-expand-input", variant="primary", classes="btn-icon")
 
-            # VCR Instructions
-            with Horizontal(id="vcr-transport-row"):
-                yield Static(
-                    "[dim]While paused: click a node → ○ radios appear → "
-                    "left = inject before (+ Live Chat) · right = inject after (fork) → "
-                    "orange arrow = open injection modal → ▶ to resume[/dim]",
-                    id="vcr-instructions",
-                    classes="vcr-instructions",
-                )
-
-            # Pre-flight override (hidden by default)
-            yield Button(
-                "⚠ Proceed Anyway", id="btn-proceed-anyway",
-                variant="warning", classes="btn-proceed-anyway hidden",
-            )
-
-            with Horizontal(classes="input-row"):
-                yield Input(placeholder="Inject context to flow...", id="fe-input")
-                yield Button("↗", id="btn-expand-input", variant="primary", classes="btn-icon")
 
     # ── Catalog Integration ───────────────────────────────────────────────
 
@@ -260,6 +225,12 @@ class MacroNodeWorkshop(Vertical):
 
         self._flow_steps.append(step)
         self._sync_visualizer()
+
+        # Auto-register agent in flow dict buffer (non-CTRL_ nodes only)
+        if event.node_type == "agent" and not event.node_id.startswith("CTRL_"):
+            self._flow_dict.ensure_agent(event.node_id)
+            self._emit_dict_update()
+
         logger.info("[Workshop] Added %s: %s", event.node_type, event.node_id)
 
     @on(CatalogSelectionChanged)
@@ -296,19 +267,30 @@ class MacroNodeWorkshop(Vertical):
         """Return the current flow steps."""
         return list(self._flow_steps)
 
-    def write_monitor_log(self, text: str) -> None:
-        """Write to the flow monitor log."""
-        try:
-            self.query_one("#flow-execution-log", RichLog).write(text)
-        except Exception:  # noqa: BLE001
-            pass
+    def get_flow_dict(self) -> FlowDictBuffer:
+        """Return the flow dict buffer."""
+        return self._flow_dict
 
-    def set_stage_readout(self, text: str) -> None:
-        """Update the stage readout label."""
-        try:
-            self.query_one("#flow-stage-readout", Label).update(text)
-        except Exception:  # noqa: BLE001
-            pass
+    def set_agent_override(self, agent_name: str, profile: dict[str, Any]) -> None:
+        """Set an agent override in the flow dict buffer."""
+        self._flow_dict.set_agent_profile(agent_name, profile)
+        self._emit_dict_update()
+
+    def reset_flow_dict(self, session_name: str = "") -> None:
+        """Reset the flow dict buffer (e.g., on Clear Flow)."""
+        self._flow_dict = FlowDictBuffer(session_name=session_name)
+        self._emit_dict_update()
+
+    def load_flow_dict(self, buf: FlowDictBuffer) -> None:
+        """Load an existing FlowDictBuffer (e.g., on Resume Session)."""
+        self._flow_dict = buf
+        self._emit_dict_update()
+
+    def _emit_dict_update(self) -> None:
+        """Post a dict-updated message with JSON preview."""
+        self.post_message(WorkshopDictUpdated(self._flow_dict.to_json()))
+
+
 
     def populate_catalog(
         self,
