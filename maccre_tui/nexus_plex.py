@@ -3874,9 +3874,10 @@ class NexusPlex(App[None]):
                 if macro_store and not is_ctrl:
                     try:
                         macro_data = macro_store.load(name)
-                        if macro_data and macro_data.get("topology"):
+                        topo_rows = macro_data.get("topology_rows") or macro_data.get("topology") or []
+                        if macro_data and topo_rows:
                             node_type = "macronode"
-                            inner_steps = macro_data["topology"]
+                            inner_steps = topo_rows
                     except Exception:  # noqa: BLE001
                         pass
 

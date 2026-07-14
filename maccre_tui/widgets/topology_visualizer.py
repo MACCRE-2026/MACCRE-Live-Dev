@@ -34,6 +34,7 @@ from typing import Any
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.events import Key
 from textual.message import Message
 from textual.widgets import Label, Static, Tree
 from textual.widgets.tree import TreeNode
@@ -205,12 +206,8 @@ class TopologyVisualizer(Vertical):
     }
     """
 
-    BINDINGS = [
-        ("ctrl+up", "move_node_up", "Move node up"),
-        ("ctrl+down", "move_node_down", "Move node down"),
-        ("ctrl+e", "toggle_expand", "Toggle MacroNode expansion"),
-        ("ctrl+enter", "open_config", "Open node config"),
-    ]
+    # NOTE: Textual BINDINGS on a parent Vertical don't fire when the Tree
+    # child has focus.  All keyboard shortcuts are handled via on_key() below.
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -538,7 +535,31 @@ class TopologyVisualizer(Vertical):
             self.toggle_expansion(nd.node_id)
         label = nd.role or nd.node_id
         kind = "CTRL" if nd.is_control_node else ("MacroNode" if nd.is_macronode else "Agent")
-        self.notify(f"{label} ({kind})  [Ctrl+Enter → Configure]", timeout=3)
+        self.notify(f"{label} ({kind})  [F2 → Configure]", timeout=3)
+
+    def on_key(self, event: Key) -> None:
+        """Handle keyboard shortcuts for the topology tree.
+
+        Textual BINDINGS on a Vertical parent don't fire when the Tree child
+        has focus.  We intercept key events directly instead.
+        """
+        key = event.key
+        if key == "ctrl+e":
+            self.action_toggle_expand()
+            event.prevent_default()
+            event.stop()
+        elif key == "ctrl+up":
+            self.action_move_node_up()
+            event.prevent_default()
+            event.stop()
+        elif key == "ctrl+down":
+            self.action_move_node_down()
+            event.prevent_default()
+            event.stop()
+        elif key == "f2":
+            self.action_open_config()
+            event.prevent_default()
+            event.stop()
 
     @property
     def node_count(self) -> int:
