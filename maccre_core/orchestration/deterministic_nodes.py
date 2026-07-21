@@ -38,6 +38,8 @@ Node Types
 ``CTRL_FILTER``      Applies filter rules (strip sections, truncate, regex) to payload.
 ``CTRL_CLEANUP``     Deletes temporary files matching glob patterns.
 ``CTRL_CONDITIONAL_ROUTE``  4-vector fallback routing: structured → keyword → score → fuzzy.
+``CTRL_END``           Terminal node — marks flow completion.
+``CTRL_PAYLOAD_INJECT`` Injects static content as payload.
 """
 from __future__ import annotations
 
@@ -75,6 +77,8 @@ class DeterministicNodeType(Enum):
     FILTER = "CTRL_FILTER"
     CLEANUP = "CTRL_CLEANUP"
     CONDITIONAL_ROUTE = "CTRL_CONDITIONAL_ROUTE"
+    END = "CTRL_END"
+    PAYLOAD_INJECT = "CTRL_PAYLOAD_INJECT"
 
 
 def is_deterministic_node(node_id: str) -> bool:
@@ -173,6 +177,21 @@ def _handle_anchor(
     )
 
 
+def _handle_end(
+    node_id: str,
+    payload_path: str,
+    job_id: str,
+    config: dict[str, Any],
+    predecessor_payloads: list[str],
+) -> DeterministicNodeResult:
+    """CTRL_END — Terminal node. Marks flow completion. Pure passthrough."""
+    logger.info(f"[CTRL_END] {node_id}: Flow endpoint reached.")
+    return DeterministicNodeResult(
+        output_payload_path=payload_path,
+        log_message=f"END node {node_id}: flow endpoint reached.",
+    )
+
+
 def _handle_recursion(
     node_id: str,
     payload_path: str,
@@ -190,7 +209,8 @@ def _handle_recursion(
 
     if iteration < max_recursion:
         # Loop back: override next_node to the recursion target
-        loop_target = str(config.get("Instruction_Override", "")).strip()
+        loop_target_raw = config.get("loop_target") or config.get("Instruction_Override", "")
+        loop_target = str(loop_target_raw).strip()
         if not loop_target or loop_target.lower() == "none":
             loop_target = str(config.get("Next_Node", "END")).split("|")[0].strip()
 
@@ -218,12 +238,139 @@ def _handle_pause(
     config: dict[str, Any],
     predecessor_payloads: list[str],
 ) -> DeterministicNodeResult:
-    """CTRL_PAUSE — Halt execution. Task set to 'paused' for manual resume."""
-    logger.info(f"[CTRL_PAUSE] {node_id}: Flow paused. Awaiting manual resume.")
+    """CTRL_PAUSE — Halt execution or timed gate.
+
+    If ``auto_resume_after`` > 0, sleeps for that many seconds then resumes
+    automatically (timed gate). Otherwise halts for manual resume.
+    ``pause_message`` is included in the log for TUI display.
+    """
+    pause_message: str = str(config.get("pause_message", "")).strip()
+    auto_resume: float = float(config.get("auto_resume_after", 0))
+    msg_suffix = f" | {pause_message}" if pause_message else ""
+
+    if auto_resume > 0:
+        auto_resume = min(auto_resume, 3600.0)  # Cap at 1 hour
+        logger.info(f"[CTRL_PAUSE] {node_id}: Timed gate — sleeping {auto_resume}s.{msg_suffix}")
+        time.sleep(auto_resume)
+        logger.info(f"[CTRL_PAUSE] {node_id}: Auto-resumed after {auto_resume}s.")
+        return DeterministicNodeResult(
+            output_payload_path=payload_path,
+            log_message=f"PAUSE {node_id}: auto-resumed after {auto_resume}s.{msg_suffix}",
+        )
+
+    logger.info(f"[CTRL_PAUSE] {node_id}: Flow paused. Awaiting manual resume.{msg_suffix}")
     return DeterministicNodeResult(
         output_payload_path=payload_path,
         should_pause=True,
-        log_message=f"PAUSE node {node_id}: flow halted. Press Resume to continue.",
+        log_message=f"PAUSE node {node_id}: flow halted. Press Resume to continue.{msg_suffix}",
+    )
+
+
+def _read_gate_state(job_id: str, gate_id: str) -> str:
+    """Read persisted gate state. Returns 'open' or 'closed'."""
+    state_file = get_datacenter_path("03_Agent_Ledgers", job_id) / "gate_states.json"
+    if state_file.exists():
+        try:
+            states = json.loads(state_file.read_text(encoding="utf-8"))
+            return str(states.get(gate_id, "open"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return "open"
+
+
+def _write_gate_state(job_id: str, gate_id: str, state: str) -> None:
+    """Persist gate state to gate_states.json."""
+    state_file = get_datacenter_path("03_Agent_Ledgers", job_id) / "gate_states.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    states: dict[str, str] = {}
+    if state_file.exists():
+        try:
+            states = json.loads(state_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    states[gate_id] = state
+    state_file.write_text(json.dumps(states, indent=2), encoding="utf-8")
+
+
+def _evaluate_predicate(
+    predicate: dict[str, Any], payload_path: str, job_id: str, config: dict[str, Any],
+) -> bool:
+    """Evaluate a single gate predicate. Returns True if condition is met."""
+    pred_type = str(predicate.get("type", "payload_exists")).strip().lower()
+    target = str(predicate.get("target", "")).strip()
+    operator = str(predicate.get("operator", "==")).strip()
+    value = str(predicate.get("value", "")).strip()
+
+    if pred_type == "payload_exists":
+        exists = bool(
+            payload_path and payload_path != "none"
+            and Path(payload_path).exists() and Path(payload_path).stat().st_size > 0
+        )
+        return exists if operator != "!=" else not exists
+
+    if pred_type == "payload_contains":
+        content = _read_payload(payload_path)
+        found = value.lower() in content.lower() if value else False
+        return found if operator != "!=" else not found
+
+    if pred_type == "artifact_exists":
+        artifact_path = get_datacenter_path(target) if target else Path("")
+        exists = artifact_path.exists()
+        return exists if operator != "!=" else not exists
+
+    if pred_type == "gate_state":
+        current_state = _read_gate_state(job_id, target or config.get("gate_id", ""))
+        if operator == "==":
+            return current_state == value
+        if operator == "!=":
+            return current_state != value
+        return current_state == value
+
+    # Unknown predicate type — default to pass
+    logger.warning(f"Unknown predicate type: {pred_type} — defaulting to True")
+    return True
+
+
+def _execute_gate_action(
+    action: str, node_id: str, payload_path: str, job_id: str, config: dict[str, Any],
+) -> DeterministicNodeResult:
+    """Execute a gate action string. Returns the appropriate result."""
+    action = action.strip().upper()
+
+    if action == "PASS":
+        return DeterministicNodeResult(
+            output_payload_path=payload_path,
+            log_message=f"GATE {node_id}: PASSED.",
+        )
+    if action == "BLOCK":
+        return DeterministicNodeResult(
+            output_payload_path=payload_path,
+            next_node=node_id,  # Re-queue self
+            log_message=f"GATE {node_id}: BLOCKED.",
+        )
+    if action.startswith("ROUTE_TO:"):
+        route_target = action.split(":", 1)[1].strip()
+        return DeterministicNodeResult(
+            output_payload_path=payload_path,
+            next_node=route_target,
+            log_message=f"GATE {node_id}: routed to {route_target}.",
+        )
+    if action.startswith("SET_GATE:"):
+        # Format: SET_GATE:gate_id=open  or  SET_GATE:gate_id=closed
+        parts = action.split(":", 1)[1].strip()
+        if "=" in parts:
+            g_id, g_state = parts.split("=", 1)
+            _write_gate_state(job_id, g_id.strip(), g_state.strip())
+            logger.info(f"[CTRL_GATE] {node_id}: SET_GATE {g_id.strip()} → {g_state.strip()}")
+        return DeterministicNodeResult(
+            output_payload_path=payload_path,
+            log_message=f"GATE {node_id}: set gate state {parts}.",
+        )
+
+    # Unknown action — pass-through
+    return DeterministicNodeResult(
+        output_payload_path=payload_path,
+        log_message=f"GATE {node_id}: unknown action '{action}' — pass-through.",
     )
 
 
@@ -234,34 +381,45 @@ def _handle_gate(
     config: dict[str, Any],
     predecessor_payloads: list[str],
 ) -> DeterministicNodeResult:
-    """CTRL_GATE — Conditional gate.
+    """CTRL_GATE — Predicate-based conditional gate (The Floating If).
 
-    The gate checks if the payload file exists and has content.
-    If empty or missing, it blocks (returns the same node as next_node
-    so the broker re-queues it). Otherwise, passes through.
+    Evaluates a configurable predicate and executes on_true or on_false actions.
+    Supports: payload_exists, payload_contains, artifact_exists, gate_state predicates.
+    Actions: PASS, BLOCK, ROUTE_TO:<node>, SET_GATE:<id>=<state>
     """
-    if not payload_path or payload_path == "none":
-        logger.info(f"[CTRL_GATE] {node_id}: No payload — gate BLOCKED.")
-        return DeterministicNodeResult(
-            output_payload_path=payload_path,
-            next_node=node_id,  # Re-queue self
-            log_message=f"GATE {node_id}: blocked — no payload.",
-        )
+    gate_id = str(config.get("gate_id", node_id)).strip()
+    initial_state = str(config.get("initial_state", "open")).strip().lower()
+    on_true = str(config.get("on_true", "PASS")).strip()
+    on_false = str(config.get("on_false", "BLOCK")).strip()
 
-    path = Path(payload_path)
-    if not path.exists() or path.stat().st_size == 0:
-        logger.info(f"[CTRL_GATE] {node_id}: Payload empty or missing — gate BLOCKED.")
-        return DeterministicNodeResult(
-            output_payload_path=payload_path,
-            next_node=node_id,
-            log_message=f"GATE {node_id}: blocked — empty payload.",
-        )
+    # Build predicate dict from config fields
+    predicate: dict[str, Any] = config.get("predicate", {})
+    if not predicate:
+        # Build from flat config fields (modal saves flat)
+        pred_type = config.get("predicate_type", "payload_exists")
+        predicate = {
+            "type": pred_type,
+            "target": config.get("predicate_target", ""),
+            "operator": config.get("predicate_operator", "=="),
+            "value": config.get("predicate_value", ""),
+        }
 
-    logger.info(f"[CTRL_GATE] {node_id}: Gate PASSED.")
-    return DeterministicNodeResult(
-        output_payload_path=payload_path,
-        log_message=f"GATE {node_id}: passed.",
+    # Check initial gate state if using gate_state awareness
+    current_gate_state = _read_gate_state(job_id, gate_id)
+    if initial_state == "closed" and current_gate_state != "open":
+        logger.info(f"[CTRL_GATE] {node_id} (gate_id={gate_id}): Initially CLOSED and not yet opened.")
+        return _execute_gate_action(on_false, node_id, payload_path, job_id, config)
+
+    # Evaluate predicate
+    result = _evaluate_predicate(predicate, payload_path, job_id, config)
+    logger.info(
+        f"[CTRL_GATE] {node_id} (gate_id={gate_id}): predicate={predicate.get('type', '?')} "
+        f"→ {'TRUE' if result else 'FALSE'} → action={'on_true' if result else 'on_false'}"
     )
+
+    if result:
+        return _execute_gate_action(on_true, node_id, payload_path, job_id, config)
+    return _execute_gate_action(on_false, node_id, payload_path, job_id, config)
 
 
 def _handle_checkpoint(
@@ -274,7 +432,11 @@ def _handle_checkpoint(
     """CTRL_CHECKPOINT — Snapshot current payload to a checkpoint file."""
     checkpoint_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_file = checkpoint_dir / f"{node_id}_checkpoint.md"
+    checkpoint_label: str = str(config.get("checkpoint_label", "")).strip()
+    if checkpoint_label:
+        checkpoint_file = checkpoint_dir / f"{node_id}_{checkpoint_label}_checkpoint.md"
+    else:
+        checkpoint_file = checkpoint_dir / f"{node_id}_checkpoint.md"
 
     if payload_path and payload_path != "none" and Path(payload_path).exists():
         shutil.copy2(payload_path, checkpoint_file)
@@ -301,10 +463,11 @@ def _handle_delay(
 ) -> DeterministicNodeResult:
     """CTRL_DELAY — Sleep for configured seconds.
 
-    Delay duration is read from ``Instruction_Override`` field (e.g., "30"
-    for 30 seconds). Defaults to 5 seconds if not specified.
+    Reads ``delay_seconds`` from config first; falls back to
+    ``Instruction_Override`` for backward compatibility. Defaults to 5.
     """
-    delay_str = str(config.get("Instruction_Override", "5")).strip()
+    delay_raw = config.get("delay_seconds") or config.get("Instruction_Override", "5")
+    delay_str = str(delay_raw).strip()
     try:
         delay_seconds = max(0.0, min(float(delay_str), 3600.0))  # Cap at 1 hour
     except ValueError:
@@ -329,11 +492,12 @@ def _handle_transform(
 ) -> DeterministicNodeResult:
     """CTRL_TRANSFORM — Apply a static text template to the payload.
 
-    The template is read from ``Instruction_Override``. The placeholder
-    ``{PAYLOAD}`` in the template is replaced with the actual payload content.
-    Output is written to a new file in the job ledger directory.
+    Reads ``template`` from config first; falls back to ``Instruction_Override``
+    for backward compatibility. The placeholder ``{PAYLOAD}`` is replaced with
+    actual payload content. Output is written to the job ledger directory.
     """
-    template = str(config.get("Instruction_Override", "{PAYLOAD}"))
+    template_raw = config.get("template") or config.get("Instruction_Override", "{PAYLOAD}")
+    template = str(template_raw)
     job_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     output_file = job_dir / f"{node_id}_transformed.md"
@@ -796,6 +960,34 @@ def _handle_conditional_route(
     )
 
 
+def _handle_payload_inject(
+    node_id: str,
+    payload_path: str,
+    job_id: str,
+    config: dict[str, Any],
+    predecessor_payloads: list[str],
+) -> DeterministicNodeResult:
+    """CTRL_PAYLOAD_INJECT — Injects static content as the new payload."""
+    inject_content: str = str(config.get("inject_content", "")).strip()
+    if not inject_content:
+        logger.warning(f"[CTRL_PAYLOAD_INJECT] {node_id}: No inject_content configured — pass-through.")
+        return DeterministicNodeResult(
+            output_payload_path=payload_path,
+            log_message=f"PAYLOAD_INJECT {node_id}: no content — pass-through.",
+        )
+
+    job_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    output_file = job_dir / f"{node_id}_injected.md"
+    output_file.write_text(inject_content, encoding="utf-8")
+
+    logger.info(f"[CTRL_PAYLOAD_INJECT] {node_id}: Injected {len(inject_content)} chars → {output_file}")
+    return DeterministicNodeResult(
+        output_payload_path=str(output_file),
+        log_message=f"PAYLOAD_INJECT {node_id}: {len(inject_content)} chars injected.",
+    )
+
+
 # ── Handler Registry ─────────────────────────────────────────────────────────
 
 # Type alias for handler functions
@@ -816,4 +1008,6 @@ _NODE_HANDLERS: dict[DeterministicNodeType, _HandlerFn] = {
     DeterministicNodeType.FILTER: _handle_filter,
     DeterministicNodeType.CLEANUP: _handle_cleanup,
     DeterministicNodeType.CONDITIONAL_ROUTE: _handle_conditional_route,
+    DeterministicNodeType.END: _handle_end,
+    DeterministicNodeType.PAYLOAD_INJECT: _handle_payload_inject,
 }

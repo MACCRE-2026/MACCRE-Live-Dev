@@ -40,16 +40,17 @@ logger = logging.getLogger(__name__)
 
 class FlowStep:
     """A single step in a Linear Flow, pointing to a MacroNode."""
-    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger", custom_instructions: str = "", agent_tools_overrides: dict[str, str] | None = None) -> None:
+    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger", custom_instructions: str = "", agent_tools_overrides: dict[str, str] | None = None, config: dict[str, Any] | None = None) -> None:
         self.macronode_name = macronode_name
         self.agent_mapping = agent_mapping or {}
         self.payload_mode = payload_mode
         self.custom_instructions = custom_instructions
         self.agent_tools_overrides = agent_tools_overrides or {}
+        self.config: dict[str, Any] = config or {}
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON persistence in flow_history."""
-        return {"macronode_name": self.macronode_name, "agent_mapping": self.agent_mapping, "payload_mode": self.payload_mode, "custom_instructions": self.custom_instructions, "agent_tools_overrides": self.agent_tools_overrides}
+        return {"macronode_name": self.macronode_name, "agent_mapping": self.agent_mapping, "payload_mode": self.payload_mode, "custom_instructions": self.custom_instructions, "agent_tools_overrides": self.agent_tools_overrides, "config": self.config}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FlowStep":
@@ -59,7 +60,8 @@ class FlowStep:
             agent_mapping=d.get("agent_mapping", {}),
             payload_mode=d.get("payload_mode", "Unified Ledger"),
             custom_instructions=d.get("custom_instructions", ""),
-            agent_tools_overrides=d.get("agent_tools_overrides", {})
+            agent_tools_overrides=d.get("agent_tools_overrides", {}),
+            config=d.get("config", {})
         )
 
 
@@ -682,6 +684,16 @@ class FlowRunner:
                 # Invalidate any cached topologies in the worker so it reads the new topology.csv
                 if worker.topology:
                     worker.topology.flush_cache()
+
+                # 5b. Inject FlowStep.config as topology overlay for CTRL_ nodes
+                step_config = getattr(step, "config", {})
+                if step_config and worker.topology:
+                    for row_dict in topo_rows:
+                        raw_node_id = str(row_dict.get("Node_ID", ""))
+                        if raw_node_id.startswith("CTRL_"):
+                            suffixed_id = f"{raw_node_id}_S{idx}"
+                            worker.topology.merge_config_overlay(suffixed_id, step_config)
+                            logger.info(f"[FLOW_ENGINE] Injected step config overlay for {suffixed_id}")
                 
                 start_time = time.time()
                 timeout_seconds = 3600

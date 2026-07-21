@@ -117,12 +117,14 @@ class FlowDictBuffer:
         source: str,
         sink: str,
         targets: list[str] | None = None,
+        parent_tether: str = "",
     ) -> None:
         """Register a tether pair (SCATTER↔sink binding)."""
         self._tethers[tether_id] = {
             "source": source,
             "sink": sink,
             "targets": targets or [],
+            "parent_tether": parent_tether,
         }
 
     def get_tether(self, tether_id: str) -> dict[str, Any] | None:

@@ -235,7 +235,16 @@ def _build_request_body(
     tools: list[dict[str, Any]] = []
     if tool_declarations:
         tools.append({"functionDeclarations": tool_declarations})
-    if search_grounding:
+        if search_grounding:
+            # Gemini API rejects combining google_search with functionDeclarations.
+            # Function calling takes priority — it's user-configured and more specific.
+            import logging as _logging  # noqa: PLC0415
+            _logging.getLogger("maccre_core").warning(
+                "[GeminiClient] Search grounding disabled for this call — "
+                "Gemini API does not allow google_search + functionDeclarations "
+                "in the same request. Function calling takes priority."
+            )
+    elif search_grounding:
         tools.append({"googleSearch": {}})
     if tools:
         body["tools"] = tools
@@ -243,8 +252,6 @@ def _build_request_body(
     tool_config: dict[str, Any] = {}
     if disable_auto_function_calling and tool_declarations:
         tool_config["functionCallingConfig"] = {"mode": "AUTO"}
-    if search_grounding and tool_declarations:
-        tool_config["includeServerSideToolInvocations"] = True
     if tool_config:
         body["toolConfig"] = tool_config
 

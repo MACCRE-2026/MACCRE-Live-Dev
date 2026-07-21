@@ -393,6 +393,7 @@ class LocalMessageBroker(MessageBroker):
         source_payload_path: str = "",
         max_recursion: int = 3,
         status: str = "completed",
+        flow_line_id: str = "",
     ) -> None:
         """
         Mark the current task completed and enqueue successor nodes.
@@ -400,6 +401,9 @@ class LocalMessageBroker(MessageBroker):
         ``source_payload_path`` is the *original* job payload — the user's input
         document.  It is propagated unchanged through every node hop so downstream
         agents always have access to the raw source alongside the previous ledger.
+
+        ``flow_line_id`` tracks scatter fan-out lineage so downstream nodes can
+        identify which branch of a parallel scatter they belong to.
 
         Special targets:
           MANUAL  — pauses the task in 'awaiting_orders'; the GUI calls
@@ -482,13 +486,15 @@ class LocalMessageBroker(MessageBroker):
                     # ── First arrival or re-queue after completion ────────────────────
                     conn.execute(
                         "INSERT INTO task_queue "
-                        "(job_id, payload_path, source_payload_path, current_node, loop_iteration_count) "
-                        "VALUES (?, ?, ?, ?, 0) "
+                        "(job_id, payload_path, source_payload_path, current_node, "
+                        "loop_iteration_count, flow_line_id) "
+                        "VALUES (?, ?, ?, ?, 0, ?) "
                         "ON CONFLICT(job_id, current_node) DO UPDATE SET "
                         "lock_status='open', "
                         "payload_path=excluded.payload_path, "
+                        "flow_line_id=excluded.flow_line_id, "
                         "loop_iteration_count=task_queue.loop_iteration_count + 1",
-                        (job_id, new_payload_path, source_payload_path, node),
+                        (job_id, new_payload_path, source_payload_path, node, flow_line_id),
                     )
         conn.commit()
 

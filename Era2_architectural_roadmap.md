@@ -98,6 +98,14 @@ We will need to have a new DET_CHAT node. This node will be multi-function and u
 - MacroNode inner topology expansion, double-click → NodeConfig
 - Dual MacroNode save buttons (configured vs. template) with naming modal
 
+### 4.75.6 Post-TUI Refactor CTRL_ Node Completion
+- **Registry Hygiene:** Fix CTRL_CONDITIONAL_ROUTE status (`ComingSoon` → `active`), fix CTRL_REVIEW handler reference, formalize phantom nodes (CTRL_END, CTRL_PAYLOAD_INJECT) into registry with handlers
+- **Configure Node Modal Completion:** Refactor compose/save into helpers; add ~20 new config fields across 13 node types achieving 16/16 node coverage. Key additions: CTRL_GATE predicate fields, CTRL_TRANSFORM template textarea, CTRL_RECURSION max/target, CTRL_PAUSE message, CTRL_PAYLOAD_INJECT content editor
+- **Handler Upgrades:** Enhance `_handle_pause` (pause_message, auto_resume_after), `_handle_checkpoint` (checkpoint_label), and overhaul `_handle_gate` into a predicate-based "Floating If" with gate_id, initial_state, predicate evaluation, on_true/on_false actions, and inter-gate `SET_GATE` coordination via persisted gate state
+- **Tethering Expansion:** Extend auto-tethering in MacroNode Workshop to support SCATTER↔CONCAT and SCATTER↔BRANCH pairing; add nested tether hierarchy tracking with `parent_tether` in FlowDictBuffer
+- **`flow_line_id` Wiring:** Fix swarm_worker to handle `det_result.next_nodes` (plural) for scatter fan-out; propagate `flow_line_id` through `broker.route_task()`; assign dot-delimited flow_line_ids (`main.tether_a.0`) during scatter execution
+
+
 ---
 
 ## Phase 5: Multimodal Ingestion & High-Cost Authorizations (The Horizon Goal)
@@ -145,3 +153,73 @@ We will need to have a new DET_CHAT node. This node will be multi-function and u
 - Paused-session live injection (clickable pointers between nodes)
 - Red "✕" node removal while paused or pre-launch
 - Topology diff view and versioning (undo/redo)
+
+### 6.7 CTRL_GATE Advanced Predicates (Deferred from Phase 4.75.6)
+- **Multi-predicate arrays:** Support `predicates[]` array on CTRL_GATE with `predicate_logic: all|any` combinator. Requires dynamic list widget in NodeConfigModal for add/remove predicate rows.
+- **Advanced predicate types:**
+  - `flow_state` — evaluate overall flow execution state (e.g., check if a specific upstream node has completed)
+  - `counter_threshold` — compare an internal counter against a configurable threshold
+  - `expression` — evaluate arbitrary Python expressions against flow context variables
+- **`SCATTER_TO` gate action:** When a gate evaluates to true, scatter the payload to multiple downstream targets (combines gate logic with SCATTER fan-out in a single node)
+
+### 6.8 Flow Stage Editor (Deferred from Phase 4.75.7)
+- **Flow Stage model:** Topology represented as ordered list of horizontal stages. Nodes on the same stage execute in parallel; the flow waits for all to complete before advancing to the next stage.
+- **Stage operations:** Select a stage → add/remove nodes (up to `MAX_SCATTER_AGENTS` per stage). Visual reordering on add.
+- **Node swap/replace:** Select a node → add another node to swap into its position.
+- **Wiring:** Adding nodes downstream auto-configures `Wait_For` and `Next_Node` connections between stages.
+
+### 6.9 Animated Flow Wires (Deferred from Phase 4.75.7)
+- **Wire types:** Dashed lines for inactive flow, solid for active, color-coded by flow type (scatter=orange, normal=cyan, gate=yellow, review=red)
+- **Marching-ants animation:** 4-segment dashed pattern that progresses along the wire path like a progress bar. Wires that bend and snake to their destination.
+- **Implementation:** Custom Rich `Renderable` or `Strip`-based rendering for Unicode box-drawing wire characters with state-driven styling.
+
+### 6.10 Center-Justified Flow Tree (Deferred from Phase 4.75.7)
+- Replace the current vertical `Tree` widget (left-aligned, indented) with a center-justified DAG layout.
+- Custom widget (not Textual Tree) — a `Static` or Canvas-style widget rendering Rich Text blocks with calculated horizontal positions.
+- Center-justification based on the widest stage. Responsive to pane width changes.
+- Scatter fan-out visually splays from parent → children → merge convergence.
+
+### 6.11 Node Swap & Removal UX (Deferred from Phase 4.75.7)
+- Select a node in the topology → highlight it with a selection border
+- Add another node → swap into the selected node's position
+- Red "✕" removal button on selected nodes (both pre-launch and while paused)
+- Topology version stack for undo/redo
+
+### 6.12 Parallel Execution Threading (Deferred from Phase 4.75.7)
+- **ThreadPoolExecutor** in `swarm_worker.py` with `max_workers=MAX_SCATTER_AGENTS` (default 8, configurable, hard cap 12)
+- Each scatter target runs in its own thread for true parallel API calls
+- SQLite WAL mode handles concurrent reads; writes serialize via WAL journal — mitigated by §6.13 WAL sharding
+- Merge node polls completion via existing `Wait_For` check
+- Rate limit guard: respect Gemini 3.x paid-tier RPM limits (~1000-2000 RPM) across all concurrent threads
+
+### 6.13 WAL Sharding by Flow Line (Deferred from Phase 4.75.7)
+- Scale SQLite write throughput by sharding `task_queue` and telemetry tables across per-flow-line database files
+- Each shard is its own WAL-mode SQLite file — eliminating write contention between parallel flow lines
+- Broker routes reads/writes by `flow_line_id` → shard DB path
+- `shard_manifest` table in main DB tracks active shards and their flow_line_id mapping
+- Shards merge back into main DB on flow completion (or remain isolated for branch analysis)
+- `flow_vector` column (planted in Phase 4.75.7) serves as the partition key for shard assignment
+- Telemetry scaling metadata tracks per-shard write ops, task counts, and merge status
+
+---
+
+## Phase 7: Telemetric Memory Simulation
+*Objective: Leverage the `flow_vector` telemetry schema and session ledger artifacts to enable time-travel replay, agent perspective tracing, and counterfactual simulation through completed sessions.*
+
+### 7.1 Time-Travel Replay
+- **Branch isolation:** Filter `flow_vector` by prefix to extract a single scatter branch's complete execution history
+- **Timeline reconstruction:** Order by `created_at` timestamps to replay the exact sequence of events across any branch
+- **State snapshots:** Each task row captures `payload_path` at entry and exit — providing payload state at every node boundary
+- **TUI integration:** Scrubber/timeline widget to step through a completed session node-by-node
+
+### 7.2 Agent Perspective Simulation
+- **Agent trace:** Filter `flow_vector` entries containing a specific agent name → reconstruct every node that agent touched, in chronological order
+- **Cross-branch correlation:** If the same agent appears in multiple scatter branches, correlate its inputs/outputs across branches to study behavioral consistency
+- **"Fly on the wall" mode:** Feed an observer agent the complete telemetry trace of a target agent's journey — the observer absorbs the decision context, payload evolution, and outcome without having been present. A telemetric memory that can be injected as grounding context into any future agent.
+
+### 7.3 Counterfactual Simulation
+- **Path replay:** Send a **different** agent through a completed agent's exact routing path
+- Replay the exact same payload sequence and node routing that Agent_A experienced, but route it through Agent_B (different model, different system prompt, different tools)
+- Compare outputs at each node to study how different agent configurations would have handled the same flow
+- Uses `flow_vector` to reconstruct exact routing and ledger artifacts to replay exact payloads
+- **Diff view:** Side-by-side comparison of original agent output vs. counterfactual agent output at each node

@@ -90,12 +90,6 @@
     "started": "2026-07-02T04:06:58.472366"
   },
   {
-    "pid": 11520,
-    "project": "CCC_TEST",
-    "db_path": "B:\\EXO_GANS\\__DATACENTER\\CCC_TEST\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
-    "started": "2026-07-02T04:26:49.705458"
-  },
-  {
     "pid": 8940,
     "project": "",
     "db_path": "B:\\EXO_GANS\\__DATACENTER\\02_Dynamic_Context\\session_live_session_agent_ledgers.db",
@@ -226,11 +220,5 @@
     "project": "GLOBAL",
     "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
     "started": "2026-07-13T22:00:03.203521"
-  },
-  {
-    "pid": 11636,
-    "project": "GLOBAL",
-    "db_path": "B:\\EXO_GANS\\__DATACENTER\\GLOBAL\\02_Dynamic_Context\\nexus_memory.db",
-    "started": "2026-07-14T00:15:34.176569"
   }
 ]

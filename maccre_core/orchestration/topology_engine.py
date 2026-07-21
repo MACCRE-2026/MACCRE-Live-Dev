@@ -258,6 +258,26 @@ class TopologyEngine(TopologyProvider):
             raise ValueError(f"CRITICAL: Node '{node_id}' missing from local Control Plane.")
         return topology[node_id]
 
+    def merge_config_overlay(self, node_id: str, overlay: Dict[str, Any]) -> None:
+        """Merge a config overlay dict into the cached topology graph for a node.
+
+        This allows FlowStep.config fields (e.g. scatter_targets, tether_id,
+        gate predicates) to be injected at runtime without modifying topology.csv.
+        The overlay is merged into the cached graph — subsequent ``get_node_config``
+        calls will return the merged result.
+
+        Args:
+            node_id: The node to overlay.
+            overlay: Dict of config fields to merge.
+        """
+        topology = self.get_topology()
+        if node_id in topology:
+            topology[node_id].update(overlay)
+        else:
+            # Node might not exist yet (e.g. CTRL_ nodes added via TUI)
+            topology[node_id] = dict(overlay)
+        self._cached_graph = topology
+
     def validate(self) -> "ValidationReport":
         """Pre-flight validation of the loaded topology graph.
 

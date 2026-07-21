@@ -622,14 +622,50 @@ class UniversalSwarmWorker:
                     dual_err.close()
                     return True
 
-                next_node = det_result.next_node or str(node_config.get("Next_Node", "END"))
-                self.broker.route_task(
-                    row_id=row_id,
-                    job_id=job_id,
-                    next_node_str=next_node,
-                    new_payload_path=det_result.output_payload_path,
-                    source_payload_path=source_payload_path,
-                )
+                # ── Multi-target fan-out (SCATTER / CONDITIONAL_ROUTE) ────────
+                if det_result.next_nodes:
+                    current_flow_line = str(task.get("flow_line_id", ""))
+                    config = node_config or {}
+                    tether_id = str(config.get("tether_id", "scatter"))
+                    for idx, target_node in enumerate(det_result.next_nodes):
+                        flow_line_id = (
+                            f"{current_flow_line}.{tether_id}.{idx}"
+                            if current_flow_line
+                            else f"{tether_id}.{idx}"
+                        )
+                        self.broker.route_task(
+                            row_id=row_id,
+                            job_id=job_id,
+                            next_node_str=target_node,
+                            new_payload_path=det_result.output_payload_path,
+                            source_payload_path=source_payload_path,
+                            flow_line_id=flow_line_id,
+                        )
+                    logger.info(
+                        "[%s] DET fan-out: %d targets on tether=%s",
+                        AGENT_ID, len(det_result.next_nodes), tether_id,
+                    )
+                elif det_result.next_node:
+                    # Single target override (existing behavior)
+                    self.broker.route_task(
+                        row_id=row_id,
+                        job_id=job_id,
+                        next_node_str=det_result.next_node,
+                        new_payload_path=det_result.output_payload_path,
+                        source_payload_path=source_payload_path,
+                        flow_line_id=str(task.get("flow_line_id", "")),
+                    )
+                else:
+                    # Default topology routing
+                    next_node = str(node_config.get("Next_Node", "END"))
+                    self.broker.route_task(
+                        row_id=row_id,
+                        job_id=job_id,
+                        next_node_str=next_node,
+                        new_payload_path=det_result.output_payload_path,
+                        source_payload_path=source_payload_path,
+                        flow_line_id=str(task.get("flow_line_id", "")),
+                    )
                 sys.stdout = orig_stdout
                 sys.stderr = orig_stderr
                 dual_out.close()
@@ -1582,6 +1618,7 @@ All file paths must strictly resolve to these five silos:
                 actual_cost=task_cost,
                 source_payload_path=source_payload_path,
                 max_recursion=max_rec,
+                flow_line_id=str(task.get("flow_line_id", "")),
             )
             
             # Update the session with the live ledger
@@ -1618,6 +1655,7 @@ All file paths must strictly resolve to these five silos:
                 actual_cost=0.0,
                 source_payload_path=source_payload_path,
                 status="failed",
+                flow_line_id=str(task.get("flow_line_id", "")),
             )
         finally:
             sys.stdout = orig_stdout

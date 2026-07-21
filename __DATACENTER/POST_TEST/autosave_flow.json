@@ -1,9 +1,10 @@
 [
   {
-    "macronode_name": "OSINT_Research_x3",
+    "macronode_name": "Writer_Pipe-Blind",
     "agent_mapping": {},
     "payload_mode": "Unified Ledger",
     "custom_instructions": "",
-    "agent_tools_overrides": {}
+    "agent_tools_overrides": {},
+    "config": {}
   }
 ]

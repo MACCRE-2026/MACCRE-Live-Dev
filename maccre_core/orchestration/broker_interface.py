@@ -50,6 +50,7 @@ class MessageBroker(abc.ABC):
         source_payload_path: str = "",
         max_recursion: int = 3,
         status: str = "completed",
+        flow_line_id: str = "",
     ) -> None:
         """Mark a task completed and enqueue successor node(s).
 
@@ -61,6 +62,7 @@ class MessageBroker(abc.ABC):
             actual_cost: API cost incurred for this node execution.
             source_payload_path: Original user payload path (propagated unchanged).
             max_recursion: Maximum allowed visits to the same node before FAILED routing.
+            flow_line_id: Flow line identifier for scatter fan-out lineage tracking.
         """
 
     @abc.abstractmethod

@@ -53,6 +53,15 @@ class TopologyProvider(abc.ABC):
         """Invalidate any cached topology data, forcing a re-read on next access."""
 
     @abc.abstractmethod
+    def merge_config_overlay(self, node_id: str, overlay: dict[str, Any]) -> None:
+        """Merge a runtime config overlay into the cached topology for a node.
+
+        Args:
+            node_id: The ``Node_ID`` to overlay.
+            overlay: Dict of config fields to merge into the node's config.
+        """
+
+    @abc.abstractmethod
     def validate(self) -> Any:
         """Validate the topology for structural errors.
 

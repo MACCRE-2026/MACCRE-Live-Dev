@@ -276,12 +276,26 @@ class MacroNodeWorkshop(Vertical):
 
             elif event.node_id.startswith("CTRL_CONCAT"):
                 step["config"]["delimiter"] = "\n---\n"
+                if self._pending_scatters:
+                    tether_id = self._pending_scatters.pop()
+                    step["tether_id"] = tether_id
+                    step["config"]["tether_id"] = tether_id
+                    logger.info("[Workshop] CTRL_CONCAT auto-tethered to %s", tether_id)
+                else:
+                    logger.warning("[Workshop] CTRL_CONCAT added with no pending SCATTER to tether")
 
             elif event.node_id.startswith("CTRL_BRANCH"):
                 step["config"].update({
                     "keyword_map": {},
                     "default_target": "END",
                 })
+                if self._pending_scatters:
+                    tether_id = self._pending_scatters.pop()
+                    step["tether_id"] = tether_id
+                    step["config"]["tether_id"] = tether_id
+                    logger.info("[Workshop] CTRL_BRANCH auto-tethered to %s", tether_id)
+                else:
+                    logger.warning("[Workshop] CTRL_BRANCH added with no pending SCATTER to tether")
 
             elif event.node_id.startswith("CTRL_CONDITIONAL_ROUTE"):
                 step["config"].update({

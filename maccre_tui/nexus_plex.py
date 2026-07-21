@@ -1595,10 +1595,19 @@ class AgentBuilderPanel(Vertical):
 class CreatePayloadModal(ModalScreen[dict]):
     """Modal for creating a payload (text + files) before launching a flow."""
 
-    def __init__(self, existing_text: str = "", existing_files: str = "", **kwargs) -> None:
+    def __init__(
+        self,
+        existing_text: str = "",
+        existing_files: str = "",
+        text_enabled: bool = True,
+        file_enabled: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.existing_text = existing_text
         self.existing_files = existing_files
+        self._text_enabled = text_enabled
+        self._file_enabled = file_enabled
 
     def compose(self) -> ComposeResult:
         with Container(id="payload-modal-outer"):
@@ -1606,7 +1615,7 @@ class CreatePayloadModal(ModalScreen[dict]):
 
             # Text Payload Section
             with Horizontal(classes="payload-toggle-row"):
-                yield Switch(value=True, id="sw-text-payload")
+                yield Switch(value=self._text_enabled, id="sw-text-payload")
                 yield Label("Text Payload", classes="payload-toggle-label")
             yield TextArea(self.existing_text, id="payload-text-area", language=None)
             with Horizontal(classes="payload-btn-row"):
@@ -1614,7 +1623,7 @@ class CreatePayloadModal(ModalScreen[dict]):
 
             # File Payload Section
             with Horizontal(classes="payload-toggle-row"):
-                yield Switch(value=False, id="sw-file-payload")
+                yield Switch(value=self._file_enabled, id="sw-file-payload")
                 yield Label("File Payload (comma-separated paths)", classes="payload-toggle-label")
             yield Input(value=self.existing_files, placeholder="path/to/file1.md, path/to/file2.txt", id="payload-file-input")
             with Horizontal(classes="payload-btn-row"):
@@ -2091,6 +2100,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
 
             # ── Tether config section (CTRL_ nodes only) ─────────────
             if self.node_name.startswith("CTRL_"):
+                import json as _json  # noqa: PLC0415
                 with Vertical(id="cfg-tether-config"):
                     yield Label(f"[bold]Control Node Config: {self.node_name}[/bold]", classes="category-title")
                     with Horizontal(classes="tether-field"):
@@ -2099,93 +2109,341 @@ class NodeConfigModal(ModalScreen[dict | None]):
                             value=self._node_config.get("tether_id", ""),
                             id="cfg-tether-id",
                         )
-                    if self.node_name.startswith("CTRL_SCATTER"):
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Scatter Mode:")
-                            yield Select(
-                                [("Full Copy", "full_copy"), ("Chunk Split", "chunk_split")],
-                                value=self._node_config.get("scatter_mode", "full_copy"),
-                                id="cfg-scatter-mode",
-                            )
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Targets (comma):")
-                            yield Input(
-                                value=",".join(self._node_config.get("scatter_targets", [])),
-                                id="cfg-scatter-targets",
-                            )
-                    elif self.node_name.startswith("CTRL_MERGE"):
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Merge Mode:")
-                            yield Select(
-                                [("Structured", "structured"), ("Concat", "concat")],
-                                value=self._node_config.get("merge_mode", "structured"),
-                                id="cfg-merge-mode",
-                            )
-                    elif self.node_name.startswith("CTRL_BRANCH"):
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Keyword Map:")
-                            import json as _json
-                            yield TextArea(
-                                text=_json.dumps(self._node_config.get("keyword_map", {}), indent=2),
-                                id="cfg-keyword-map",
-                            )
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Default Target:")
-                            yield Input(
-                                value=self._node_config.get("default_target", "END"),
-                                id="cfg-default-target",
-                            )
-                    elif self.node_name.startswith("CTRL_FILTER"):
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Max Chars (0=no limit):")
-                            yield Input(
-                                value=str(self._node_config.get("max_chars", 0)),
-                                id="cfg-max-chars",
-                            )
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Regex Remove:")
-                            yield Input(
-                                value=self._node_config.get("regex_remove", ""),
-                                id="cfg-regex-remove",
-                            )
-                    elif self.node_name.startswith("CTRL_CONDITIONAL_ROUTE"):
-                        import json as _cjson
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Keyword Map:")
-                            yield TextArea(
-                                text=_cjson.dumps(self._node_config.get("keyword_map", {}), indent=2),
-                                id="cfg-cr-keyword-map",
-                            )
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Score Threshold:")
-                            yield Input(
-                                value=str(self._node_config.get("score_threshold", 0.7)),
-                                id="cfg-score-threshold",
-                            )
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Default Target:")
-                            yield Input(
-                                value=self._node_config.get("default_target", "END"),
-                                id="cfg-cr-default-target",
-                            )
-                        with Horizontal(classes="tether-field"):
-                            yield Label("High Target:")
-                            yield Input(
-                                value=self._node_config.get("high_target", ""),
-                                id="cfg-high-target",
-                            )
-                        with Horizontal(classes="tether-field"):
-                            yield Label("Low Target:")
-                            yield Input(
-                                value=self._node_config.get("low_target", ""),
-                                id="cfg-low-target",
-                            )
+                    # ── Per-type fields ────────────────────────────────
+                    yield from self._compose_ctrl_fields(_json)
 
             
             with Horizontal(id="payload-modal-buttons"):
                 yield Button("Cancel", variant="error", id="btn-cfg-cancel")
                 yield Button("Save", variant="success", id="btn-cfg-save")
-                
+
+    def _compose_ctrl_fields(self, _json: Any) -> ComposeResult:  # noqa: C901
+        """Yield per-type config widgets for CTRL_ nodes."""
+        cfg = self._node_config
+        nn = self.node_name
+
+        if nn.startswith("CTRL_ANCHOR"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Anchor Label:")
+                yield Input(value=cfg.get("anchor_label", ""), id="cfg-anchor-label",
+                            placeholder="Optional descriptive label")
+
+        elif nn.startswith("CTRL_END"):
+            yield Label("[dim]Terminal node \u2014 no additional configuration.[/dim]", classes="tether-field")
+
+        elif nn.startswith("CTRL_PAUSE"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Pause Message:")
+                yield Input(value=cfg.get("pause_message", ""), id="cfg-pause-message",
+                            placeholder="Displayed when flow pauses")
+            with Horizontal(classes="tether-field"):
+                yield Label("Auto-Resume (sec, 0=manual):")
+                yield Input(value=str(cfg.get("auto_resume_after", 0)), id="cfg-auto-resume")
+
+        elif nn.startswith("CTRL_DELAY"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Delay Seconds (0-3600):")
+                yield Input(
+                    value=str(cfg.get("delay_seconds", cfg.get("Instruction_Override", "5"))),
+                    id="cfg-delay-seconds",
+                )
+
+        elif nn.startswith("CTRL_CHECKPOINT"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Checkpoint Label:")
+                yield Input(value=cfg.get("checkpoint_label", ""), id="cfg-checkpoint-label",
+                            placeholder="Appended to filename")
+
+        elif nn.startswith("CTRL_RECURSION"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Max Recursion:")
+                yield Input(value=str(cfg.get("Max_Recursion", 3)), id="cfg-max-recursion")
+            with Horizontal(classes="tether-field"):
+                yield Label("Loop Target Node:")
+                yield Input(
+                    value=cfg.get("loop_target", cfg.get("Instruction_Override", "")),
+                    id="cfg-loop-target",
+                    placeholder="Node ID to loop back to",
+                )
+
+        elif nn.startswith("CTRL_TRANSFORM"):
+            yield Label("Template (use {PAYLOAD} for payload insertion):", classes="tether-field")
+            yield TextArea(
+                text=cfg.get("template", cfg.get("Instruction_Override", "{PAYLOAD}")),
+                id="cfg-template",
+            )
+
+        elif nn.startswith("CTRL_SCATTER"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Scatter Mode:")
+                yield Select(
+                    [("Full Copy", "full_copy"), ("Chunk Split", "chunk_split")],
+                    value=cfg.get("scatter_mode", "full_copy"),
+                    id="cfg-scatter-mode",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Targets (comma):")
+                yield Input(
+                    value=",".join(cfg.get("scatter_targets", [])),
+                    id="cfg-scatter-targets",
+                )
+
+        elif nn.startswith("CTRL_MERGE"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Merge Mode:")
+                yield Select(
+                    [("Structured", "structured"), ("Concat", "concat")],
+                    value=cfg.get("merge_mode", "structured"),
+                    id="cfg-merge-mode",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Merge Delimiter:")
+                yield Input(
+                    value=cfg.get("merge_delimiter", "\\n---\\n"),
+                    id="cfg-merge-delimiter",
+                )
+
+        elif nn.startswith("CTRL_CONCAT"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Concat Delimiter:")
+                yield Input(
+                    value=cfg.get("concat_delimiter", "\\n"),
+                    id="cfg-concat-delimiter",
+                )
+
+        elif nn.startswith("CTRL_BRANCH"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Keyword Map (JSON):")
+                yield TextArea(
+                    text=_json.dumps(cfg.get("keyword_map", {}), indent=2),
+                    id="cfg-keyword-map",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Default Target:")
+                yield Input(value=cfg.get("default_target", "END"), id="cfg-default-target")
+
+        elif nn.startswith("CTRL_FILTER"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Strip Sections (comma):")
+                yield Input(
+                    value=",".join(cfg.get("strip_sections", [])),
+                    id="cfg-strip-sections",
+                    placeholder="Header texts to remove",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Max Chars (0=no limit):")
+                yield Input(value=str(cfg.get("max_chars", 0)), id="cfg-max-chars")
+            with Horizontal(classes="tether-field"):
+                yield Label("Regex Remove:")
+                yield Input(value=cfg.get("regex_remove", ""), id="cfg-regex-remove")
+
+        elif nn.startswith("CTRL_CLEANUP"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Glob Patterns (comma):")
+                yield Input(
+                    value=",".join(cfg.get("glob_patterns", ["*.tmp"])),
+                    id="cfg-glob-patterns",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Cleanup Subdir:")
+                yield Input(value=cfg.get("cleanup_dir", ""), id="cfg-cleanup-dir",
+                            placeholder="Relative to job ledger")
+
+        elif nn.startswith("CTRL_CONDITIONAL_ROUTE"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Keyword Map (JSON):")
+                yield TextArea(
+                    text=_json.dumps(cfg.get("keyword_map", {}), indent=2),
+                    id="cfg-cr-keyword-map",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Score Threshold:")
+                yield Input(value=str(cfg.get("score_threshold", 0.7)), id="cfg-score-threshold")
+            with Horizontal(classes="tether-field"):
+                yield Label("Default Target:")
+                yield Input(value=cfg.get("default_target", "END"), id="cfg-cr-default-target")
+            with Horizontal(classes="tether-field"):
+                yield Label("High Target:")
+                yield Input(value=cfg.get("high_target", ""), id="cfg-high-target")
+            with Horizontal(classes="tether-field"):
+                yield Label("Low Target:")
+                yield Input(value=cfg.get("low_target", ""), id="cfg-low-target")
+            with Horizontal(classes="tether-field"):
+                yield Label("Available Targets (comma):")
+                yield Input(
+                    value=",".join(cfg.get("available_targets", [])),
+                    id="cfg-available-targets",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Fuzzy Max Distance:")
+                yield Input(value=str(cfg.get("fuzzy_max_distance", 3)), id="cfg-fuzzy-max-dist")
+
+        elif nn.startswith("CTRL_PAYLOAD_INJECT"):
+            yield Label("Inject Content (replaces payload):", classes="tether-field")
+            yield TextArea(text=cfg.get("inject_content", ""), id="cfg-inject-content")
+
+        elif nn.startswith("CTRL_GATE"):
+            with Horizontal(classes="tether-field"):
+                yield Label("Gate ID:")
+                yield Input(value=cfg.get("gate_id", ""), id="cfg-gate-id",
+                            placeholder="Unique gate identifier")
+            with Horizontal(classes="tether-field"):
+                yield Label("Initial State:")
+                yield Select(
+                    [("Open", "open"), ("Closed", "closed")],
+                    value=cfg.get("initial_state", "open"),
+                    id="cfg-initial-state",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Predicate Type:")
+                yield Select(
+                    [("Payload Exists", "payload_exists"), ("Payload Contains", "payload_contains"),
+                     ("Artifact Exists", "artifact_exists"), ("Gate State", "gate_state")],
+                    value=cfg.get("predicate_type", "payload_exists"),
+                    id="cfg-predicate-type",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Predicate Target:")
+                yield Input(value=cfg.get("predicate_target", ""), id="cfg-predicate-target",
+                            placeholder="Gate ID, file path, etc.")
+            with Horizontal(classes="tether-field"):
+                yield Label("Operator:")
+                yield Select(
+                    [("== (equals)", "=="), ("!= (not equals)", "!=")],
+                    value=cfg.get("predicate_operator", "=="),
+                    id="cfg-predicate-operator",
+                )
+            with Horizontal(classes="tether-field"):
+                yield Label("Predicate Value:")
+                yield Input(value=cfg.get("predicate_value", ""), id="cfg-predicate-value",
+                            placeholder="Expected value / keyword")
+            with Horizontal(classes="tether-field"):
+                yield Label("On True Action:")
+                yield Input(value=cfg.get("on_true", "PASS"), id="cfg-on-true",
+                            placeholder="PASS, BLOCK, ROUTE_TO:<node>, SET_GATE:<id>=<state>")
+            with Horizontal(classes="tether-field"):
+                yield Label("On False Action:")
+                yield Input(value=cfg.get("on_false", "BLOCK"), id="cfg-on-false",
+                            placeholder="PASS, BLOCK, ROUTE_TO:<node>, SET_GATE:<id>=<state>")
+
+    def _collect_ctrl_config(self) -> dict[str, Any]:  # noqa: C901
+        """Read all CTRL_ config widget values and return a merged config dict."""
+        cfg: dict[str, Any] = dict(self._node_config)
+        nn = self.node_name
+
+        try:
+            cfg["tether_id"] = self.query_one("#cfg-tether-id", Input).value.strip()
+        except Exception:  # noqa: BLE001
+            pass
+
+        def _inp(wid: str, default: str = "") -> str:
+            try:
+                return self.query_one(f"#{wid}", Input).value.strip()
+            except Exception:  # noqa: BLE001
+                return default
+
+        def _sel(wid: str, default: str = "") -> str:
+            try:
+                return str(self.query_one(f"#{wid}", Select).value)
+            except Exception:  # noqa: BLE001
+                return default
+
+        def _ta(wid: str, default: str = "") -> str:
+            try:
+                return self.query_one(f"#{wid}", TextArea).text.strip()
+            except Exception:  # noqa: BLE001
+                return default
+
+        if nn.startswith("CTRL_ANCHOR"):
+            cfg["anchor_label"] = _inp("cfg-anchor-label")
+        elif nn.startswith("CTRL_PAUSE"):
+            cfg["pause_message"] = _inp("cfg-pause-message")
+            val = _inp("cfg-auto-resume", "0")
+            cfg["auto_resume_after"] = int(val) if val.isdigit() else 0
+        elif nn.startswith("CTRL_DELAY"):
+            val = _inp("cfg-delay-seconds", "5")
+            try:
+                cfg["delay_seconds"] = float(val)
+            except ValueError:
+                cfg["delay_seconds"] = 5.0
+            cfg["Instruction_Override"] = val
+        elif nn.startswith("CTRL_CHECKPOINT"):
+            cfg["checkpoint_label"] = _inp("cfg-checkpoint-label")
+        elif nn.startswith("CTRL_RECURSION"):
+            mr = _inp("cfg-max-recursion", "3")
+            cfg["Max_Recursion"] = int(mr) if mr.isdigit() else 3
+            lt = _inp("cfg-loop-target")
+            cfg["loop_target"] = lt
+            cfg["Instruction_Override"] = lt
+        elif nn.startswith("CTRL_TRANSFORM"):
+            tmpl = _ta("cfg-template", "{PAYLOAD}")
+            cfg["template"] = tmpl
+            cfg["Instruction_Override"] = tmpl
+        elif nn.startswith("CTRL_SCATTER"):
+            cfg["scatter_mode"] = _sel("cfg-scatter-mode", "full_copy")
+            t_str = _inp("cfg-scatter-targets")
+            cfg["scatter_targets"] = [t.strip() for t in t_str.split(",") if t.strip()]
+        elif nn.startswith("CTRL_MERGE"):
+            cfg["merge_mode"] = _sel("cfg-merge-mode", "structured")
+            cfg["merge_delimiter"] = _inp("cfg-merge-delimiter", "\\n---\\n")
+        elif nn.startswith("CTRL_CONCAT"):
+            cfg["concat_delimiter"] = _inp("cfg-concat-delimiter", "\\n")
+        elif nn.startswith("CTRL_BRANCH"):
+            import json as _json  # noqa: PLC0415
+            km_text = _ta("cfg-keyword-map")
+            try:
+                cfg["keyword_map"] = _json.loads(km_text) if km_text else {}
+            except Exception:  # noqa: BLE001
+                cfg["keyword_map"] = {}
+            cfg["default_target"] = _inp("cfg-default-target", "END")
+        elif nn.startswith("CTRL_FILTER"):
+            ss_str = _inp("cfg-strip-sections")
+            cfg["strip_sections"] = [s.strip() for s in ss_str.split(",") if s.strip()]
+            mc = _inp("cfg-max-chars", "0")
+            cfg["max_chars"] = int(mc) if mc.isdigit() else 0
+            cfg["regex_remove"] = _inp("cfg-regex-remove")
+            cfg["filter_rules"] = {
+                "strip_sections": cfg["strip_sections"],
+                "max_chars": cfg["max_chars"],
+                "regex_remove": cfg["regex_remove"],
+            }
+        elif nn.startswith("CTRL_CLEANUP"):
+            gp_str = _inp("cfg-glob-patterns", "*.tmp")
+            cfg["glob_patterns"] = [g.strip() for g in gp_str.split(",") if g.strip()]
+            cfg["cleanup_dir"] = _inp("cfg-cleanup-dir")
+        elif nn.startswith("CTRL_CONDITIONAL_ROUTE"):
+            import json as _cjson  # noqa: PLC0415
+            km = _ta("cfg-cr-keyword-map")
+            try:
+                cfg["keyword_map"] = _cjson.loads(km) if km else {}
+            except Exception:  # noqa: BLE001
+                cfg["keyword_map"] = {}
+            st = _inp("cfg-score-threshold", "0.7")
+            try:
+                cfg["score_threshold"] = float(st)
+            except ValueError:
+                cfg["score_threshold"] = 0.7
+            cfg["default_target"] = _inp("cfg-cr-default-target", "END")
+            cfg["high_target"] = _inp("cfg-high-target")
+            cfg["low_target"] = _inp("cfg-low-target")
+            at_str = _inp("cfg-available-targets")
+            cfg["available_targets"] = [t.strip() for t in at_str.split(",") if t.strip()]
+            fmd = _inp("cfg-fuzzy-max-dist", "3")
+            cfg["fuzzy_max_distance"] = int(fmd) if fmd.isdigit() else 3
+        elif nn.startswith("CTRL_PAYLOAD_INJECT"):
+            cfg["inject_content"] = _ta("cfg-inject-content")
+        elif nn.startswith("CTRL_GATE"):
+            cfg["gate_id"] = _inp("cfg-gate-id")
+            cfg["initial_state"] = _sel("cfg-initial-state", "open")
+            cfg["predicate_type"] = _sel("cfg-predicate-type", "payload_exists")
+            cfg["predicate_target"] = _inp("cfg-predicate-target")
+            cfg["predicate_operator"] = _sel("cfg-predicate-operator", "==")
+            cfg["predicate_value"] = _inp("cfg-predicate-value")
+            cfg["on_true"] = _inp("cfg-on-true", "PASS")
+            cfg["on_false"] = _inp("cfg-on-false", "BLOCK")
+
+        return cfg
+
     @on(Select.Changed, "#cfg-agent-select")
     def on_agent_selected(self, event: Select.Changed) -> None:
         agent_name = str(event.value) if event.value and event.value != Select.BLANK else ""
@@ -2313,51 +2571,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
         # Collect tether config if this is a CTRL_ node
         tether_config: dict[str, Any] = dict(self._node_config)
         if self.node_name.startswith("CTRL_"):
-            try:
-                tether_config["tether_id"] = self.query_one("#cfg-tether-id", Input).value.strip()
-            except Exception:  # noqa: BLE001
-                pass
-            if self.node_name.startswith("CTRL_SCATTER"):
-                try:
-                    tether_config["scatter_mode"] = str(self.query_one("#cfg-scatter-mode", Select).value)
-                    targets_str = self.query_one("#cfg-scatter-targets", Input).value.strip()
-                    tether_config["scatter_targets"] = [t.strip() for t in targets_str.split(",") if t.strip()]
-                except Exception:  # noqa: BLE001
-                    pass
-            elif self.node_name.startswith("CTRL_MERGE"):
-                try:
-                    tether_config["merge_mode"] = str(self.query_one("#cfg-merge-mode", Select).value)
-                except Exception:  # noqa: BLE001
-                    pass
-            elif self.node_name.startswith("CTRL_BRANCH"):
-                try:
-                    import json as _json
-                    km_text = self.query_one("#cfg-keyword-map", TextArea).text.strip()
-                    tether_config["keyword_map"] = _json.loads(km_text) if km_text else {}
-                    tether_config["default_target"] = self.query_one("#cfg-default-target", Input).value.strip() or "END"
-                except Exception:  # noqa: BLE001
-                    pass
-            elif self.node_name.startswith("CTRL_FILTER"):
-                try:
-                    mc = self.query_one("#cfg-max-chars", Input).value.strip()
-                    tether_config["max_chars"] = int(mc) if mc else 0
-                    tether_config["regex_remove"] = self.query_one("#cfg-regex-remove", Input).value.strip()
-                except Exception:  # noqa: BLE001
-                    pass
-            elif self.node_name.startswith("CTRL_CONDITIONAL_ROUTE"):
-                try:
-                    import json as _cjson
-                    km = self.query_one("#cfg-cr-keyword-map", TextArea).text.strip()
-                    tether_config["keyword_map"] = _cjson.loads(km) if km else {}
-                    st = self.query_one("#cfg-score-threshold", Input).value.strip()
-                    tether_config["score_threshold"] = float(st) if st else 0.7
-                    tether_config["default_target"] = (
-                        self.query_one("#cfg-cr-default-target", Input).value.strip() or "END"
-                    )
-                    tether_config["high_target"] = self.query_one("#cfg-high-target", Input).value.strip()
-                    tether_config["low_target"] = self.query_one("#cfg-low-target", Input).value.strip()
-                except Exception:  # noqa: BLE001
-                    pass
+            tether_config = self._collect_ctrl_config()
 
         self.dismiss({
             "name": new_name,
@@ -2604,24 +2818,26 @@ class NexusPlex(App[None]):
 
     def write_agent_log(self, text: str) -> None:
         import threading
-        try:
-            log = self.query_one("#flow-execution-log", RichLog)
-        except Exception:  # noqa: BLE001
-            return  # Widget not mounted — skip silently
-        if self._thread_id == threading.get_ident():
-            log.write(text)
-        else:
-            self.call_from_thread(log.write, text)
-        # Mirror to Flow Monitor Overlay if visible
-        try:
-            monitor = self.query_one(FlowMonitorOverlay)
-            if not monitor.has_class("hidden"):
-                if self._thread_id == threading.get_ident():
+
+        def _do_write() -> None:
+            """Write to both the main flow log and the monitor overlay (main-thread only)."""
+            try:
+                log = self.query_one("#flow-execution-log", RichLog)
+                log.write(text)
+            except Exception:  # noqa: BLE001
+                pass
+            # Mirror to Flow Monitor Overlay if visible
+            try:
+                monitor = self.query_one(FlowMonitorOverlay)
+                if not monitor.has_class("hidden"):
                     monitor.write_log(text)
-                else:
-                    self.call_from_thread(monitor.write_log, text)
-        except Exception:  # noqa: BLE001
-            pass
+            except Exception:  # noqa: BLE001
+                pass
+
+        if self._thread_id == threading.get_ident():
+            _do_write()
+        else:
+            self.call_from_thread(_do_write)
 
     @on(FlowMonitorCollapsed)
     def _handle_monitor_collapse(self) -> None:
@@ -3096,6 +3312,10 @@ class NexusPlex(App[None]):
             if result is None:
                 return
 
+            # Persist toggle state for next re-open
+            self._payload_text_enabled = result.get("text_enabled", True)
+            self._payload_file_enabled = result.get("file_enabled", False)
+
             text = result.get("text", "")
             files = result.get("files", "")
 
@@ -3115,33 +3335,59 @@ class NexusPlex(App[None]):
             if text:
                 content_parts.append(text)
             if files:
-                content_parts.append(f"\n## Attached Files\n{files}")
+                # Read actual file contents into the payload instead of just
+                # storing the path string.  Fall back to the raw path reference
+                # if the file is unreadable.
+                from pathlib import Path as _P  # noqa: PLC0415
+                for fpath in [f.strip() for f in files.replace("|", ",").split(",") if f.strip()]:
+                    fp = _P(fpath)
+                    if fp.exists() and fp.is_file():
+                        try:
+                            file_content = fp.read_text(encoding="utf-8")
+                            content_parts.append(
+                                f"\n## Source File: {fp.name}\n"
+                                f"*(from `{fpath}`)*\n\n{file_content}"
+                            )
+                            self.write_agent_log(f"[dim]  Read file: {fp.name} ({len(file_content)} chars)[/dim]")
+                        except Exception as e:  # noqa: BLE001
+                            content_parts.append(f"\n## Attached File (unreadable)\n{fpath}\nError: {e}")
+                    else:
+                        content_parts.append(f"\n## Attached File Reference\n{fpath}")
+                        self.write_agent_log(f"[yellow]  File not found, stored as reference: {fpath}[/yellow]")
 
             payload_file.write_text("\n".join(content_parts), encoding="utf-8")
             self._pending_payload_path = str(payload_file)
+            self._pending_payload_files_raw = files  # preserve raw paths for modal re-open
             self.write_agent_log(
                 f"[green]Payload set:[/green] {payload_file.name}\n"
                 f"  Text: {'✓' if text else '✗'} | Files: {'✓' if files else '✗'}"
             )
 
         ex_text = ""
-        ex_files = ""
-        if getattr(self, "_pending_payload_path", "none") != "none":
+        ex_files = getattr(self, "_pending_payload_files_raw", "")
+        ex_text_enabled: bool = getattr(self, "_payload_text_enabled", True)
+        ex_file_enabled: bool = getattr(self, "_payload_file_enabled", False)
+        if getattr(self, "_pending_payload_path", "none") != "none" and not ex_files:
             try:
-                from pathlib import Path
+                from pathlib import Path  # noqa: PLC0415
                 p = Path(self._pending_payload_path)
                 if p.exists():
                     content = p.read_text(encoding="utf-8")
-                    if "\n## Attached Files\n" in content:
-                        parts = content.split("\n## Attached Files\n", 1)
-                        ex_text = parts[0].strip()
-                        ex_files = parts[1].strip()
-                    else:
+                    # Only populate text area if text mode was active
+                    if ex_text_enabled:
                         ex_text = content.strip()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
 
-        self.push_screen(CreatePayloadModal(existing_text=ex_text, existing_files=ex_files), handle_payload)
+        self.push_screen(
+            CreatePayloadModal(
+                existing_text=ex_text,
+                existing_files=ex_files,
+                text_enabled=ex_text_enabled,
+                file_enabled=ex_file_enabled,
+            ),
+            handle_payload,
+        )
 
     @on(Button.Pressed, "#btn-vcr")
     def action_vcr_toggle(self) -> None:
@@ -3519,14 +3765,62 @@ class NexusPlex(App[None]):
     def _handle_topology_double_click(self, event: TopologyNodeDoubleClicked) -> None:
         """Open NodeConfigModal when a topology node is double-clicked."""
         nd = event.node_data
-        # Find the node in active_flow_steps to get agents and config
+        # Find the matching flow step
         node_config: dict[str, Any] = {}
-        agents: list[str] = []
+        matched_step: Any = None
         for step in self.active_flow_steps:
             if step.macronode_name == nd.node_id:
                 node_config = getattr(step, "config", {}) or nd.metadata.get("config", {})
-                agents = getattr(step, "agent_slots", [])
+                matched_step = step
                 break
+
+        # ── Extract agents using the same logic as the flow-sequence handler ──
+        agents_in_node: set[str] = set()
+        macro_def: dict[str, Any] = {}
+        try:
+            from maccre_core.macronode_registry import get_macronode_store  # noqa: PLC0415
+            store = get_macronode_store()
+            loaded_def = store.load(nd.node_id)
+            if loaded_def:
+                macro_def = loaded_def
+
+            agent_mapping = getattr(matched_step, "agent_mapping", {}) if matched_step else {}
+            for row in macro_def.get("topology_rows", []):
+                aname = str(row.get("Agent_Name", ""))
+                for slot_key, slot_val in agent_mapping.items():
+                    if aname == f"{{{slot_key}}}" or aname == slot_key:
+                        aname = slot_val
+                if aname and not aname.startswith("{") and aname.upper() != "NONE" and aname != "Select.NULL":
+                    agents_in_node.add(aname)
+
+            for slot in macro_def.get("agent_slots", []):
+                aname = slot
+                for slot_key, slot_val in agent_mapping.items():
+                    if aname == slot_key:
+                        aname = slot_val
+                if aname and not aname.startswith("{") and aname.upper() != "NONE" and aname != "Select.NULL":
+                    agents_in_node.add(aname)
+        except Exception:  # noqa: BLE001
+            try:
+                from maccre_core.agent_library import get_agent_store  # noqa: PLC0415
+                if get_agent_store("GLOBAL").get(nd.node_id):
+                    agents_in_node.add(nd.node_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+        # ── Extract baked tools ───────────────────────────────────────────────
+        baked_tools: dict[str, str] = {}
+        try:
+            tpl_cfg = macro_def.get("template_config", {})
+            slot_tools = tpl_cfg.get("slot_tools", {})
+            agent_mapping_tools = getattr(matched_step, "agent_mapping", None) or tpl_cfg.get("_agent_mapping", {})
+            for slot, agents_list in agent_mapping_tools.items():
+                for a in (agents_list if isinstance(agents_list, list) else [agents_list]):
+                    tools = slot_tools.get(f"{slot}_{a}", slot_tools.get(slot, "none"))
+                    if tools and tools != "none":
+                        baked_tools[a] = tools
+        except Exception:  # noqa: BLE001
+            pass
 
         def _apply_config(result: dict[str, Any] | None) -> None:
             if result is None:
@@ -3534,8 +3828,13 @@ class NexusPlex(App[None]):
             # Update flow step with new config
             for step in self.active_flow_steps:
                 if step.macronode_name == nd.node_id:
-                    if hasattr(step, "config"):
-                        step.config = result.get("node_config", {})
+                    step.config = result.get("node_config", {})
+                    if "payload_mode" in result:
+                        step.payload_mode = result["payload_mode"]
+                    if "custom_instructions" in result:
+                        step.custom_instructions = result["custom_instructions"]
+                    if "agent_tools_overrides" in result:
+                        step.agent_tools_overrides.update(result["agent_tools_overrides"])
                     break
             # Update flow dict buffer with overrides
             try:
@@ -3549,9 +3848,13 @@ class NexusPlex(App[None]):
         self.push_screen(
             NodeConfigModal(
                 node_name=nd.node_id,
-                agents_in_node=agents,
+                current_payload_mode=getattr(matched_step, "payload_mode", "Unified Ledger") if matched_step else "Unified Ledger",
+                current_instructions=getattr(matched_step, "custom_instructions", "") if matched_step else "",
+                agents_in_node=list(agents_in_node),
                 active_project=self.active_project,
                 node_config=node_config,
+                baked_tools=baked_tools,
+                current_agent_tools_overrides=getattr(matched_step, "agent_tools_overrides", {}) if matched_step else {},
             ),
             _apply_config,
         )
@@ -3647,9 +3950,10 @@ class NexusPlex(App[None]):
                 try:
                     from maccre_core.utils.path_resolver import get_datacenter_path as _gdp  # noqa: PLC0415
                     from maccre_core.flow_dict import FlowDictBuffer  # noqa: PLC0415
+                    import os as _os  # noqa: PLC0415
                     dict_path = _gdp("02_Dynamic_Context", job_id) / f"Flow-{job_id}.dict"
                     if dict_path.exists():
-                        os.environ["MACCRE_CUSTOM_DICT"] = str(dict_path)
+                        _os.environ["MACCRE_CUSTOM_DICT"] = str(dict_path)
                         buf = FlowDictBuffer.from_file(dict_path)
                         try:
                             workshop = self.query_one(MacroNodeWorkshop)
@@ -3919,6 +4223,8 @@ class NexusPlex(App[None]):
                     node.custom_instructions = result["custom_instructions"]
                 if "agent_tools_overrides" in result:
                     node.agent_tools_overrides.update(result["agent_tools_overrides"])
+                if "node_config" in result:
+                    node.config = result["node_config"]
                 self.write_agent_log(f"[green]Node {idx} updated.[/green]")
                 self._refresh_active_flow_sequence()
                 
@@ -3982,7 +4288,8 @@ class NexusPlex(App[None]):
             active_project=self.active_project,
             agents_in_node=list(agents_in_node),
             baked_tools=baked_tools,
-            current_agent_tools_overrides=getattr(node, "agent_tools_overrides", {})
+            current_agent_tools_overrides=getattr(node, "agent_tools_overrides", {}),
+            node_config=getattr(node, "config", {}),
         ), handle_config)
 
     @on(Button.Pressed, ".flow-del-btn")
@@ -4292,7 +4599,8 @@ class NexusPlex(App[None]):
             dict_dir.mkdir(parents=True, exist_ok=True)
             dict_path = dict_dir / f"Flow-{session_name}.dict"
             flow_dict.write_to_file(dict_path)
-            os.environ["MACCRE_CUSTOM_DICT"] = str(dict_path)
+            import os as _os2  # noqa: PLC0415
+            _os2.environ["MACCRE_CUSTOM_DICT"] = str(dict_path)
             self.write_agent_log(f"[dim]Flow dict written: {dict_path.name}[/dim]")
         except Exception as e:  # noqa: BLE001
             self.write_agent_log(f"[yellow]Flow dict write skipped: {e}[/yellow]")
@@ -4471,13 +4779,19 @@ class NexusPlex(App[None]):
     def _finish_flow(self) -> None:
         self.is_session_active = False
         
-        if getattr(self, "_readout_timer", None):
-            self._readout_timer.stop()
-            self.query_one("#flow-stage-readout", Label).update("Stage: [dim]Idle[/dim]")
+        try:
+            if getattr(self, "_readout_timer", None):
+                self._readout_timer.stop()
+                self.query_one("#flow-stage-readout", Label).update("Stage: [dim]Idle[/dim]")
+        except Exception:  # noqa: BLE001
+            pass
             
-        self.query_one("#btn-launch-flow", Button).disabled = False
-        self.query_one("#btn-stop-flow", Button).disabled = True
-        self.query_one("#btn-create-payload", Button).disabled = False
+        try:
+            self.query_one("#btn-launch-flow", Button).disabled = False
+            self.query_one("#btn-stop-flow", Button).disabled = True
+            self.query_one("#btn-create-payload", Button).disabled = False
+        except Exception:  # noqa: BLE001
+            pass
         self._set_vcr_state("idle")
         self._exit_paused_state()
         

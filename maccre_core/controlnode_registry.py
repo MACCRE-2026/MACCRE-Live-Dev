@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS controlnode_registry (
 _DEFAULT_HANDLER_MODULE = "maccre_core.orchestration.deterministic_nodes"
 
 _BUILTIN_NODES: list[dict[str, Any]] = [
-    # ── Active (14) ───────────────────────────────────────────────────────────
+    # ── Active (16) ───────────────────────────────────────────────────────────
     {
         "name": "CTRL_ANCHOR",
         "category": "Flow Control",
@@ -125,9 +125,9 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
     {
         "name": "CTRL_REVIEW",
         "category": "HITL",
-        "description": "Live swarm intercept — pauses the task in awaiting_orders for manual resume.",
+        "description": "Live swarm intercept — pauses the task via broker route_task interception for manual resume.",
         "handler_module": "maccre_core.orchestration.local_broker",
-        "handler_func": "intercept_review",
+        "handler_func": "intercept_review_via_route_task",
         "status": "active",
     },
     {
@@ -249,14 +249,30 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
             "cleanup_dir": {"type": "string", "default": ""},
         },
     },
-    # ── Coming Soon (9) ───────────────────────────────────────────────────────
+    {
+        "name": "CTRL_END",
+        "category": "Flow Control",
+        "description": "Terminal node — marks flow completion. Semantic endpoint.",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_end",
+        "status": "active",
+    },
+    {
+        "name": "CTRL_PAYLOAD_INJECT",
+        "category": "Data Flow",
+        "description": "Injects a static payload string into the flow. Content configured via modal.",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_payload_inject",
+        "status": "active",
+    },
+    # ── Coming Soon (8) ───────────────────────────────────────────────────────
     {
         "name": "CTRL_CONDITIONAL_ROUTE",
         "category": "Routing",
         "description": "Replaces implicit ROUTE_TO regex — explicit conditional routing.",
-        "handler_module": "",
-        "handler_func": "",
-        "status": "ComingSoon",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_conditional_route",
+        "status": "active",
     },
     {
         "name": "CTRL_DIALOG",
