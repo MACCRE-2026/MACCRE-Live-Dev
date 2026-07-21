@@ -2039,6 +2039,12 @@ class NodeConfigModal(ModalScreen[dict | None]):
         self.agent_profiles: dict[str, dict[str, Any]] = {}
         self._agent_overrides_dict: dict[str, dict[str, Any]] = {}
         self._node_config: dict[str, Any] = node_config or {}
+        # CTRL_SCATTER agent slotting state
+        self._scatter_agents: list[str] = list(self._node_config.get("scatter_agents", []))
+        self._scatter_agent_overrides: dict[str, dict[str, Any]] = dict(
+            self._node_config.get("scatter_agent_overrides", {})
+        )
+        self._all_roster_agents: list[str] = []
         
         if self.agents_in_node and self.active_project:
             try:
@@ -2181,12 +2187,47 @@ class NodeConfigModal(ModalScreen[dict | None]):
                     value=cfg.get("scatter_mode", "full_copy"),
                     id="cfg-scatter-mode",
                 )
+
+            # ── Scatter Agent Slots ────────────────────────────────────
+            MAX_SCATTER: int = 8
+            yield Label(
+                f"[bold]Scatter Agent Slots ({len(self._scatter_agents)}/{MAX_SCATTER})[/bold]",
+                classes="category-title",
+                id="scatter-slot-header",
+            )
+            # Load roster for the dropdown
+            try:
+                from maccre_core.agent_library import get_agent_store  # noqa: PLC0415
+                self._all_roster_agents = list(get_agent_store("GLOBAL").get_names())
+            except Exception:  # noqa: BLE001
+                self._all_roster_agents = []
             with Horizontal(classes="tether-field"):
-                yield Label("Targets (comma):")
-                yield Input(
-                    value=",".join(cfg.get("scatter_targets", [])),
-                    id="cfg-scatter-targets",
+                yield Select(
+                    [(a, a) for a in self._all_roster_agents],
+                    prompt="Select Agent to add...",
+                    id="cfg-scatter-agent-select",
                 )
+                yield Button(
+                    "+ Add Agent",
+                    id="btn-scatter-add-agent",
+                    variant="primary",
+                    disabled=len(self._scatter_agents) >= MAX_SCATTER,
+                )
+            # Render existing slotted agents
+            with Vertical(id="scatter-agent-list"):
+                for idx_a, agent_name in enumerate(self._scatter_agents):
+                    with Horizontal(classes="tether-field", id=f"scatter-row-{idx_a}"):
+                        yield Label(f"{idx_a + 1}. {agent_name}", classes="scatter-agent-label")
+                        yield Button(
+                            "⚙ Overrides",
+                            id=f"btn-scatter-ovr-{idx_a}",
+                            variant="warning",
+                        )
+                        yield Button(
+                            "✕",
+                            id=f"btn-scatter-rm-{idx_a}",
+                            variant="error",
+                        )
 
         elif nn.startswith("CTRL_MERGE"):
             with Horizontal(classes="tether-field"):
@@ -2381,8 +2422,9 @@ class NodeConfigModal(ModalScreen[dict | None]):
             cfg["Instruction_Override"] = tmpl
         elif nn.startswith("CTRL_SCATTER"):
             cfg["scatter_mode"] = _sel("cfg-scatter-mode", "full_copy")
-            t_str = _inp("cfg-scatter-targets")
-            cfg["scatter_targets"] = [t.strip() for t in t_str.split(",") if t.strip()]
+            cfg["scatter_agents"] = list(self._scatter_agents)
+            cfg["scatter_agent_overrides"] = dict(self._scatter_agent_overrides)
+            cfg["scatter_targets"] = list(self._scatter_agents)  # backwards compat
         elif nn.startswith("CTRL_MERGE"):
             cfg["merge_mode"] = _sel("cfg-merge-mode", "structured")
             cfg["merge_delimiter"] = _inp("cfg-merge-delimiter", "\\n---\\n")
@@ -2547,6 +2589,114 @@ class NodeConfigModal(ModalScreen[dict | None]):
             AgentProfileOverridesModal(agent_name=agent_name, agent_profile=current_profile),
             _on_overrides_result,
         )
+
+    # ── CTRL_SCATTER Agent Slotting Handlers ──────────────────────────────
+
+    @on(Button.Pressed, "#btn-scatter-add-agent")
+    def _scatter_add_agent(self) -> None:
+        """Add an agent to the scatter slot list."""
+        MAX_SCATTER: int = 8
+        try:
+            sel = self.query_one("#cfg-scatter-agent-select", Select)
+        except Exception:  # noqa: BLE001
+            return
+        if not sel.value or sel.value == Select.BLANK:
+            return
+        agent_name = str(sel.value)
+        if agent_name in self._scatter_agents:
+            return  # Already slotted
+        if len(self._scatter_agents) >= MAX_SCATTER:
+            return
+        self._scatter_agents.append(agent_name)
+        # Dynamically mount a new row
+        idx_a = len(self._scatter_agents) - 1
+        try:
+            container = self.query_one("#scatter-agent-list", Vertical)
+            row = Horizontal(classes="tether-field", id=f"scatter-row-{idx_a}")
+            row.mount(Label(f"{idx_a + 1}. {agent_name}", classes="scatter-agent-label"))
+            row.mount(Button("⚙ Overrides", id=f"btn-scatter-ovr-{idx_a}", variant="warning"))
+            row.mount(Button("✕", id=f"btn-scatter-rm-{idx_a}", variant="error"))
+            container.mount(row)
+        except Exception:  # noqa: BLE001
+            pass
+        # Update header counter
+        try:
+            header = self.query_one("#scatter-slot-header", Label)
+            header.update(f"[bold]Scatter Agent Slots ({len(self._scatter_agents)}/{MAX_SCATTER})[/bold]")
+        except Exception:  # noqa: BLE001
+            pass
+        # Disable add button if at max
+        if len(self._scatter_agents) >= MAX_SCATTER:
+            try:
+                self.query_one("#btn-scatter-add-agent", Button).disabled = True
+            except Exception:  # noqa: BLE001
+                pass
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle dynamic scatter agent buttons (overrides + remove)."""
+        btn_id = event.button.id or ""
+
+        # ── Scatter Overrides ─────────────────────────────────────────
+        if btn_id.startswith("btn-scatter-ovr-"):
+            idx_str = btn_id.replace("btn-scatter-ovr-", "")
+            try:
+                idx_val = int(idx_str)
+            except ValueError:
+                return
+            if idx_val >= len(self._scatter_agents):
+                return
+            agent_name = self._scatter_agents[idx_val]
+            current_profile = self._scatter_agent_overrides.get(agent_name)
+            if current_profile is None:
+                current_profile = self.agent_profiles.get(agent_name)
+
+            def _on_scatter_ovr_result(result: dict[str, Any] | None, _name: str = agent_name) -> None:
+                if result is not None:
+                    self._scatter_agent_overrides[_name] = result
+
+            self.app.push_screen(
+                AgentProfileOverridesModal(agent_name=agent_name, agent_profile=current_profile),
+                _on_scatter_ovr_result,
+            )
+            return
+
+        # ── Scatter Remove ────────────────────────────────────────────
+        if btn_id.startswith("btn-scatter-rm-"):
+            MAX_SCATTER: int = 8
+            idx_str = btn_id.replace("btn-scatter-rm-", "")
+            try:
+                idx_val = int(idx_str)
+            except ValueError:
+                return
+            if idx_val >= len(self._scatter_agents):
+                return
+            removed_name = self._scatter_agents.pop(idx_val)
+            self._scatter_agent_overrides.pop(removed_name, None)
+            # Rebuild the visual list by removing and re-mounting
+            try:
+                container = self.query_one("#scatter-agent-list", Vertical)
+                for child in list(container.children):
+                    child.remove()
+                for i, aname in enumerate(self._scatter_agents):
+                    row = Horizontal(classes="tether-field", id=f"scatter-row-{i}")
+                    row.mount(Label(f"{i + 1}. {aname}", classes="scatter-agent-label"))
+                    row.mount(Button("⚙ Overrides", id=f"btn-scatter-ovr-{i}", variant="warning"))
+                    row.mount(Button("✕", id=f"btn-scatter-rm-{i}", variant="error"))
+                    container.mount(row)
+            except Exception:  # noqa: BLE001
+                pass
+            # Update header
+            try:
+                header = self.query_one("#scatter-slot-header", Label)
+                header.update(f"[bold]Scatter Agent Slots ({len(self._scatter_agents)}/{MAX_SCATTER})[/bold]")
+            except Exception:  # noqa: BLE001
+                pass
+            # Re-enable add button
+            try:
+                self.query_one("#btn-scatter-add-agent", Button).disabled = len(self._scatter_agents) >= MAX_SCATTER
+            except Exception:  # noqa: BLE001
+                pass
+            return
 
     @on(Button.Pressed, "#btn-cfg-cancel")
     def cancel(self) -> None:
@@ -4175,6 +4325,44 @@ class NexusPlex(App[None]):
                 node_type = "control" if is_ctrl else "agent"
                 inner_steps: list[dict[str, Any]] = []
 
+                # CTRL_SCATTER with slotted agents → emit scatter tree
+                scatter_agents: list[str] = config.get("scatter_agents", [])
+                if name.upper().startswith("CTRL_SCATTER") and scatter_agents:
+                    merge_id = f"CTRL_MERGE_{i}"
+                    # Scatter entry node → fans out to agents
+                    topo_steps.append({
+                        "Node_ID": node_id,
+                        "Role": name,
+                        "Next_Node": "|".join(f"{a}_{i}" for a in scatter_agents),
+                        "Wait_For": "",
+                        "tether_id": config.get("tether_id", ""),
+                        "flow_line_id": config.get("flow_line_id", ""),
+                        "type": "macronode",
+                        "inner_steps": [],
+                        "config": config,
+                    })
+                    # Agent nodes
+                    for sa in scatter_agents:
+                        topo_steps.append({
+                            "Node_ID": f"{sa}_{i}",
+                            "Role": sa,
+                            "Next_Node": merge_id,
+                            "Wait_For": "",
+                            "type": "agent",
+                            "inner_steps": [],
+                        })
+                    # Merge node → continues to next step
+                    topo_steps.append({
+                        "Node_ID": merge_id,
+                        "Role": "CTRL_MERGE",
+                        "Next_Node": next_id,
+                        "Wait_For": ",".join(f"{a}_{i}" for a in scatter_agents),
+                        "tether_id": config.get("tether_id", ""),
+                        "type": "control",
+                        "inner_steps": [],
+                    })
+                    continue  # Skip the default append below
+
                 if macro_store and not is_ctrl:
                     try:
                         macro_data = macro_store.load(name)
@@ -4617,10 +4805,33 @@ class NexusPlex(App[None]):
         # Load topology into visualizer and start animation
         try:
             viz = self.query_one(TopologyVisualizer)
-            topo_steps = []
+            topo_steps: list[dict[str, Any]] = []
             for i, step in enumerate(self.active_flow_steps):
+                name = step.macronode_name
                 next_name = self.active_flow_steps[i + 1].macronode_name if i + 1 < len(self.active_flow_steps) else "END"
-                topo_steps.append({"Node_ID": step.macronode_name, "Next_Node": next_name, "Wait_For": ""})
+                config = getattr(step, "config", {}) or {}
+                scatter_agents: list[str] = config.get("scatter_agents", [])
+                if name.upper().startswith("CTRL_SCATTER") and scatter_agents:
+                    merge_id = f"CTRL_MERGE_{i}"
+                    topo_steps.append({
+                        "Node_ID": name, "Role": name,
+                        "Next_Node": "|".join(scatter_agents),
+                        "Wait_For": "", "type": "macronode",
+                        "tether_id": config.get("tether_id", ""),
+                    })
+                    for sa in scatter_agents:
+                        topo_steps.append({
+                            "Node_ID": sa, "Role": sa,
+                            "Next_Node": merge_id, "Wait_For": "",
+                            "type": "agent",
+                        })
+                    topo_steps.append({
+                        "Node_ID": merge_id, "Role": "CTRL_MERGE",
+                        "Next_Node": next_name, "type": "control",
+                        "Wait_For": ",".join(scatter_agents),
+                    })
+                else:
+                    topo_steps.append({"Node_ID": name, "Next_Node": next_name, "Wait_For": ""})
             viz.load_topology(topo_steps)
             viz.start_animation()
         except Exception:  # noqa: BLE001

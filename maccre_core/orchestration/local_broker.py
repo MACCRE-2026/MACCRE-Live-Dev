@@ -131,6 +131,7 @@ class LocalMessageBroker(MessageBroker):
                 actual_cost          REAL DEFAULT 0.0,
                 flow_line_id         TEXT DEFAULT '',
                 tether_id            TEXT DEFAULT '',
+                flow_vector          TEXT DEFAULT '',
                 created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(job_id, current_node)
             )
@@ -152,6 +153,7 @@ class LocalMessageBroker(MessageBroker):
             "ALTER TABLE task_queue ADD COLUMN completed_at TIMESTAMP",
             "ALTER TABLE task_queue ADD COLUMN flow_line_id TEXT DEFAULT ''",
             "ALTER TABLE task_queue ADD COLUMN tether_id TEXT DEFAULT ''",
+            "ALTER TABLE task_queue ADD COLUMN flow_vector TEXT DEFAULT ''",
         ):
             try:
                 conn.execute(_col_sql)
@@ -394,6 +396,7 @@ class LocalMessageBroker(MessageBroker):
         max_recursion: int = 3,
         status: str = "completed",
         flow_line_id: str = "",
+        flow_vector: str = "",
     ) -> None:
         """
         Mark the current task completed and enqueue successor nodes.
@@ -487,14 +490,15 @@ class LocalMessageBroker(MessageBroker):
                     conn.execute(
                         "INSERT INTO task_queue "
                         "(job_id, payload_path, source_payload_path, current_node, "
-                        "loop_iteration_count, flow_line_id) "
-                        "VALUES (?, ?, ?, ?, 0, ?) "
+                        "loop_iteration_count, flow_line_id, flow_vector) "
+                        "VALUES (?, ?, ?, ?, 0, ?, ?) "
                         "ON CONFLICT(job_id, current_node) DO UPDATE SET "
                         "lock_status='open', "
                         "payload_path=excluded.payload_path, "
                         "flow_line_id=excluded.flow_line_id, "
+                        "flow_vector=excluded.flow_vector, "
                         "loop_iteration_count=task_queue.loop_iteration_count + 1",
-                        (job_id, new_payload_path, source_payload_path, node, flow_line_id),
+                        (job_id, new_payload_path, source_payload_path, node, flow_line_id, flow_vector),
                     )
         conn.commit()
 

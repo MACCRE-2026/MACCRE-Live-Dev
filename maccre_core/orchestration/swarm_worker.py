@@ -555,6 +555,10 @@ class UniversalSwarmWorker:
         # source_payload_path: the ORIGINAL user document — never mutated by routing
         source_payload_path: str = str(task.get("source_payload_path") or payload_path)
 
+        # Build flow_vector: append current node to existing vector (Phase 4.75.7 A5)
+        _existing_vector: str = str(task.get("flow_vector", "") or "")
+        flow_vector: str = f"{_existing_vector}:{current_node}" if _existing_vector else current_node
+
         # ── Project-Scoped Job Directory ─────────────────────────────────────
         custom_ledger = os.environ.get("MACCRE_CUSTOM_LEDGER", "")
         if custom_ledger:
@@ -640,6 +644,7 @@ class UniversalSwarmWorker:
                             new_payload_path=det_result.output_payload_path,
                             source_payload_path=source_payload_path,
                             flow_line_id=flow_line_id,
+                            flow_vector=flow_vector,
                         )
                     logger.info(
                         "[%s] DET fan-out: %d targets on tether=%s",
@@ -654,6 +659,7 @@ class UniversalSwarmWorker:
                         new_payload_path=det_result.output_payload_path,
                         source_payload_path=source_payload_path,
                         flow_line_id=str(task.get("flow_line_id", "")),
+                        flow_vector=flow_vector,
                     )
                 else:
                     # Default topology routing
@@ -665,6 +671,7 @@ class UniversalSwarmWorker:
                         new_payload_path=det_result.output_payload_path,
                         source_payload_path=source_payload_path,
                         flow_line_id=str(task.get("flow_line_id", "")),
+                        flow_vector=flow_vector,
                     )
                 sys.stdout = orig_stdout
                 sys.stderr = orig_stderr
@@ -1619,6 +1626,7 @@ All file paths must strictly resolve to these five silos:
                 source_payload_path=source_payload_path,
                 max_recursion=max_rec,
                 flow_line_id=str(task.get("flow_line_id", "")),
+                flow_vector=flow_vector,
             )
             
             # Update the session with the live ledger
@@ -1656,6 +1664,7 @@ All file paths must strictly resolve to these five silos:
                 source_payload_path=source_payload_path,
                 status="failed",
                 flow_line_id=str(task.get("flow_line_id", "")),
+                flow_vector=flow_vector,
             )
         finally:
             sys.stdout = orig_stdout

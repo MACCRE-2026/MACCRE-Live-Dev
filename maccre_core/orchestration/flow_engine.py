@@ -110,8 +110,8 @@ class FlowRunner:
         # Verify fallback to GLOBAL registry if needed.
         self.global_store = get_macronode_store("GLOBAL")
 
-    def _get_macronode(self, name: str) -> dict[str, Any]:
-        """Fetch MacroNode definition from Project, fallback to GLOBAL, fallback to agent auto-wrap."""
+    def _get_macronode(self, name: str, step_config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Fetch MacroNode definition from Project, fallback to GLOBAL, fallback to agent/CTRL auto-wrap."""
         try:
             return self.macronode_store.load(name)
         except KeyError:
@@ -165,6 +165,95 @@ class FlowRunner:
         except Exception:  # noqa: BLE001
             pass
 
+        # ── CTRL_ Node Auto-Wrap ──────────────────────────────────────────────
+        # CTRL_ nodes are deterministic control-flow primitives. They don't
+        # exist in the MacroNode registry — synthesize a topology on the fly.
+        if name.upper().startswith("CTRL_"):
+            cfg = step_config or {}
+            scatter_agents: list[str] = cfg.get("scatter_agents", [])
+
+            # CTRL_SCATTER with slotted agents → full scatter→agents→merge DAG
+            if name.upper().startswith("CTRL_SCATTER") and scatter_agents:
+                agent_overrides: dict[str, dict[str, Any]] = cfg.get("scatter_agent_overrides", {})
+                scatter_mode: str = cfg.get("scatter_mode", "full_copy")
+                topo_rows: list[dict[str, Any]] = []
+
+                # 1. CTRL_SCATTER entry node → fans out to all agents
+                topo_rows.append({
+                    "Node_ID": "CTRL_SCATTER",
+                    "Agent_Name": "SYSTEM",
+                    "Model_Override": "none",
+                    "Next_Node": ",".join(scatter_agents),
+                    "Temperature": "0",
+                    "Instruction_Override": f"scatter_mode={scatter_mode}",
+                    "Wait_For": "none",
+                    "Failure_Target": "FAILED",
+                })
+
+                # 2. One row per slotted agent with profile overrides
+                for agent_name in scatter_agents:
+                    ovr = agent_overrides.get(agent_name, {})
+                    topo_rows.append({
+                        "Node_ID": agent_name,
+                        "Agent_Name": agent_name,
+                        "Model_Override": str(ovr.get("model", "")),
+                        "Next_Node": "CTRL_MERGE",
+                        "Temperature": str(ovr.get("temperature", "1.0")),
+                        "Instruction_Override": str(ovr.get("system_prompt_override", "")),
+                        "Wait_For": "none",
+                        "Failure_Target": "FAILED",
+                        "Tools_Allowed": str(ovr.get("tools_allowed", "")),
+                    })
+
+                # 3. CTRL_MERGE fan-in — waits for all agents
+                topo_rows.append({
+                    "Node_ID": "CTRL_MERGE",
+                    "Agent_Name": "SYSTEM",
+                    "Model_Override": "none",
+                    "Next_Node": "END",
+                    "Temperature": "0",
+                    "Instruction_Override": "",
+                    "Wait_For": "|".join(scatter_agents),
+                    "Failure_Target": "FAILED",
+                })
+
+                logger.info(
+                    "[FLOW_ENGINE] Auto-wrapped CTRL_SCATTER with %d agents: %s",
+                    len(scatter_agents), scatter_agents,
+                )
+                return {
+                    "name": name,
+                    "description": f"Dynamic scatter: {len(scatter_agents)} agents",
+                    "is_template": False,
+                    "agent_slots": list(scatter_agents),
+                    "topology_rows": topo_rows,
+                    "roster_rows": [],
+                    "template_type": "",
+                    "template_config": None,
+                }
+
+            # Generic CTRL_ node (PAUSE, GATE, CHECKPOINT, etc.) → single-node passthrough
+            logger.info("[FLOW_ENGINE] Auto-wrapping CTRL node '%s' as single-node topology.", name)
+            return {
+                "name": name,
+                "description": f"Auto-wrapped control node: {name}",
+                "is_template": False,
+                "agent_slots": [],
+                "topology_rows": [{
+                    "Node_ID": name,
+                    "Agent_Name": "SYSTEM",
+                    "Model_Override": "none",
+                    "Next_Node": "END",
+                    "Temperature": "0",
+                    "Instruction_Override": "",
+                    "Wait_For": "none",
+                    "Failure_Target": "FAILED",
+                }],
+                "roster_rows": [],
+                "template_type": "",
+                "template_config": None,
+            }
+
         raise KeyError(f"MacroNode '{name}' not found in project, GLOBAL, or agent roster.")
 
     # ── Phase B: Pre-Flight Validation Gate ────────────────────────────────────
@@ -197,6 +286,8 @@ class FlowRunner:
             # ── (a) MacroNode existence ───────────────────────────────────────
             if macro_name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
                 continue  # CTRL_REVIEW is a hardcoded intercept node, bypass validation
+            if macro_name.strip().upper().startswith("CTRL_"):
+                continue  # CTRL_ nodes are auto-wrapped at runtime, skip registry check
 
             try:
                 macro_def = self._get_macronode(macro_name)
@@ -658,7 +749,7 @@ class FlowRunner:
                     }
                 else:
                     try:
-                        macro_def = self._get_macronode(step.macronode_name)
+                        macro_def = self._get_macronode(step.macronode_name, step_config=getattr(step, "config", {}))
                     except KeyError:
                         logger.error(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
                         return current_payload

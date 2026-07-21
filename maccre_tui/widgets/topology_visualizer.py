@@ -402,8 +402,8 @@ class TopologyVisualizer(Vertical):
         tree_node = parent.add(label, data=ndata)
         self._tree_node_map[node_id] = tree_node
 
-        # Task 37: Render inner MacroNode topology when expanded
-        if ndata.is_macronode and self._expand_states.get(node_id, False) and ndata.inner_steps:
+        # Task 37: Render inner MacroNode topology when expanded (default: expanded)
+        if ndata.is_macronode and self._expand_states.get(node_id, True) and ndata.inner_steps:
             for inner_step in ndata.inner_steps:
                 inner_id = str(inner_step.get("Node_ID", inner_step.get("node_id", "?")))
                 inner_label = Text.assemble(
@@ -450,7 +450,8 @@ class TopologyVisualizer(Vertical):
 
         # Task 37: MacroNode expansion indicator
         if ndata.is_macronode:
-            expand_char = "[-]" if self._expand_states.get(ndata.node_id, False) else "[+]"
+            is_expanded = self._expand_states.get(ndata.node_id, True)
+            expand_char = "[-]" if is_expanded else "[+]"
             parts.append((f"{expand_char} ", f"{node_color} bold"))
 
         # Node name with color coding (Task 34)
@@ -459,6 +460,13 @@ class TopologyVisualizer(Vertical):
             parts.append((display_name, f"{node_color} bold"))
         else:
             parts.append((display_name, node_color))
+
+        # Condensed collapsed summary for MacroNodes
+        if ndata.is_macronode and not self._expand_states.get(ndata.node_id, True):
+            inner_count = len(ndata.inner_steps) if ndata.inner_steps else 0
+            next_display = ", ".join(n for n in ndata.next_nodes if n.upper() != "END") or "END"
+            parts.append((f" ⟩ {inner_count} nodes ⟩ {next_display}", "dim italic"))
+            return Text.assemble(*parts)
 
         # Task 36: Tether badge
         if ndata.tether_id:
@@ -513,7 +521,7 @@ class TopologyVisualizer(Vertical):
                 parts.append((f"{symbol} ", f"bold {active_color}"))
                 # Task 37: MacroNode indicator during animation
                 if ndata.is_macronode:
-                    expand_char = "[-]" if self._expand_states.get(nid, False) else "[+]"
+                    expand_char = "[-]" if self._expand_states.get(nid, True) else "[+]"
                     parts.append((f"{expand_char} ", f"{active_color} bold"))
                 parts.append((ndata.node_id, f"bold {active_color}"))
                 # Task 36: Tether badge
