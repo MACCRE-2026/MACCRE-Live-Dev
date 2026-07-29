@@ -1,151 +1,119 @@
-# EXO_GANS (Formerly MACCREv2)
-## Modular Autonomous Cognitive Computing and Routing Engine -- Human Exo-Cortex Project
+# EXO_GANS / MACCREv2 (Sovereign Edge Orchestrator)
 
-> [!IMPORTANT]
-> **Architectural Shift: Zero-Cleartext Auth & TUI Nexus Plex (Phase 5/6)**
-> The system has evolved into its most secure and interactive state yet. We are now operating a fluid, terminal-based Textual interface (The Nexus Plex) underpinned by Zero-Cleartext Authentication. The system remains strictly governed by the **Omni CI/CD Gatekeeper** and executed via rigorous Sovereign Physical Laws.
+> **v0.1.0-alpha** — *Active Solo Development · Law Rev 19.0 Compliance*
 
----
+EXO_GANS (MACCREv2) is a Sovereign Edge multi-agent orchestrator built around a strict, deterministic control flow architecture.
 
-## 1. Current Project Momentum (v2.5 - Textual TUI & Zero-Cleartext Era)
-
-The current development trajectory focuses heavily on strict capability routing, credential security, and rich media processing.
-
-- **Zero-Cleartext Auth**: We have successfully refactored `maccre_core/_net` clients (e.g., `gemini_client.py`, `live_client.py`, `UniversalRouter`) to use the `windows_vault.py` DPAPI bindings. Credentials are resolved JIT (Just-In-Time) milliseconds before HTTP dispatch and purged from system memory via C-level `ctypes.memset` in a strict `try/finally` wipe block. Keys never touch disk or stay resident in python memory.
-- **TUI Nexus Plex**: The Textual-based interface (`maccre_tui/nexus_plex.py`) provides an interactive split-pane environment for orchestrating node flows, managing macros, and injecting real-time context without leaving the terminal.
-- **Payload & Manual Intercept**: Real-time human interaction has been injected directly into the swarm loop via the `MANUAL` MacroNode intercept, allowing users to alter payloads and inject context precisely at the exact point of need.
-- **Unified File Cabinet & Ingestion Evolution**: Legacy hoarding scripts have been subsumed into `maccre_core/tools/notebook_ingest.py`, generating dynamic concept categories via federated namespaces in our bespoke SovereignStore.
-- **FinOps Media Master Pipeline**: High-cost generative media actions (via `render_executor.py` and `finops_tools.py`) are strictly gated by Human-in-the-Loop authorization hooks with detailed pre-flight cost estimations.
+It was built to solve a fundamental flaw in modern agentic software: as AI models become more capable, frameworks built around them increasingly cede workflow routing and state control to non-deterministic intelligence. EXO_GANS rejects this paradigm. It acts as an iron-clad General Contractor, providing rigid, auditable, deterministic scaffolding around highly specialized AI sub-contractors.
 
 ---
 
-## 2. The Omni JIT Gatekeeper (Sovereign Prefix Mandate)
+## 1. Core Philosophy: The Sovereign Edge Omni-Builder Doctrine
 
-You must **never** invoke bare Python scripts (e.g., `python maccre.py` or `python run.py`) when initiating a swarm. 
+The framework operates under four inviolable physical laws:
 
-The architecture is protected by **Omni**, a globally pathed CI/CD Tool-Daemon that intercepts execution to run Ruff/Pyright validation and eradicate hanging background zombie processes before the Python interpreter ever spins up.
+- **Law I: Sovereign Prefix Mandate (`omni`)**: Direct execution of Python scripts via bare `python` is strictly prohibited. All execution, linting, testing, and compilation MUST be routed through the global `omni` daemon (`omni run`, `omni qa`, `omni build`, `omni clean`).
+- **Law II: Strict Datacenter Silo Routing**: All file I/O operations are strictly partitioned across 5 designated datacenter silos (`01_Raw_Source` through `05_Rendered_Media`). Hard destructive file deletions are outlawed; files are moved safely using `access_control.trash_file()`.
+- **Law III: Zero-Leak RAM Key Purging**: API key credentials loaded from local key vaults are held in memory only for the duration of the API call and immediately wiped post-execution via CPython memory zeroing (`ctypes.memset`).
+- **Law IV: Canonical Path Anchoring (`get_maccre_root`)**: Absolute file paths are strictly banned in source files. All relative paths derive at runtime from `get_maccre_root()` in `maccre_core/utils/path_resolver.py`.
 
-**The Canonical Launcher:**
-```bash
-omni run
+---
+
+## 2. System Architecture & 6-Plane Overview
+
 ```
-*This command automatically resolves the local virtual environment, hunts for zombies, and boots the Nexus Plex TUI via `run.py`.*
-
-For the full operational doctrine on `omni build`, `omni qa`, and `omni clean`, refer to: [omni_system_state_doctrine.md](file:///B:/EXO_GANS/omni_system_state_doctrine.md).
-
----
-
-## 3. Evolutionary Lineage: From 1stGen to Sovereign Edge
-
-The foundational architecture of this project was forged using the original system prompts located at `C:\Users\wilke\.gemini\1stGen-GEMINI.md.bak`. Those 1stGen instructions instilled the extreme structural discipline—the Strangler Fig ABCs, the 5-Tier Datacenter, and the absolute Type Hinting mandates—that allowed this project to survive its chaotic early growth phases.
-
-However, as the project evolved into the EXO_GANS framework and underwent the Omni Bifurcation, the Primary Antigravity Agent and the lead developer collaboratively rewrote the system instructions. By reflecting on the positive changes and evolutions the project has undergone, we reinforced the absolute best parts of the old doctrine while demonstrating the flexibility to evolve relentlessly when warranted. We stripped out deprecated constraints (like Google Workspace API dependencies and the official `google-genai` SDK) and replaced them with our bespoke Sovereign REST clients, SQLite WAL telemetry matrices, and TUI physics.
-
----
-
-## 4. The 5-Tier Sovereign Datacenter
-
-Because EXO_GANS is a file-driven edge ecosystem, understanding **where** files belong is critical. All active work product, logic, memory, and telemetry for a given run is siloed inside `__DATACENTER/<Project_Name>/` across 5 strict tiers:
-
-1. **`01_Raw_Source/`**: Unstructured text, context dumps, and payload `.md` drops.
-2. **`02_Dynamic_Context/`**: Parsed knowledge, `memory_pins/`, and ephemeral state vectors.
-3. **`03_Agent_Ledgers/`**: Strict JSON files containing every thought, fetch, and API call.
-4. **`04_Code_Artifacts/`**: Synthesized Python logic outputs.
-5. **`05_Rendered_Media/`**: Compiled reports and visual media.
-
-**Portability Doctrine (Law VIII):** All filesystem paths are runtime-computed using `get_maccre_root()` in `maccre_core/utils/path_resolver.py`. **Never hardcode an absolute path.**
-
----
-
-## 5. Active Discoveries & Technical Notes
-
-- **Parallel Advocates & Auto-Wrapping:** The routing engine successfully supports dynamic Auto-Wrapped MacroNodes and Parallel Advocates. The `GroupDialogueRunner` maintains conversational state isolation perfectly.
-- **CSS Fluidity Engine:** The Nexus Plex TUI successfully uses fractional `1fr` widths, ensuring dynamic scaling across terminal sizes.
-- **The MANUAL Cascade Bug (RESOLVED):** We resolved the previous critical routing failure for `MANUAL` cascade loops by implementing the TUI Manual Intercept pause events inside `swarm_worker.py`.
-
----
----
-
-# ARCHIVED VERSIONS (Versioned Changelog)
-
-*The following versions are deprecated and kept intact below to provide a firm anchor in time for later analysis.*
+                                  [ OPERATOR / INTERFACE LAYER ]
+                                +----------------------------------+
+                                |  Textual NexusPlex TUI & Copilot |
+                                |  FastAPI / React Miniboard       |
+                                +----------------+-----------------+
+                                                 |
+                                                 v
+                                   [ CONTROL & ROUTING PLANE ]
+                                +----------------------------------+
+                                | FlowEngine Supervisorship        |
+                                | TopologyEngine & 7-Point Audit   |
+                                +----------------+-----------------+
+                                                 |
+                                                 v
+                                   [ STATE MACHINE & BROKER ]
+                                +----------------------------------+
+                                | LocalMessageBroker (swarm_queue) |
+                                | SQLite WAL Concurrency Locks     |
+                                +----------------+-----------------+
+                                                 |
+                                                 v
+                                  [ EXECUTION & WORKER LOOPS ]
+                                +----------------------------------+
+                                | UniversalSwarmWorker Loop        |
+                                | UniversalRouter (Net / Models)   |
+                                +--------+----------------+--------+
+                                         |                |
+                     +-------------------+                +-------------------+
+                     |                                                        |
+                     v                                                        v
+      [ COGNITIVE & TOOL PLANE ]                               [ STATE & SECURITY PLANE ]
++----------------------------------+                      +----------------------------------+
+| 61 Atomic Tool Dispatcher        |                      | 5-Tier Datacenter Silos          |
+| Sovereign RAG Hybrid Search      |                      | Federated OS/Fernet Vault        |
+| Dual-Pipeline Media Render Exec  |                      | 4-Silo Telemetry Matrix          |
++----------------------------------+                      +----------------------------------+
+```
 
 ---
 
-## ARCHIVE: v2.0 - The Textual TUI Era Shift
+## 3. Subsystem Architecture
 
-> [!IMPORTANT]
-> **Architectural Shift: The Textual TUI Era has Begun.**
-> The system has evolved beyond the pure, headless CLI era and the deprecated Flet GUI era. We are now operating a fluid, terminal-based Textual interface (The Nexus Plex). The system is strictly governed by the **Omni CI/CD Gatekeeper** and executed via rigorous Sovereign Physical Laws.
+### 3.1 Net & Client Subsystem (`maccre_core/_net/`)
+- **Zero-SDK REST Mandate**: All Gemini model inference (`gemini_client.py`), batch embedding generation, and model metadata requests flow through a custom standard library REST client (`GeminiClient`) using Python's native `urllib`. Core REST operations use zero third-party dependencies. *(Exception: `live_client.py` utilizes the official SDK strictly for Gemini Live API WebSockets).*
+- **Surface Taxonomy (`model_registry.py`)**: Categorizes 55+ Gemini models into 13 specialized capability surfaces (`TEXT_GENERATION`, `DEEP_RESEARCH`, `TTS`, `IMAGEN`, `VIDEO`, etc.) with automated surface failover chains.
+- **Active Model Sentinel (`model_sentinel.py`)**: Background thread daemon (`get_sentinel()`) that probes active model endpoints every 1800s, tracking latency and error rates in `system_logs.db` to automatically re-route tasks around degraded API surfaces.
+- **Hardware Probing & Ollama Matrix (`environment_probe.py`)**: Probes host system hardware (VRAM, CPU cores, active Ollama services) to dynamically route cognitive tasks between cloud Gemini APIs and air-gapped local models (`gemma3:9b`, `llama.cpp`).
+- **Sovereign OOXML Builder (`ooxml.py`)**: Write-only OOXML `.xlsx` spreadsheet generator built on standard library `zipfile` and `xml.etree.ElementTree`, enabling zero-dependency workbook creation.
 
-### Current Project Momentum
-The current development trajectory is strictly defined by the Alphabet Oracle's 6-Phase Hardening Plan, located at: [Oracle_Hardening-Features-implementation_plan.md](file:///B:/EXO_GANS/Oracle_Hardening-Features-implementation_plan.md). 
+### 3.2 Swarm Engine & Orchestration Subsystem (`maccre_core/orchestration/`)
+- **FlowEngine Supervisorship (`flow_engine.py`)**: Manages multi-agent execution cycles, handles state transitions (`Idle` -> `Running` -> `Paused` -> `Canonized`), tracks node lineage via `flow_vector`, and synthesizes unified session ledgers.
+- **The 16 Deterministic ControlNode Primitives (`deterministic_nodes.py`)**: Executes structural control logic (`CTRL_ANCHOR`, `CTRL_RECURSION`, `CTRL_PAUSE`, `CTRL_GATE`, `CTRL_CHECKPOINT`, `CTRL_DELAY`, `CTRL_TRANSFORM`, `CTRL_SCATTER`, `CTRL_MERGE`, `CTRL_CONCAT`, `CTRL_BRANCH`, `CTRL_FILTER`, `CTRL_CLEANUP`, `CTRL_CONDITIONAL_ROUTE`, `CTRL_END`, `CTRL_PAYLOAD_INJECT`) in native Python without invoking LLM models.
+- **Quadrivector Failback Routing (`CTRL_CONDITIONAL_ROUTE`)**: 4-stage priority fallback hierarchy (Structured `[ROUTE_TO:]` Tag -> Keyword Regex Gate -> Confidence Score Threshold -> Fuzzy Levenshtein Match -> Default Target).
+- **SQLite WAL Scatter-Gather Queue (`local_broker.py`)**: SQLite-backed zero-cloud task queue (`swarm_queue.db`) using `UNIQUE(job_id, current_node)` and `INSERT OR IGNORE` to guarantee idempotent fan-in gather routing, and `BEGIN EXCLUSIVE` locks to prevent worker thread races.
+- **7-Point Pre-Flight Topology Audit (`topology_engine.py`)**: Validates prompts, model IDs, temperature ranges, DAG target references, wait-for dependencies, circular deadlock loops, and dialogue partner roster registrations prior to flow execution.
 
-### Active Discoveries & Technical Notes
-- **Parallel Advocates & Auto-Wrapping:** The routing engine successfully supports dynamic Auto-Wrapped MacroNodes and Parallel Advocates (e.g., `CounterPartner` running alongside `Writer_Pipe`). The `GroupDialogueRunner` maintains conversational state isolation perfectly.
-- **CSS Fluidity Engine:** The Nexus Plex TUI has successfully migrated to fractional `1fr` widths. The layout dynamically scales during terminal resizes (`Ctrl +`/`Ctrl -`), permanently ending the era of "squashed" vertical text anomalies.
-- **The MANUAL Cascade Bug (PENDING PATCH):** There is currently a critical routing failure when assigning the user (`MANUAL`) to a cascade loop (e.g., `OSINTx3`). The failure occurs inside `maccre_core/orchestration/swarm_worker.py` at the `_load_agent_cfg` injection boundary. The engine attempts to pull a system prompt from the AI roster for `MANUAL`, triggering a `KeyError` because `MANUAL` is an organic user intercept, not a synthetic entity. This is prioritized for Phase 5/6 hardening.
+### 3.3 Textual NexusPlex Command Center (`maccre_tui/`)
+- **Split-Pane Terminal UI (`nexus_plex.py`)**: Terminal-native interface built on Textual and Rich featuring an accordion `InformationPanel`, live `FlowMonitorOverlay`, `NexusChat` copilot, tabbed `NodeCatalog`, and interactive `TopologyVisualizer`.
+- **Interactive VCR Transport State Machine**: Controls execution flow in 3 states (`Idle`, `Running`, `Paused`). In **Paused State** (triggered manually or by `CTRL_PAUSE`/`CTRL_REVIEW`), the worker thread blocks on a `FlowPauseEvent` lock, enabling step injection (`ContextInjectModalScreen`), live single-node chat (`NodeLiveChatModal`), and time-travel step branching.
+- **Agent Studio & Session Bridge Compiler (`AgentStudioChatScreen`)**: 3-panel arena for unstructured multi-agent brainstorming (`ChatDashboardPane`, `ChatArenaPane`, `ChatBuilderPane`) with a built-in compiler that parses chat transcripts into executable Flow Sequence DAG topologies.
+- **21 Modal Dialog Screens**: Fullscreen modals covering template editing (`MacroNodeEditorModal`), session canonization (`SessionManagerModal`), financial ledgers (`OnionBookModal`), and project memory inspection (`ProjectCanonModal`).
+
+### 3.4 Tools, Sovereign RAG & Media Engine (`maccre_core/tools/`)
+- **61 Atomic Tool Dispatcher (`tool_registry.py`)**: Central registry mapping 61 GUI-agnostic functions across 11 modules with tier-aware filtering (`get_tools_for_tier`) and dynamic OpenAPI/Anthropic/OpenAI/Ollama schema generation (`generate_universal_json_schema`).
+- **Sovereign RAG Hybrid Search (`rag_tools.py`, `hybrid_search.py`)**: Tri-fold retrieval engine combining `SovereignPinStore` 256-dim vector embeddings (`gemini-embedding-001`), SQLite FTS5 BM25 full-text indexing, and live Brave web search fused via Reciprocal Rank Fusion (RRF).
+- **Dual-Pipeline Media Render Executor (`render_executor.py`)**: Converts Director JSON manifests into synchronized TTS audio (`05_Rendered_Media/audio/`), Imagen 3 graphics (`05_Rendered_Media/images/` with automated `imagen-3.0-generate-002` API failover), and stitched FFmpeg `.mp4` video (`05_Rendered_Media/video/`).
+- **Excel Workbook Intake Pipeline (`sheet_parser.py`, `workbook_engine.py`)**: Active intake engine converting `MACCRE_Swarm_Request.xlsx` workbooks into materialized agent rosters and topology JSON configurations with pre-flight readiness scoring (`check_workbook_completeness`).
+
+### 3.5 State, Security & Sovereignty Architecture (`maccre_core/`)
+- **3-Tier Access Control Matrix (`access_control.py`)**: Progressive elevation hierarchy enforcing Tier 1 read-only baseline, Tier 2 salted SHA-256 PIN elevation for non-sandboxed modifications, and Tier 3 headless MCP token bypass (`activate_mcp_bypass`).
+- **Archive Trash Protocol (`trash_file()`)**: Destructive file deletions are prohibited; files are timestamped (`%Y%m%dT%H%M%SZ__`) and relocated to `_archive/trash/` with audit logging in `system_logs.db`.
+- **4-Silo SQLite WAL Telemetry Matrix (`telemetry_db.py`)**: Four dedicated SQLite WAL databases (`system_logs.db`, `user_interactions.db`, `terminal_logs.db`, `definitions.db`) for system lifecycle auditing, human-in-the-loop tracking, stdio capture, and metadata storage.
+- **Federated OS/Fernet Vault (`windows_vault.py`, `universal_vault.py`, `key_ingestor.py`)**: Native Windows DPAPI integration (`CryptProtectData`), Fernet AES-128 fallback (`auth_vault.bin`), automatic key regex pattern ingestion, Win32 clipboard sanitization, and CPython RAM memory zeroing (`ctypes.memset`).
+- **Omni CI/CD Gatekeeper (`omni`)**: Global JIT gatekeeper enforcing `omni run` execution, `omni qa` Ruff/Pyright quality checks, `omni build` PyInstaller compilation, and `omni clean` cache/zombie thread purging.
 
 ---
 
-## ARCHIVE: v1.0 - MACCREv2 Headless Phase 0
+## 4. Project Status & Contributing
 
-# MACCREv2 
-## Modular Autonomous Cognitive Computing and Routing Engine -- Human Exo-Cortex Project 
+This project is in active, daily solo development. It is highly opinionated and tailored to a specific architectural vision.
 
-> **Notice:** MACCREv2 has executed the Decapitation Protocol and achieved Phase 0 Operational Hardening. *The GUI era has ended.* The architecture is now a pure, headless, SQLite-brokered multi-agent swarm ecosystem executing within rigorous CI/CD constraints.
+- **Issues**: Bug reports and architectural discussions are welcome.
+- **Pull Requests**: Please do not submit unsolicited PRs. Open an issue to discuss your proposed changes first. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-### Foundational Canon & Project History
-All architectural documentation has been strictly curated and moved to the `_historical_documentation` directory.
+---
 
-If you are a new developer or an un-initiated agent seeking the operational rules and current architectural roadmap for exactly *how* this engine functions, you **must** read the files located in:
-`_historical_documentation/03_Current_Canon`
+## 5. Licensing (AGPLv3 Dual-License)
 
-Specifically:
-- `OMNI_DAEMON_FOUNDING_DOCTRINE.md`: The absolute rules of the headless ecosystem.
-- `MACCRE_Phase_Roadmap.md`: The 6-Phase evolution plan for moving to pure sovereign dependencies.
-- `Sovereignty_Analysis.md`: The justification and physics of zero-dependency edge infrastructure.
-- `Philosophical_Proposal.md`: The extrapolation toward crowd-compute Neural P2P swarming.
+This software is released under the **GNU Affero General Public License v3.0 (AGPLv3)**.
 
-**Portability Doctrine (Law VIII):** All filesystem paths in MACCREv2 are runtime-computed using `get_maccre_root()` in `maccre_core/utils/path_resolver.py`. **Never hardcode an absolute path** in any source file. New installs: run `python setup_mcp.py` once to generate the correct `mcp_config.json` for your machine. See `_historical_documentation/02_Transitional_Logs/PHASE_HISTORY.md` Phase 19 for full remediation history.
+### Why AGPLv3?
+EXO_GANS is designed to be free and open for developers, researchers, and hobbyists to use, modify, and learn from. However, if a commercial entity wishes to run this software over a network (e.g., as a backend SaaS or internal proprietary infrastructure), the AGPL requires them to open-source their entire modified stack.
 
-### Legacy Code & Documentation
-Any documents outlining `forge_smith.py`, Flet implementations, early tool-calling schemas, or outdated `ROADMAP.md` iterations have been moved to `_historical_documentation/01_Deprecated_GUI_Era` for context preservation. Do **not** use them to determine current workflows. All legacy code is archived similarly in `_archive`.
-
-***
-
-## 🌐 MACCREv2: Sovereign Operations & Telemetry Manual
-
-Because MACCREv2 is a headless, file-driven edge ecosystem, understanding **where** files belong and **how** they flow through the engine is critical. Do not execute ad-hoc directory hunting. The engine adheres strictly to the **5-Tier Datacenter** doctrine.
-
-### 1. The Global Entry Point (Project Initiation)
-Everything begins at the root workspace.
-- **`MACCRE_Global.xlsx`**: The master creator topology. You manually fill out this workbook at `B:\MACCREv2\MACCRE_Global.xlsx` to define new Agents, Memory Configurations, and Tool Pipelines.
-- **Action:** Run `python maccre.py global`
-- **Result:** The engine creates the Project Schema, instantiates SQLite databases (`swarm_queue.db` & `system_logs.db`), and builds the isolated `__DATACENTER/<Project_Name>/` vault.
-
-### 2. The Datacenter Vault (`__DATACENTER/<Project_Name>/`)
-All active work product, logic, memory, and telemetry for a given run is strictly siloed inside its own project environment.
-
-#### **Input Pipelines (Where you put things):**
-- **`01_Raw_Source/`**: Drop unstructured text, context dumps, or payload `.md` files here. `maccre.py ingest` will hash them to determine delta shifts.
-- **`MACCRE_Session.xlsx`**: The actual "Task Execution" request. Manually copy the Swarm_Request template into the root of the project vault (e.g. `__DATACENTER/MyProject/MACCRE_Session.xlsx`), select your starting node, and launch.
-- **Action:** Run `python maccre.py launch <Project_Name>`
-
-#### **Execution & Artifact Pipelines (Where things go):**
-When a Swarm is launched, the workflow mutates deterministically:
-- **`CompletedSessions/`**: The moment a session launches, MACCRE makes a physical, immutably time-stamped clone of your `MACCRE_Session.xlsx` (e.g. `<SessionId>_Session.xlsx`). You can safely use these to instantly recreate historical swarms perfectly.
-- **`03_Agent_Ledgers/`**: Contains raw markdown files containing every thought, API fetch, and file read generated by the Swarm during runtime, categorized by `Job_ID`.
-- **`04_Code_Artifacts/` & `05_Rendered_Media/`**: Any physical work product outputs (synthesized python logic, rendered images, compiled reports) are saved directly here.
-
-### 3. Dual-Tier Session Telemetry (`Op-logs` vs `Bug-logs`)
-MACCREv2 has severed monolithic console logging. All logging is now entirely **Session-Isolated** and separated by machine/human readable tiers inside the project Datacenter:
-
-- **`Op-logs/<Session_Id>.log`** (Operational / Human Readable)
-  - Records high-level state shifts, node transitions, and total swarm costs. Format is clean prose.
-- **`Bug-logs/<Session_Id>.log`** (Diagnostic / Machine Strict)
-  - Retains heavy JSON metadata payloads of exact vector coordinates, raw exception stacks, and routing payload parameters. Used exclusively when breaking down complex failures.
-
-**CLI Telemetry Overrides:**
-- `python maccre.py --debug launch <Project>` (Toggles `Bug-logs` capture back ON if temporarily disabled in `logger.py`).
-- `python maccre.py logs clear --project <Project_Name> --session all --type op` (Allows rapid destruction of heavy log caches globally or per session/project constraint).
+**Commercial Licensing:**  
+If your organization's legal policies prohibit the use of AGPL-licensed code, or if you wish to use EXO_GANS in a proprietary commercial product without open-sourcing your stack, a commercial license is required. Please contact the author directly to negotiate commercial terms.

@@ -196,3 +196,28 @@ The Nexus Copilot is currently primed for topology creation and has demonstrated
    - Identify integration points between the Copilot's tool registry and the sandbox environment.
    - Ensure all sandbox operations remain within the Sovereign Physical Laws (no external network dependencies, all paths relative via `get_maccre_root()`).
 
+***
+
+### Feature Name: Deterministic CI/CD Plan Reasoning Engine & Reasoning Confidence Score (RCS)
+**Abstract:** A deterministic CI/CD reasoning tool (`omni evaluate-plan`) that mathematically evaluates proposed implementation plans across 5 Oracle vectors and appends a Reasoning Confidence Score (RCS) before review.
+**Date/Time Entered:** 2026-07-28T20:04:36-04:00
+**Status:** Unfulfilled
+
+**Description:**
+As the 5 Specialist Oracles (NetAndClient, OrchestrationAndEngine, TUIAndInterface, ToolsAndRAG, StateAndSovereignty) provide deep, granular codebase auditing, tracking all domain-specific nuances creates exponential cognitive load ($M_{\text{load}} \propto N_{\text{domains}} \times \text{Granularity} \times \text{Dependencies}$). 
+
+This feature introduces an automated reasoning gatekeeper integrated into the `omni` CI/CD toolchain (`omni evaluate-plan`). The tool evaluates proposed plans prior to user presentation and calculates a composite **Reasoning Confidence Score (RCS)**:
+
+$$RCS = w_1 \cdot C_{\text{oracle}} + w_2 \cdot S_{\text{contract}} + w_3 \cdot G_{\text{completeness}} + w_4 \cdot E_{\text{economics}} - w_5 \cdot R_{\text{risk}}$$
+
+**Core Vectors Evaluated:**
+1. **Inter-Oracle Consensus ($C_{\text{oracle}}$)**: Measures graph contract alignment across all 5 Oracle domain boundaries.
+2. **Static AST & Contract Soundness ($S_{\text{contract}}$)**: Verifies symbol preservation, type safety, and SQLite database schema constraints (e.g. preventing `UNIQUE(job_id, current_node)` collisions).
+3. **Intent Delta & Requirement Completeness ($G_{\text{completeness}}$)**: Evaluates plan evolution across iterative versions (v1 → v2 → v3), ensuring core requirements and conceptual refinements discovered during early drafts are not silently dropped as plans progress.
+4. **Edge Economics & Hardware Constraints ($E_{\text{economics}}$)**: Probes API rate limits (RPM/TPM), local model VRAM bounds, and SQLite WAL write lock limits.
+5. **Unknown-Unknown Risk Penalty ($R_{\text{risk}}$)**: Penalizes un-sandboxed I/O, un-synchronized thread singletons, and unhedged memory zeroing (`ctypes.memset`).
+
+**Ideological Evolution Rationale:**
+Logged as a functional synthesis of ideology and evolution—retaining executive human oversight while building deterministic automation rails to automate oversight reliability without ceding ultimate architectural authority.
+
+

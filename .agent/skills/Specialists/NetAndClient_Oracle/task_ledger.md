@@ -1,0 +1,13 @@
+# Continuous Subsystem Task & Change History Ledger: Net & Client Oracle
+
+**Specialist Domain:** `maccre_core/_net/` (`gemini_client.py`, `model_sentinel.py`, `model_registry.py`, `omnidaemon.py`, `ooxml.py`, `client_interface.py`, `environment_probe.py`, `live_client.py`)  
+
+---
+
+## Task & Change History Log
+
+- **2026-07-24 (Initialization)**: Specialist Oracle profile established. Initial analysis artifacts compiled in `Analysis\Wave1\01_net_subsystem_ledger.md` and `Analysis\Wave2\flowchart_01_net_client.md`. Pure urllib REST client, hardware probe, ModelSentinel capacity tracking, and OOXML builder verified.
+- **2026-07-25 (Documentation Audit & Master Rewrite)**: Completed Domain 1 documentation audit and drafted Net & Client subsystem sections in `Analysis\Wave3\draft_net_client_docs.md`. Synthesized findings into production [README.md](file:///b:/EXO_GANS/README.md) and [MACCRE_Operator_Manual.md](file:///b:/EXO_GANS/MACCRE_Operator_Manual.md). Documented Gemini Live WebSocket SDK exception, OOXML write-only scope, ModelSentinel latency tracking, and RAM key zeroing protocol.
+- **2026-07-25 (Phase 9 Net & Client Roadmap Analysis)**: Authored Domain 1 contribution for Phase 9 of `Era3_architectural_roadmap.md` in `B:\EXO_GANS\.oracle_artifacts\draft_era3_phase9_net_client.md`. Defined bi-directional `JsonlTranscriptTranslator` and automated `DeploymentCandidateTester` zero-SDK REST testing harness.
+- **2026-07-25 (Release Candidate Audit)**: Audited `B:\MACCRE_Release` Net & Client domain (`setup_mcp.py`, `maccre_core/_net/`, `requirements-*.txt`). Verified 100% RAM key zeroing via `ctypes.memset`, 95% zero-SDK urllib REST compliance (with 1 documented WebSocket exception in `live_client.py`), ModelSentinel background probing/surfaces, and FastMCP stdio isolation. Identified cross-platform path bug in `setup_mcp.py` and redundant `requests` package in `requirements-sovereign.txt`. Saved audit report to `B:\EXO_GANS\.oracle_artifacts\audit_release_net_client.md`.
+- **2026-07-28 (CTRL_SCATTER Expansion Plan Domain Audit)**: Conducted comprehensive Net & Client specialist review of `CTRL_SCATTER` expansion plan iterations (v1, v2, v3). Validated `MAX_SCATTER_AGENTS = 8` against Gemini paid-tier API quotas (~1,000+ RPM, 2M+ TPM). Identified 3 critical domain risks: `ctypes.memset` RAM key zeroing thread safety during parallel execution, Ollama local model VRAM overload during edge scatter, and Model Sentinel burst false-degradation triggers. Authored detailed audit report artifact at `b:\EXO_GANS\.oracle_artifacts\2026-07-28_ctrl_scatter_review_net_client.md`.

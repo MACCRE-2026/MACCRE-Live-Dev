@@ -1,560 +1,169 @@
 # MACCREv2 Operator Manual
-**Revision:** 2026-04-28 · Law Rev 19.0
+**Revision:** 2026-07-25 · Law Rev 19.0 Compliance
 
 ---
 
-## Part I — Concepts
+## Foreword: The Architect's Perspective
 
-### What MACCRE Is
-MACCREv2 is a headless, terminal-first **swarm orchestration engine**. You define a pipeline of AI agents (a *topology*), give each agent a persona and a role, drop in a payload, and fire. Agents execute in sequence, passing their output downstream until the pipeline terminates.
+I am not a coder. I do not write in any languages. While I read them reasonably well and have a deep, long-term interest in electrical engineering and computer science, when it comes to math and code, I am syntactically disabled. For whatever reason, I have never been able to organize my thoughts natively into the abstract worlds of mathematics and programming languages. 
 
-### The Three Durable Objects
-| Object | Where it lives | Purpose |
-|---|---|---|
-| **Agent Roster** | `agent_roster.csv` (per-project) | Who the agents are — name, model, persona, tools |
-| **Topology** | `topology.csv` (per-project) | How they connect — node order, routing, overrides |
-| **Workbook** | `MACCRE_Global.xlsx` (root) | The operator control surface — edit, then fire |
+However, I highly respect the generations of worldwide frameworks and institutions that have been built and maintained via the rigorous minds dedicated to the refinement of human observation and prediction via the mathematic grindstone. My heroes include pioneers like Grace Hopper, Edsger Dijkstra, James Clerk Maxwell, and Michael Faraday. Their influence echoes heavily throughout the MACCRE design doctrine.
 
-The workbook is **always a disposable snapshot**. The CSVs are the durable source of truth. Running `workbook refresh` re-generates the workbook from live disk state.
+I believe that a person's ability to speak abstract languages and force their mind into rigid syntax structures should not determine the reach of their voice. Seven months ago, I began using AI to formalize my conceptual ontology into math and code. MACCRE is the direct result of formalizing my thoughts, my needs, and my impulses regarding AI into a usable platform—one where the user controls as much as possible, as economically as possible. 
 
-### The DATACENTER (5-Tier Layout)
-```
-__DATACENTER/
-  <ProjectName>/
-    01_Raw_Source/        ← Drop source files + input.md here
-    02_Dynamic_Context/   ← topology.csv lives here
-    03_Agent_Ledgers/     ← Tool audits, launch failures, thoughts
-    04_Code_Artifacts/    ← Agent output files
-    05_Rendered_Media/    ← Audio/video render output
-    Op-logs/              ← Human-readable session logs
-    Bug-logs/             ← JSON debug logs
-    CompletedSessions/    ← Archived workbooks per session
-```
+MACCRE was built from my own inclinations and filtered through the different agents I designed after creating the `Prompt Engineer`. This system is a reflection of how I see the world, built by the agents who helped me express it.
 
 ---
 
-## Part II — CLI Reference (`python maccre.py`)
+## Part I — Core Architectural Concepts
 
-### `new` — Provision a project silo
-```
-python maccre.py new <ProjectName>
-```
-Creates the full 5-tier DATACENTER directory tree, initialises blank SQLite databases, and writes a fresh `MACCRE_Session.xlsx` into the silo. Run this once per project.
+### 1. System Vision & The "Do What You Feel" Agent Philosophy
+MACCREv2 (Google Antigravity for Sovereign Edge) is an advanced multi-agent orchestration engine and TUI command center designed around deterministic scaffolding governing non-deterministic AI agents.
 
-**After running:**
-1. Drop source documents into `__DATACENTER/<Project>/01_Raw_Source/`
-2. Run `ingest` to vectorise them
-3. Fill the workbook and `launch`
+The bundled agents in this release were created using the `Prompt Engineer` in Chat Studio sessions. Rather than using standard industry practices (concise instructions at low temperatures), MACCRE leans into a "do what you feel" ethos. Instructions are dense, structured, and complex, and agents are run at high temperatures (`1.0` and above) to induce emergent reasoning, backed by rigid physical guardrails.
 
----
+### 2. The 5-Tier Datacenter & Path Anchoring
+All file paths are dynamically resolved at runtime via `get_maccre_root()` in `maccre_core/utils/path_resolver.py`, guaranteeing zero-configuration multi-drive and multi-OS portability.
 
-### `workbook refresh` — Regenerate the Global Workbook
-```
-python maccre.py workbook refresh [--project <Name>] [--out <path>]
-```
-Generates `MACCRE_Global.xlsx` at the project root with **live data injected**:
-- AGENTS sheet pre-populated from `agent_roster.csv`
-- TOPOLOGY sheet pre-populated from `topology.csv`
-- PROJECT_NAME pre-filled from `--project`
-- START_NODE pre-filled from first row of topology
-- EXECUTION_PLAN stamped with live READY / PARTIAL / INCOMPLETE status and colour coding
-- MODEL dropdowns sourced from all 55 registered models
-- PROJECT_DEFINITION dropdown lists every existing silo
+Workspace data is partitioned across five deterministic datacenter silos inside `__DATACENTER/<projectName>/`:
+- **`01_Raw_Source`**: Immutable ingestion zone for raw documents, payloads, and datasets.
+- **`02_Dynamic_Context`**: Active project state machines, topologies, encrypted vault storage (`auth_vault.bin`), and session configs.
+- **`03_Agent_Ledgers`**: Cognitive JSON ledgers (`[module_name]_telemetry.json`), execution traces, and build logs.
+- **`04_Code_Artifacts`**: Sandboxed output generation zone for agent-produced Python code, markdown reports, and schemas.
+- **`05_Rendered_Media`**: Generated media outputs including TTS `.wav` audio, Imagen 3 `.png` graphics, and FFmpeg `.mp4` video.
 
-> **Close the workbook in Excel before refreshing.** Excel locks the file.
+### 3. Sovereign Auth Layer & Key Ingestion
+Authentication is fully localized and headless. No `.env` files are used.
+- **Autonomous Key Ingestion (`key_ingestor.py`)**: Automatically scans input strings and clipboard contents for vendor API key formats (Gemini, Anthropic, OpenAI, Groq, xAI, Brave), routes them to vault storage, and purges Win32 clipboard buffers (`clear_windows_clipboard()`).
+- **Federated Dual-Vault**: Utilizes native Windows DPAPI (`windows_vault.py` - `CryptProtectData`) bound to the OS user profile, with AES-128 Fernet encryption (`universal_vault.py` - `auth_vault.bin`) as cross-platform fallback.
+- **CPython RAM Key Zeroing**: Plaintext API keys in memory are overwritten post-execution via `ctypes.memset`.
 
----
-
-### `workbook fire` — Execute from the Global Workbook
-```
-python maccre.py workbook fire [--workbook <path>] [--project <Name>] [--yes]
-```
-Parses the open workbook, materialises agents + topology into the project silo, injects the payload, and starts the swarm. A **Swarm Watcher** window opens automatically showing live thoughts and responses.
-
-`--yes` skips the confirmation prompt (useful for scripting).
+### 4. Local SQLite Architecture (C-Engine Concurrency)
+- **`swarm_queue.db`**: Managed by `local_broker.py`. Handles scatter-gather state machines in WAL mode. Employs `UNIQUE(job_id, current_node)` and `INSERT OR IGNORE` to make fan-in gather routing strictly idempotent, with `BEGIN EXCLUSIVE` locks for atomic task fetching.
+- **`thoughts.db`**: Unified matrix for storing agent cognitive scratchpads during schema-enforced inference.
+- **`agent_library.db`**: Relational store for agent profiles, personas, and assigned tool sets.
+- **`macronode_registry.db`**: Repository of nested topological clusters (MacroNodes) for modular drag-and-drop flow design.
+- **4 Telemetry Databases (`telemetry_db.py`)**: `system_logs.db` (lifecycle & hardware), `user_interactions.db` (operator audit), `terminal_logs.db` (stdio capture), and `definitions.db` (schema & topology configs).
 
 ---
 
-### `launch` — Execute a project's Session Workbook
-```
-python maccre.py launch <ProjectName> [--workbook <path>] [--yes] [--resume] [--from-node <NODE>]
-```
-Full session launch: reads `MACCRE_Session.xlsx` from the project silo, validates topology, materialises, runs the swarm. Respects SESSION_CONFIG hooks.
+## Part II — Operational Mechanics & Flow Execution
 
-| Flag | Effect |
-|---|---|
-| `--resume` | Skip materialise — drain the existing pending queue |
-| `--from-node NODE` | Insert a fresh queue row at NODE then resume (checkpoint restart) |
-| `--yes` | Skip confirmation prompt |
-| `--workbook PATH` | Use a specific xlsx instead of the default |
+### 1. Flow Execution & Telemetry
+When a payload enters a topology, it traverses a Directed Acyclic Graph (DAG). `LocalMessageBroker` tracks payload hops on disk, updating `swarm_queue.db`. Telemetry (reasoning, API costs, latency) streams to `03_Agent_Ledgers` and `system_logs.db`.
 
-**SESSION_CONFIG hooks (set in workbook):**
-- `INGEST_BEFORE_RUN=TRUE` — vectorise `01_Raw_Source` before the swarm runs
-- `INGEST_AFTER_RUN=TRUE` — vectorise `04_Code_Artifacts` after the swarm
-- `CANONIZE_AFTER_RUN=TRUE` — promote session thoughts to project memory
+### 2. Session Siloing & Canonization
+Execution runs are siloed into unique `Session ID`s. Upon successful completion, operators can canonize a session using the CLI (`omni run maccre.py canonize --project <id> --session <id>`), locking state and elevating memory pins to `memory_pins.db`.
+
+### 3. Bundled Topology: OSINT_Research_x3 MacroNode
+The default release includes `OSINT_Research_x3`, demonstrating multi-pass research, adversarial dialogue, and synthesis:
+- **Phase 1 (Dual-Pass Search)**: `OSINT_Analyst` runs `cascade_search(num_passes=2)`. Pass 1 retrieves primary web search hits; Pass 2 executes domain-exclusionary queries omitting Pass 1 domains.
+- **Phase 2 (Adversarial Dialogue)**: `DialogueRunner` executes 3 conversational rounds between `OSINT_Analyst` (expert) and `Regular_Joe` (layman evaluator) to eliminate jargon and clarify missing context.
+- **Phase 3 (Synthesis)**: `OSINT_Synth` ingests dialogue transcripts and writes an executive report to `04_Code_Artifacts/<job_id>/OSINT_Report.md`.
 
 ---
 
-### `global` — Execute from the Global Workbook (full pipeline)
-```
-python maccre.py global [--workbook <path>] [--yes] [--skip-preflight]
-```
-Reads `MACCRE_Global.xlsx`, checks completeness, materialises all actionable sections, runs the swarm, and writes a session record. Identical to `workbook fire` but uses the legacy global pipeline path.
+## Part III — TUI Navigation & Command Center Operations Manual
 
----
-
-### `run` — Direct fire, no workbook
-```
-python maccre.py run <ProjectName> "<payload text or @file.md>" [--node <NODE>] [--yes]
-```
-Fastest path. Writes the payload directly to `01_Raw_Source/input.md`, validates topology, and fires. No workbook interaction required.
-
-**Payload resolution order:**
-1. `@/path/to/file.md` — reads that file
-2. A valid filesystem path — reads that file
-3. Any other string — written as-is to `input.md`
-
+### 1. Launching the NexusPlex Command Center
+Launch the app via the Omni Prefix Mandate:
 ```bash
-# Examples
-python maccre.py run NewsNexus "Summarise the Iran situation" --node OSINT --yes
-python maccre.py run ResearchProject @brief.md --yes
+omni run maccre_tui/nexus_plex.py
 ```
+
+### 2. VCR Transport Control in Paused State (Step Injection & Live Node Chat)
+Execution operates in 3 transport states (`Idle` -> `Running` -> `Paused`). When execution enters **PAUSED** state (triggered manually via `⏸`, an explicit `CTRL_PAUSE` node, or a financial review gate `CTRL_REVIEW`):
+- The background worker thread (`FlowRunner`) blocks safely on a `FlowPauseEvent` lock.
+- **Radio-Dot Navigation**: Completed steps display green dots, active step displays an amber pulse, pending steps display hollow dots.
+- **Step Context Injection (`ContextInjectModalScreen`)**: Select any node along the flow line, click **Inject Context**, enter raw text or JSON, and save to `_injected_context`. Click **Resume** (`▶`) to unblock execution with the new context payload.
+- **Node Live Chat (`NodeLiveChatModal`)**: Select a paused node and click **Node Live Chat** to open an interactive conversation directly with the agent node using its exact current memory state (`thoughts.db`).
+- **Time-Travel Branching**: Select a completed step and click **Branch Flow** to roll back `flow_vector` pointers in `swarm_queue.db` and re-execute from that waypoint.
+
+### 3. Agent Studio & Session Bridge Compiler (`AgentStudioChatScreen`)
+A 3-panel modal arena (`ChatDashboardPane`, `ChatArenaPane`, `ChatBuilderPane`) for multi-agent discussions. The **Session Bridge Compiler** in Panel 3 parses multi-agent chat transcripts and automatically compiles them into executable Flow Sequence DAG topologies.
+
+### 4. Keyboard Shortcuts Quick Reference
+| Shortcut | Context | Action |
+| :--- | :--- | :--- |
+| `Ctrl+R` | Global App | Launch Flow Execution (`action_run_flow`) |
+| `Space` | Global App | Toggle VCR Transport (Pause / Resume) |
+| `F2` / `Double-Click` | TopologyVisualizer | Open Node Configuration Editor (`MacroNodeEditorModal`) |
+| `Ctrl+E` | TopologyVisualizer | Toggle MacroNode Sub-Tree Expansion (`action_toggle_expand`) |
+| `Ctrl+Up` / `Down` | TopologyVisualizer | Re-order Selected Node in Step Chain |
+| `Ctrl+S` | Modal Screens | Save Configuration & Close Modal |
+| `Escape` | Modal Screens | Dismiss Modal / Return to Main View |
+
+### 5. Modal Dialog Screens Guide (21 Modals across 11 Modules)
+- **`macro_editor_modal.py`**: `MacroNodeEditorModal` (template step ordering, system prompts, tool bindings).
+- **`session_manager_modal.py`**: `SessionManagerModal` (session canonization & deadflow purging), `MacroNodeNameModal`.
+- **`onionbook_modal.py`**: `OnionBookModal` (token burn velocity & cost ratios), `FinOpsBuddy`.
+- **`finops_modals.py`**: `BudgetProposalModal` (HITL financial approval gate), `BudgetWarningModal`.
+- **`project_canon_modal.py`**: `ProjectCanonModal` (semantic memory pin inspection & query).
+- **`splash_screen.py`**: `BootSplashModal`, `LoadingSplashModal`.
+- **`nexus_plex.py`**: `NewProjectModal`, `SelectProjectModal`, `SystemInstructionsModal`, `ContextInjectModalScreen`, `NodeLiveChatModal`, `FlowHistoryModalScreen`.
+- **`file_cabinet_modal.py`**: `FileCabinetModalScreen` (datacenter ingestion).
 
 ---
 
-### `ingest` — Vectorise project sources
-```
-python maccre.py ingest <ProjectName>
-```
-Bulk-ingests all files in `01_Raw_Source/` into the project's ChromaDB vector store using SHA-256 deduplication. Only new or changed files are processed.
+## Part IV — Swarm Topology Engineering & Pre-Flight Validation
+
+### 1. CSV Topology Schema Reference
+Topologies are defined in `topology.csv` using 15 standard configuration columns:
+`NODE_ID`, `AGENT_NAME`, `MODEL_OVERRIDE`, `INSTRUCTION_OVERRIDE`, `TEMPERATURE`, `MAX_TURNS`, `NEXT_NODE_SUCCESS`, `NEXT_NODE_FAILURE`, `WAIT_FOR`, `DIALOGUE_PARTNER`, `DIALOGUE_ROUNDS`, `TETHER_ID`, `TOOLS_ALLOWED`, `SCATTER_TARGETS`, `FAILBACK_ROUTE`.
+
+### 2. MacroNode Expansion & Namespace Isolation
+Node IDs starting with `MACRO:` are intercepted by `macro_factory.py` and expanded into underlying sub-graphs (`cascade`, `hologram`, `chord`, `crucible`). Node IDs within the sub-graph are isolated with instance prefixes (`<MacroID>_<NodeName>`) to prevent collisions.
+
+### 3. 7-Point Pre-Flight DAG Topology Validation Protocol
+Before executing, `TopologyEngine.validate()` performs 7 automated checks:
+1. **Instruction Check**: Verifies non-empty prompt directives.
+2. **Model Validation**: Ensures valid non-blank model string.
+3. **Temperature Range Audit**: Checks values lie within $[0.0, 2.0]$.
+4. **DAG Target Resolution**: Confirms `NEXT_NODE_` targets exist or match terminal sentinels (`STOP`, `DONE`, `TERMINATE`, `FAILED`, `HUMAN_GATE`, `END`).
+5. **Wait_For Audit**: Validates dependency existence and warns if fan-in $>5$.
+6. **Circular Deadlock Detection**: Performs DFS recursion on `WAIT_FOR` nodes to catch loops.
+7. **Dialogue Partner Audit**: Confirms `DIALOGUE_PARTNER` is registered in `agent_roster.csv` when `DIALOGUE_ROUNDS > 0`.
 
 ---
 
-### `topology list` — List saved topologies
-```
-python maccre.py topology list [--project <Name>]
-```
-Displays all topologies saved to the global or project library (name, node count, creation date, description).
+## Part V — Tools, RAG & Media Operations Manual
 
-### `topology save` — Save current topology to library
-```
-python maccre.py topology save --name "<Name>" [--project <Name>] [--description "<text>"]
-```
-Snapshots the current `topology.csv` + `agent_roster.csv` into the topology library for reuse. Saved to both the project silo and the GLOBAL library.
+### 1. Document Ingestion & Semantic Memory Pinning
+Copy source documents into `01_Raw_Source/` and invoke `ingest_document()`. The system chunks text, retrieves OS Vault credentials, generates 256-dim embeddings via `gemini-embedding-001` (using standard `urllib`), and stores records in `memory_pins.db` (`SovereignPinStore`) and SQLite FTS5 tables (`BM25`).
 
-### `topology load` — Load a saved topology
-```
-python maccre.py topology load --name "<Name>" --project <TargetProject> [--yes]
-```
-Overwrites `topology.csv` and `agent_roster.csv` in the target project with the named saved topology.
+### 2. Hybrid Search Usage & Research Orchestration
+Call `execute_hybrid_synthesis(query, collection_name, extra_queries)` to execute parallel semantic vector search, SQLite FTS5 BM25 search, and live Brave web queries (`search_web` via pure `urllib`), fused via Reciprocal Rank Fusion (RRF).
 
-### `topology delete` — Remove a saved topology
-```
-python maccre.py topology delete --name "<Name>" [--project <Name>]
-```
+### 3. Dual-Pipeline Media Render Executor
+Construct a Director JSON manifest and invoke `execute_render_pipeline()`:
+- **TTS Audio**: Voice profiles map to `generateContent` Gemini REST calls, saving WAV files to `05_Rendered_Media/audio/`.
+- **Imagen 3 Graphics**: Generates image batches in `05_Rendered_Media/images/` with automatic API failover (`imagen-3.0-generate-001` -> `imagen-3.0-generate-002`).
+- **FFmpeg Stitcher**: Builds slide concat manifests and executes `ffmpeg.exe` to synthesize synchronized `.mp4` video in `05_Rendered_Media/video/`.
+
+### 4. Excel Workbook Intake & Materialization Pipeline
+Operators can define complete swarms in `MACCRE_Swarm_Request.xlsx`. Call `check_workbook_completeness()` to run pre-flight section readiness scoring and token cost estimation, then call `materialise_from_sheet()` to generate `agent_roster.json` and `topology.json`.
 
 ---
 
-### `audit` — Inspect tool audit ledgers
-```
-python maccre.py audit <ProjectName> [--job <job_id>] [--node <NODE>] [--tail <N>]
-```
-Reads forensic tool-call sidecars from `03_Agent_Ledgers/`. Every tool invocation in a swarm run is logged verbatim here.
+## Part VI — State, Security & Sovereignty Operations
 
-```bash
-python maccre.py audit NewsNexus                        # all audits for project
-python maccre.py audit NewsNexus --node OSINT --tail 80 # last 80 lines of OSINT audits
-python maccre.py audit NewsNexus --job job_a1b2c3d4     # specific job
-```
+### 1. Step-by-Step 3-Tier Access Control & PIN Elevation
+- **Tier 1 (Read-Only Baseline)**: Default zero-prompt read access for all queries.
+- **Tier 2 (Salted SHA-256 PIN Elevation)**: Prompts operator for security PIN on non-sandboxed file modifications, verifying input via salted SHA-256 hashes.
+- **Tier 3 (MCP Token Bypass)**: Headless FastMCP agents (`maccre_mcp.py`) pass `MACCRE_ELEVATION_TOKEN` via `activate_mcp_bypass()`.
 
----
+### 2. Archive Trash Protocol (`trash_file()`)
+File deletions invoke `access_control.trash_file(path)`, prepending `%Y%m%dT%H%M%SZ__` timestamp prefixes and moving files to `_archive/trash/` with audit logging in `system_logs.db`.
 
-### `brief` — Session context brief
-```
-python maccre.py brief [--project <Name>]
-```
-Prints a formatted brief: git log, 7-day cost, Sentinel health, recent sessions.
+### 3. Omni CLI Command Reference
+- `omni run <script_path>` — Clears zombie processes, resolves active Python 3.11+ interpreter, and cleanly executes script.
+- `omni qa [path] [--smart]` — Runs native Ruff linter and Pyright static type checker across codebase.
+- `omni build [script_path]` — Purges temporary build caches, executes QA suite, and compiles single-file executable binaries via PyInstaller.
+- `omni clean [path]` — Eradicates `__pycache__` directories, SQLite WAL/SHM artifacts, temporary files, and zombie worker threads.
 
 ---
 
-### `status` — Queue status
-```
-python maccre.py status
-```
-Reads the SQLite task queue directly and prints the last 15 job rows with current node, lock status, and actual cost.
+## Part VII — Hardware & The Edge
 
----
-
-### `canonize` — Promote session to project memory
-```
-python maccre.py canonize <ProjectName> <session_id>
-```
-Exports L1 thoughts from the session and merges session artifacts into the project's long-term knowledge store.
-
----
-
-### `intercept` — Hot-mic priority override
-```
-python maccre.py intercept --session <session_id> --message "<instruction>"
-```
-Injects a live priority instruction into a running swarm session. The worker picks it up on the next polling cycle.
-
----
-
-### `logs clear` — Purge session logs
-```
-python maccre.py logs clear <ProjectName> [--session <id>|all] [--type op|bug|all]
-```
-
----
-
-### `sessions list / kill` — Process registry
-```
-python maccre.py sessions list   # show active swarm PIDs
-python maccre.py sessions kill   # SIGTERM all registered swarm processes
-```
-
----
-
-### `smoke` — Pre-flight smoke test
-```
-python maccre.py smoke
-```
-Runs the pre-flight smoke test standalone. Exits 0 on pass, 1 on fail.
-
----
-
-### `pattern submit / list / poll` — Swarm patterns
-```
-python maccre.py pattern list
-python maccre.py pattern submit --name <pattern> --payload "<text>" [--project <Name>]
-python maccre.py pattern poll --job-id <id>
-```
-Fires a named pattern topology (e.g. `research_sweep`, `code_review`, `simulation_swarm`) into an isolated silo and polls for the HUMAN_GATE result.
-
----
-
-### `ignite` — Raw queue injection
-```
-python maccre.py ignite "<payload_path>" [--node <NODE>]
-```
-Low-level: injects a payload path directly into the swarm queue at a given node. Used internally; prefer `run` for operator use.
-
----
-
-## Part III — Global Workbook Sheet Reference
-
-### `PROJECT_DEFINITION`
-| Field | Required | Notes |
-|---|---|---|
-| PROJECT_NAME | ✅ | Must match an existing silo or a new name will be auto-provisioned |
-| DESCRIPTION | — | Free text, used in session records |
-| SESSION_LABEL | — | Tag appended to the session ID (e.g. `chapter_2_outline`) |
-| SAVE_TO_LIBRARY | — | TRUE = snapshot agents + topology to library on successful fire |
-| LINKED_PROJECTS | — | Comma-separated project names for Synaptic Bridge memory federation |
-
----
-
-### `AGENTS`
-Each row defines one agent. Fill as many rows as needed.
-
-| Column | Required | Notes |
-|---|---|---|
-| AGENT_NAME | ✅ | Unique identifier. Used in TOPOLOGY's AGENT_NAME column |
-| MODEL | ✅ | Select from dropdown (all 55 registered models) |
-| ROLE | — | Short role label (e.g. `Researcher`, `Critic`) |
-| PERSONA | ✅ | Full system prompt. This is the agent's identity and instructions |
-| TEMPERATURE | — | 0.0–2.0. Default 1.0 for generators, 0.1 for critics/extractors |
-| TOOLS | — | Pipe-separated tool names: `google_search\|write_file\|read_file` |
-| TOP_P / TOP_K | — | Sampling parameters |
-| MAX_OUTPUT_TOKENS | — | Cap agent response length |
-| THINKING_BUDGET | — | Token budget for internal reasoning (Flash Thinking models) |
-| SEARCH_GROUNDING | — | TRUE = enable Google Search grounding (Gemini feature) |
-| RESPONSE_FORMAT | — | `markdown`, `json`, `text` |
-| SAFETY_LEVEL | — | `standard`, `strict`, `permissive` |
-| COMPUTE_TIER | — | `cloud`, `edge`, `local` |
-
-**Agent Persona Patterns:**
-
-```
-# Generator (creative/research) — high temperature
-You are [NAME], a [role]. Your sole objective is [specific goal].
-Write in [style]. Do not hedge. Do not summarise what you are doing—just do it.
-Output format: [markdown/json/structured].
-
-# Critic/Extractor — low temperature, structured output
-You are [NAME], a rigorous [role]. Your task is to extract [specific data]
-from the input and return it as structured JSON matching this schema: {...}.
-Never invent data. If a field is absent, return null.
-
-# Synthesiser — medium temperature
-You are [NAME]. You receive multiple upstream agent outputs and synthesise
-them into a single coherent [deliverable]. Prioritise [criteria].
-Resolve conflicts by [rule]. Max output: [N] words.
-```
-
----
-
-### `TOPOLOGY`
-Each row is a node in the pipeline. Rows execute in the order they are routed (via NEXT_NODE), not necessarily top-to-bottom.
-
-| Column | Required | Notes |
-|---|---|---|
-| NODE_ID | ✅ | Unique string. Convention: `SCREAMING_SNAKE` (e.g. `OSINT_GOOGLE`) |
-| AGENT_NAME | ✅ | Must match an AGENT_NAME from the AGENTS sheet |
-| NEXT_NODE | ✅ | NODE_ID of the next node, or `DONE` / `FAILED` to terminate |
-| MODEL_OVERRIDE | — | Override the agent's default model for this node only |
-| TEMPERATURE | — | Override the agent's default temperature for this node |
-| MAX_RECURSION | — | Max times this node may re-execute (default 3) |
-| INSTRUCTION_OVERRIDE | — | Append extra instructions to the agent's persona for this node |
-
-**Routing keywords:**
-- `DONE` — normal pipeline termination
-- `FAILED` — error termination path
-- Any valid NODE_ID — continues the pipeline
-
-**Node Combination Recipes:**
-
-```
-# Linear pipeline (A → B → C)
-NODE_A  │ AGENT_A │ NODE_B
-NODE_B  │ AGENT_B │ NODE_C
-NODE_C  │ AGENT_C │ DONE
-
-# Fan-out to parallel paths (use WAIT_FOR to re-merge)
-FORK    │ COORDINATOR │ PATH_A,PATH_B   ← agent routes dynamically
-PATH_A  │ RESEARCHER_A │ MERGER
-PATH_B  │ RESEARCHER_B │ MERGER
-MERGER  │ SYNTHESISER  │ DONE           ← Wait_For: PATH_A,PATH_B
-
-# Retry / self-correction loop
-WRITER  │ AGENT  │ CRITIC
-CRITIC  │ CRITIC │ DONE (if approved) or WRITER (if revision needed)
-# Critic's INSTRUCTION_OVERRIDE: "If quality >= 8/10 output ROUTE:DONE, else ROUTE:WRITER"
-
-# Research → Synthesis → Output
-OSINT_GOOGLE  │ RESEARCHER │ OSINT_BRAVE
-OSINT_BRAVE   │ RESEARCHER │ SYNTHESISER
-SYNTHESISER   │ SYNTHESISER│ WRITER
-WRITER        │ WRITER     │ DONE
-```
-
-> **Critical rule:** Every NEXT_NODE value must be a NODE_ID that exists in the topology, or one of the terminal keywords `DONE` / `FAILED`. The pre-flight topology validator will catch broken links before the swarm fires.
-
----
-
-### `SWARM_REQUEST`
-The per-run launch parameters. Filled once per fire.
-
-| Column | Required | Notes |
-|---|---|---|
-| PROJECT_NAME | ✅ | Pre-filled from `--project` flag. Must match a silo |
-| DESCRIPTION | — | Human note for this run |
-| COMPUTE_TIER | — | `cloud` (default), `edge`, `local` |
-| PAYLOAD_TEXT | ✅* | Inline text payload. Use this OR PAYLOAD_PATH |
-| PAYLOAD_PATH | ✅* | Absolute or relative path to a `.md` file. Use this OR PAYLOAD_TEXT |
-| START_NODE | ✅ | Pre-filled from first topology node. Change to restart from mid-pipeline |
-| OUTPUT_FOLDER | — | Override the default output directory |
-| NOTIFY_WEBHOOK | — | POST result summary to this URL on completion |
-
-*At least one of PAYLOAD_TEXT or PAYLOAD_PATH is required.
-
----
-
-### `SESSION_CONFIG`
-Lifecycle hooks for the session. Only meaningful when using `launch` (not `workbook fire`).
-
-| Setting | Values | Effect |
-|---|---|---|
-| PROJECT_NAME | text | Must match the project silo |
-| SESSION_LABEL | text | Tag appended to session ID |
-| INGEST_BEFORE_RUN | TRUE/FALSE | Vectorise `01_Raw_Source` before swarm |
-| INGEST_AFTER_RUN | TRUE/FALSE | Vectorise `04_Code_Artifacts` after swarm |
-| CANONIZE_AFTER_RUN | TRUE/FALSE | Promote session memory to project knowledge |
-| OUTPUT_FORMATS | `md,txt,json` | Comma-separated list of output formats |
-
----
-
-### `EXECUTION_PLAN`
-**Read-only during operation.** Automatically stamped by `workbook refresh` with live status. Do not edit manually.
-
-| Status | Colour | Meaning |
-|---|---|---|
-| READY | 🟩 Green | All required fields present, section will execute |
-| PARTIAL | 🟨 Amber | Optional fields missing but can still run (e.g. no payload yet) |
-| INCOMPLETE | 🟥 Red | Required fields missing — swarm will not fire |
-
-The NOTES column shows the first diagnostic hint (e.g. `No payload (PAYLOAD_TEXT or PAYLOAD_PATH) — swarm will not run`).
-
----
-
-### `PIPELINE_CONFIG`
-Advanced key/value runtime settings. Rarely needed for standard operation.
-
----
-
-### `VAULT_KEYS`
-Reference table for credential names. These are read by the engine at runtime.
-
-| KEY_NAME | VAULT_REF | Notes |
-|---|---|---|
-| GEMINI_API_KEY | MACCRE_Sovereign | Required for all cloud inference |
-| BRAVE_SEARCH_API_KEY | BRAVE_SEARCH_API_KEY | Required for OSINT_BRAVE web search |
-| DRIVE_CREDS | MACCRE_Drive | Google Drive service-account credentials |
-
----
-
-### `SESSION_LOG`
-**Read-only.** Populated by `workbook refresh` with the last N completed sessions: session ID, project, cost, timestamp, status.
-
----
-
-## Part IV — The Swarm Watcher
-
-When any swarm fires via the CLI, a **Swarm Watcher** console window opens automatically showing:
-
-```
-◈ MACCRE SWARM WATCHER  │  job: job_a1b2c3d4  │  project: NewsNexus  │  elapsed: 00:02:33
-─────────────────────────────────────────────────────────────────────────────────────────
-◈ THOUGHTS & ERRORS              │  ◈ RESPONSES & EVENTS
-─────────────────────────────────┼──────────────────────────────────────────────────────
-[22:01:15] [OSINT] reasoning...  │  [22:01:58] [OSINT] TOOL_FIRED: google_search
-[22:01:45] [ERROR] rate limit    │  [22:01:59] [OSINT] NODE_ROUTED: OSINT → SYNTHESISER
-─────────────────────────────────────────────────────────────────────────────────────────
-TOPOLOGY:  ✓OSINT_GOOGLE ──► ✓OSINT_BRAVE ──► ▶SYNTHESISER ──► ○DONE
- Node 3/4  │  $0.0023 spent  │  status: pending  │  [Q] detach  [↑/↓] scroll thoughts
-```
-
-**Keys:**
-- `↑ / ↓` — scroll the THOUGHTS panel
-- `← / →` — scroll the RESPONSES panel  
-- `Q` or `ESC` — detach (watcher closes, swarm continues in background)
-
----
-
-## Part V — Failure & Recovery
-
-### Failure-to-Launch Log
-Any exception during `ignite_swarm()` writes a JSON record to:
-```
-__DATACENTER/03_Agent_Ledgers/launch_failures.jsonl
-```
-Each record contains: `timestamp`, `job_id`, `payload_path`, `starting_node`, `error` (with full Python traceback).
-
-### Mid-Pipeline Recovery
-If a swarm crashes mid-run, restart from the failed node:
-```bash
-python maccre.py launch <Project> --from-node <FAILED_NODE> --yes
-```
-This injects a new queue row at the specified node and drains the queue, skipping all upstream nodes.
-
-### Stale WAL Locks
-If a swarm crashes leaving SQLite locked:
-```bash
-python maccre.py sessions list   # identify zombie processes
-python maccre.py sessions kill   # SIGTERM all registered swarm PIDs
-omni clean .                     # purge cache and zombie processes
-```
-
-### Topology Validation Errors
-The pre-flight validator runs automatically before every `launch` and `run`. If it fails:
-```
-[LAUNCH] ✗ Pre-flight FAILED — fix the errors above before re-running.
-  (Set MACCRE_SKIP_VALIDATE=1 to bypass for dynamic topologies.)
-```
-Fix the broken NEXT_NODE references in the TOPOLOGY sheet, refresh the workbook, and re-fire. Set `MACCRE_SKIP_VALIDATE=1` only for topologies with agent-driven dynamic routing.
-
----
-
-## Part VI — Standard Operator Workflows
-
-### Workflow A: New Project from Scratch
-```bash
-# 1. Provision the silo
-python maccre.py new MyProject
-
-# 2. Drop source files
-# Copy research docs, briefs, etc. into:
-# __DATACENTER/MyProject/01_Raw_Source/
-
-# 3. Vectorise sources
-python maccre.py ingest MyProject
-
-# 4. Generate workbook with live data
-python maccre.py workbook refresh --project MyProject
-
-# 5. Fill the workbook:
-#    - AGENTS: define personas and tools
-#    - TOPOLOGY: wire the pipeline
-#    - SWARM_REQUEST: paste your payload or set PAYLOAD_PATH
-#    - Check EXECUTION_PLAN — all sections should be READY
-
-# 6. Fire (close the workbook in Excel first)
-python maccre.py workbook fire --project MyProject
-```
-
-### Workflow B: Reload a Saved Topology
-```bash
-# List what's in the library
-python maccre.py topology list
-
-# Load a proven topology into your project
-python maccre.py topology load --name "research_sweep_v3" --project MyProject --yes
-
-# Refresh the workbook to pull the loaded topology into the sheets
-python maccre.py workbook refresh --project MyProject
-```
-
-### Workflow C: Quick Fire Without a Workbook
-```bash
-python maccre.py run MyProject "Analyse the competitive landscape for MACCRE" --node OSINT --yes
-```
-
-### Workflow D: Save a Successful Topology to Library
-```bash
-# After a successful run, snapshot it for reuse
-python maccre.py topology save --name "osint_synthesis_v1" --project MyProject \
-  --description "Two-node OSINT fan-out with Gemini synthesis"
-```
-
-### Workflow E: Checkpoint Restart
-```bash
-# Swarm crashed at SYNTHESISER — restart just that node forward
-python maccre.py launch MyProject --from-node SYNTHESISER --yes
-```
-
----
-
-## Part VII — Model Selection Guide
-
-| Tier | Models | Best For |
-|---|---|---|
-| **Flash** | `gemini-2.5-flash`, `gemini-3.1-flash` | High-volume nodes, tool-calling, fast iteration |
-| **Pro** | `gemini-2.5-pro`, `gemini-3.1-pro` | Complex reasoning, synthesis, long-context |
-| **Thinking** | `gemini-2.5-flash-thinking` | Critic nodes, structured extraction, verification |
-| **Edge/Local** | Gemma 3 variants via Ollama | Tagging, hot-mic detection, cost-sensitive nodes |
-
-**Diamond Loop rule:**
-- Generator nodes (creative/research) → `temperature=1.0`, Flash or Pro
-- Critic/Extractor nodes → `temperature=0.1`, Thinking models preferred
-
----
-
-## Quick Reference Card
-
-```
-PROVISION     python maccre.py new <Project>
-INGEST        python maccre.py ingest <Project>
-REFRESH WB    python maccre.py workbook refresh --project <Project>
-FIRE WB       python maccre.py workbook fire
-QUICK FIRE    python maccre.py run <Project> "<payload>" --node <NODE> --yes
-RESUME        python maccre.py launch <Project> --from-node <NODE> --yes
-STATUS        python maccre.py status
-AUDIT         python maccre.py audit <Project> [--node <NODE>] [--tail 80]
-BRIEF         python maccre.py brief --project <Project>
-SAVE TOPO     python maccre.py topology save --name "<Name>" --project <Project>
-LOAD TOPO     python maccre.py topology load --name "<Name>" --project <Project> --yes
-KILL ZOMBIES  python maccre.py sessions kill
-CANONIZE      python maccre.py canonize <Project> <session_id>
-HOT-MIC       python maccre.py intercept --session <id> --message "<instruction>"
-```
+### 1. The S25 Edge Client & Local Models
+MACCREv2 abstracts local vs. remote execution seamlessly. `environment_probe.py` probes host system hardware (VRAM, CPU cores, active Ollama services). While cloud Gemini REST APIs handle heavy context windows, the engine is fully primed for air-gapped local execution (`gemma3:9b`, `llama.cpp`) to run 100% off-grid as hardware scales.

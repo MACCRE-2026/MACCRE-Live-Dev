@@ -1,0 +1,13 @@
+# Continuous Subsystem Task & Change History Ledger: State & Sovereignty Oracle
+
+**Specialist Domain:** `path_resolver.py`, `access_control.py`, `telemetry_db.py`, `key_ingestor.py`, `universal_vault.py`, `windows_vault.py`, `omni`  
+
+---
+
+## Task & Change History Log
+
+- **2026-07-24 (Initialization)**: Specialist Oracle profile established. Initial analysis artifacts compiled in `Analysis\Wave1\13_state_sovereignty_ledger.md` and `Analysis\Wave2\flowchart_05_state_sovereignty.md`. 5-tier datacenter silos, 3-tier access control elevation, DPAPI/Fernet key vaults, and omni CI/CD gatekeeper pipeline verified.
+- **2026-07-25 (Documentation Audit & Master Rewrite)**: Completed Domain 5 documentation audit and drafted State, Security & Sovereignty sections in `Analysis\Wave3\draft_state_sovereignty_docs.md`. Synthesized findings into production [README.md](file:///b:/EXO_GANS/README.md) and [MACCRE_Operator_Manual.md](file:///b:/EXO_GANS/MACCRE_Operator_Manual.md). Documented Law Rev 19.0 physical laws, 5-tier datacenter silos, 3-tier access control PIN elevation, archive trash protocol, 4-silo SQLite WAL telemetry matrix, and omni CLI command reference.
+- **2026-07-25 (Phase 9 State & Sovereignty Analysis)**: Authored Domain 5 contribution for Phase 9 of `Era3_architectural_roadmap.md` in `B:\EXO_GANS\.oracle_artifacts\draft_era3_phase9_state_sovereignty.md`. Formulated specs for `fork_datacenter()`, 1:1 structural mapping matrix between Antigravity desktop architecture and MACCRE datacenter architecture, sandboxed candidate state testing, and Omni CI/CD integration.
+- **2026-07-25 (Release Candidate Audit)**: Conducted full domain audit of release candidate `B:\MACCRE_Release`. Verified 1:1 documentation parity for `README.md` and `MACCRE_Operator_Manual.md`, 5-tier datacenter seeding (`__DATACENTER/GLOBAL`), `path_resolver.py` root anchoring, 3-tier access control elevation, DPAPI/Fernet key vaults, and CPython RAM key zeroing (`ctypes.memset`). Saved audit report to `B:\EXO_GANS\.oracle_artifacts\audit_release_state_sovereignty.md`.
+- **2026-07-25 (Substack Series Part 5 Drafted)**: Authored Part 5 of the Substack Series ("Part 5: The Fortress — 5-Tier Datacenter Silos, 3-Tier Elevation, and Living Local Code Evolution") in `B:\EXO_GANS\.oracle_artifacts\2026-07-25_substack_part5_state_sovereignty.md`. Detailed the 5-tier datacenter silos (`01_Raw_Source` to `05_Rendered_Media`), dynamic path resolution (`get_maccre_root()`), 3-tier security PIN elevation (`access_control.py`), non-destructive archive trash protocol (`trash_file()`), and Omni CI/CD live local code evolution. Updated task ledger accordingly.

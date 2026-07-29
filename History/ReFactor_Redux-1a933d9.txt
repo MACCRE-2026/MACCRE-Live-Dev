@@ -1,0 +1,38 @@
+# ReFactor Redux: The Thinking Level Awakening
+Commit ID: 1a933d9
+Date: 2026-07-03
+
+## Executive Summary
+This document serves as a historical record and architectural justification for the "Thinking Level" refactor undertaken on Sovereign Edge (MACCREv2 / EXO_GANS). It details the origin of the discrepancy between expected agent behavior and actual system output, tracing the root cause back to legacy architectural assumptions based on older generation API capabilities.
+
+## The Origin of the Discrepancy
+The issue began when the user observed that the "Thinking Level" dropdown in the Agent Studio Chat modal was set to "None", yet the agents (such as OSINT_Analyst) were still producing detailed `<thought>` blocks in their outputs. 
+
+Conversely, the user also noted that during flow sessions and chat sessions, the agent's internal reasoning (which was vividly present during AI Studio calibrations) was often missing or lacking in depth when run natively through the Sovereign Edge framework, despite seemingly identical System Instructions.
+
+## The Dual-Nature of AI Reasoning
+The confusion stemmed from the conflation of two distinct mechanical processes:
+
+1. **Prompt-Based Reasoning (Chain-of-Thought):** 
+   This is the legacy method of forcing an LLM to think. By appending instructions like "Always use `<thought>` blocks before answering," the model is forced to output its reasoning as standard text. This is what Sovereign Edge's `swarm_worker` was designed to parse and log. 
+
+2. **API-Level Reasoning:**
+   This is the next-generation server-side reinforcement learning process where the model conducts hidden tree-searches before returning a response. This capability requires a specific API payload (`thinkingConfig`) to activate and returns its thoughts in a dedicated, separated payload (e.g., `parts[0].thought`).
+
+## Legacy Architecture Limitations
+The initial system architecture was designed around the 2024/2025 AI landscape capabilities (specifically the Gemini 1.5 Pro and Gemini 2.0 Flash Thinking Experimental eras). In that era, API-level thinking was a rare, experimental feature locked to a single model. 
+
+Due to these historical constraints, the `UniversalRouter` logic was originally written to bypass the `thinking_config` parameter, relying instead on Prompt-Based Reasoning as the primary path forward for the majority of models.
+
+## Architectural Update
+A recent system review using current Sovereign Edge API credentials revealed that in the 2026 ecosystem, virtually all current models (including `gemini-3.1-pro-preview`, `gemini-3.5-flash`, and `gemini-omni-flash-preview`) natively support API-level reasoning and return `'thinking': True` as a core capability.
+
+By continuing to use legacy routing logic, the system was effectively limiting next-generation models, forcing reliance on Prompt-Based Reasoning and failing to fully utilize the performance improvements of native API thinking.
+
+## The Refactor Mandate
+To rectify this, the following architectural overhaul is mandated:
+1. **Payload Injection:** `gemini_client.py` must be updated to inject the `thinkingConfig` payload into the `generationConfig` when a user selects a Thinking Level (Low/High) in the UI.
+2. **Tuple Restructuring:** `UniversalRouter.generate()` must be aggressively refactored across the entire codebase to return a 3-item tuple: `(output_text, cost, api_thought)`. 
+3. **Telemetry Alignment:** `swarm_worker.py` and `live_session_manager.py` must be updated to intercept this new `api_thought` variable and actively inject it into the `.log` files alongside the existing prompt-based `<thought>` blocks, providing a unified, hybrid ledger of both native and explicit agent reasoning.
+
+This refactor ensures Sovereign Edge is fully compatible with the true capabilities of the Gemini 3.x family and future reasoning models.
