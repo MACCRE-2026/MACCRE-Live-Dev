@@ -176,6 +176,7 @@ class FlowRunner:
             if name.upper().startswith("CTRL_SCATTER") and scatter_agents:
                 agent_overrides: dict[str, dict[str, Any]] = cfg.get("scatter_agent_overrides", {})
                 scatter_mode: str = cfg.get("scatter_mode", "full_copy")
+                tether_id: str = str(cfg.get("tether_id", f"scatter_{id(scatter_agents) % 9999:04d}"))
                 topo_rows: list[dict[str, Any]] = []
 
                 # 1. CTRL_SCATTER entry node → fans out to all agents
@@ -188,6 +189,7 @@ class FlowRunner:
                     "Instruction_Override": f"scatter_mode={scatter_mode}",
                     "Wait_For": "none",
                     "Failure_Target": "FAILED",
+                    "Tether_ID": tether_id,
                 })
 
                 # 2. One row per slotted agent with profile overrides
@@ -203,6 +205,7 @@ class FlowRunner:
                         "Wait_For": "none",
                         "Failure_Target": "FAILED",
                         "Tools_Allowed": str(ovr.get("tools_allowed", "")),
+                        "Tether_ID": tether_id,
                     })
 
                 # 3. CTRL_MERGE fan-in — waits for all agents
@@ -215,6 +218,7 @@ class FlowRunner:
                     "Instruction_Override": "",
                     "Wait_For": "|".join(scatter_agents),
                     "Failure_Target": "FAILED",
+                    "Tether_ID": tether_id,
                 })
 
                 logger.info(
@@ -286,11 +290,9 @@ class FlowRunner:
             # ── (a) MacroNode existence ───────────────────────────────────────
             if macro_name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
                 continue  # CTRL_REVIEW is a hardcoded intercept node, bypass validation
-            if macro_name.strip().upper().startswith("CTRL_"):
-                continue  # CTRL_ nodes are auto-wrapped at runtime, skip registry check
 
             try:
-                macro_def = self._get_macronode(macro_name)
+                macro_def = self._get_macronode(macro_name, step_config=getattr(step, "config", {}))
             except KeyError:
                 report.issues.append({
                     'severity': 'ERROR',
@@ -398,7 +400,12 @@ class FlowRunner:
             if node_id:
                 node_id = f"{node_id}_S{step_index}"
             if next_node and next_node.upper() not in ("END", "FAILED"):
-                next_node = f"{next_node}_S{step_index}"
+                parts = [p.strip() for p in next_node.split(",") if p.strip()]
+                hydrated_parts = [
+                    f"{p}_S{step_index}" if p.upper() not in ("END", "FAILED") else p
+                    for p in parts
+                ]
+                next_node = ",".join(hydrated_parts)
             if wait_for and wait_for.lower() not in ("none", ""):
                 parts = []
                 for p in wait_for.replace("|", ",").split(","):
@@ -542,7 +549,7 @@ class FlowRunner:
                     macro_def = {"topology_rows": [{"Node_ID": "CTRL_PAUSE_MANUAL", "Model_Override": "none", "Wait_For": "none", "Next_Node": "END"}]}
                 else:
                     try:
-                        macro_def = self._get_macronode(step.macronode_name)
+                        macro_def = self._get_macronode(step.macronode_name, step_config=getattr(step, "config", {}))
                     except KeyError:
                         logger.error(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
                         return current_payload

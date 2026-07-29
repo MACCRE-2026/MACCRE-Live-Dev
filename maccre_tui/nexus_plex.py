@@ -2198,7 +2198,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
             # Load roster for the dropdown
             try:
                 from maccre_core.agent_library import get_agent_store  # noqa: PLC0415
-                self._all_roster_agents = list(get_agent_store("GLOBAL").get_names())
+                self._all_roster_agents = list(get_agent_store(getattr(self, "active_project", "") or "GLOBAL").get_names())
             except Exception:  # noqa: BLE001
                 self._all_roster_agents = []
             with Horizontal(classes="tether-field"):

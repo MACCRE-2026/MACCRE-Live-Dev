@@ -557,7 +557,7 @@ class UniversalSwarmWorker:
 
         # Build flow_vector: append current node to existing vector (Phase 4.75.7 A5)
         _existing_vector: str = str(task.get("flow_vector", "") or "")
-        flow_vector: str = f"{_existing_vector}:{current_node}" if _existing_vector else current_node
+        flow_vector: str = f"{_existing_vector}>{current_node}" if _existing_vector else current_node
 
         # ── Project-Scoped Job Directory ─────────────────────────────────────
         custom_ledger = os.environ.get("MACCRE_CUSTOM_LEDGER", "")

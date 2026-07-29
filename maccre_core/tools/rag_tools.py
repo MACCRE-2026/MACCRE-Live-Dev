@@ -28,6 +28,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import threading
 from typing import Any
 
 from maccre_core._net.gemini_client import GeminiClient
@@ -39,21 +40,23 @@ from maccre_core.utils.path_resolver import get_datacenter_path
 _log = logging.getLogger(__name__)
 
 _rag_client: GeminiClient | None = None
+_rag_lock = threading.Lock()
 
 
 # ── Embedding ───────────────────────────────────────────────────────────────────
 
 def _get_rag_client() -> GeminiClient:
     global _rag_client
-    if not _rag_client:
-        raw_key = get_provider_credential("MACCRE_Sovereign")
-        if not raw_key:
-            raise ValueError("CRITICAL: Vault returned empty.")
-        clean_key = str(raw_key).strip()
-        if not clean_key.startswith("AIza"):
-            raise ValueError("CRITICAL: Invalid Key.")
-        _rag_client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
-    return _rag_client
+    with _rag_lock:
+        if not _rag_client:
+            raw_key = get_provider_credential("MACCRE_Sovereign")
+            if not raw_key:
+                raise ValueError("CRITICAL: Vault returned empty.")
+            clean_key = str(raw_key).strip()
+            if not clean_key.startswith("AIza"):
+                raise ValueError("CRITICAL: Invalid Key.")
+            _rag_client = GeminiClient(key_provider=lambda: get_provider_credential("MACCRE_Sovereign"))
+        return _rag_client
 
 
 def get_gemini_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:

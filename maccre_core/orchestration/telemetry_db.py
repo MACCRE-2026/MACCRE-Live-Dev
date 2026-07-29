@@ -103,6 +103,8 @@ def init_all_silos() -> None:
         _add_column_if_missing(conn, "system_logs", "model_id",      "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, "system_logs", "input_tokens",  "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "system_logs", "output_tokens", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(conn, "system_logs", "flow_vector",   "TEXT NOT NULL DEFAULT ''")
+        _add_column_if_missing(conn, "system_logs", "tether_id",      "TEXT NOT NULL DEFAULT ''")
 
     # 2. user_interactions
     with _wal_conn(get_db_path("user_interactions.db")) as conn:
