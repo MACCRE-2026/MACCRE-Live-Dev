@@ -1,9 +1,8 @@
 from textual import work, on
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Label, Button, ProgressBar, Static, Input, Select
-import asyncio
 import itertools
 
 from maccre_core.utils.path_resolver import get_maccre_root

@@ -73,8 +73,9 @@ class ModelHealth:
     """Per-model health record with sliding error window."""
 
     WINDOW_SIZE = 20          # last N calls tracked
-    DEGRADED_THRESHOLD = 0.30  # 30% error rate → degraded
+    DEGRADED_THRESHOLD = 0.40  # 40% error rate → degraded (prevents false 429 burst degradation)
     DEAD_THRESHOLD = 1.00      # 100% errors over full window → dead
+    MIN_CALLS_FOR_DEGRADED = 10
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -104,7 +105,10 @@ class ModelHealth:
         was_live    = self.is_live
 
         self.is_live = self.error_rate < self.DEAD_THRESHOLD
-        self.is_degraded = self.error_rate >= self.DEGRADED_THRESHOLD
+        self.is_degraded = (
+            len(self._window) >= self.MIN_CALLS_FOR_DEGRADED
+            and self.error_rate >= self.DEGRADED_THRESHOLD
+        )
 
         if was_live and not self.is_live:
             return MODEL_DIED

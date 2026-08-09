@@ -1,12 +1,11 @@
 import sqlite3
 import logging
 from typing import Optional, Dict, Any, List
-from pathlib import Path
 from datetime import datetime, timezone
 import contextlib
 
 from maccre_core.finops.ledger_interface import AbstractFinOpsLedger
-from maccre_core.utils.path_resolver import get_maccre_root, get_datacenter_path
+from maccre_core.utils.path_resolver import get_datacenter_path
 
 logger = logging.getLogger("maccre_core.finops")
 

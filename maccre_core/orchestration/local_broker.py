@@ -397,6 +397,7 @@ class LocalMessageBroker(MessageBroker):
         status: str = "completed",
         flow_line_id: str = "",
         flow_vector: str = "",
+        tether_id: str = "",
     ) -> None:
         """
         Mark the current task completed and enqueue successor nodes.
@@ -407,6 +408,8 @@ class LocalMessageBroker(MessageBroker):
 
         ``flow_line_id`` tracks scatter fan-out lineage so downstream nodes can
         identify which branch of a parallel scatter they belong to.
+
+        ``tether_id`` isolates fan-in artifact gathering to matching scatter scopes.
 
         Special targets:
           MANUAL  — pauses the task in 'awaiting_orders'; the GUI calls
@@ -462,9 +465,9 @@ class LocalMessageBroker(MessageBroker):
                         # loop_iteration_count so the recursion limit is not falsely tripped.
                         if existing_lock == "open":
                             conn.execute(
-                                "UPDATE task_queue SET payload_path=?, source_payload_path=? "
+                                "UPDATE task_queue SET payload_path=?, source_payload_path=?, tether_id=? "
                                 "WHERE job_id=? AND current_node=?",
-                                (new_payload_path, source_payload_path, job_id, node),
+                                (new_payload_path, source_payload_path, tether_id, job_id, node),
                             )
                             continue
 
@@ -480,9 +483,9 @@ class LocalMessageBroker(MessageBroker):
                             )
                             conn.execute(
                                 "INSERT OR IGNORE INTO task_queue "
-                                "(job_id, payload_path, source_payload_path, current_node) "
-                                "VALUES (?, ?, ?, ?)",
-                                (job_id, new_payload_path, source_payload_path, "FAILED"),
+                                "(job_id, payload_path, source_payload_path, current_node, tether_id) "
+                                "VALUES (?, ?, ?, ?, ?)",
+                                (job_id, new_payload_path, source_payload_path, "FAILED", tether_id),
                             )
                             continue
 
@@ -490,15 +493,16 @@ class LocalMessageBroker(MessageBroker):
                     conn.execute(
                         "INSERT INTO task_queue "
                         "(job_id, payload_path, source_payload_path, current_node, "
-                        "loop_iteration_count, flow_line_id, flow_vector) "
-                        "VALUES (?, ?, ?, ?, 0, ?, ?) "
+                        "loop_iteration_count, flow_line_id, flow_vector, tether_id) "
+                        "VALUES (?, ?, ?, ?, 0, ?, ?, ?) "
                         "ON CONFLICT(job_id, current_node) DO UPDATE SET "
                         "lock_status='open', "
                         "payload_path=excluded.payload_path, "
                         "flow_line_id=excluded.flow_line_id, "
                         "flow_vector=excluded.flow_vector, "
+                        "tether_id=excluded.tether_id, "
                         "loop_iteration_count=task_queue.loop_iteration_count + 1",
-                        (job_id, new_payload_path, source_payload_path, node, flow_line_id, flow_vector),
+                        (job_id, new_payload_path, source_payload_path, node, flow_line_id, flow_vector, tether_id),
                     )
         conn.commit()
 
@@ -519,6 +523,19 @@ class LocalMessageBroker(MessageBroker):
             (row_id,),
         )
         conn.commit()
+
+    def reclaim_zombie_locks(self, timeout_seconds: float = 15.0) -> int:
+        """Reclaim locked tasks whose workers died or timed out without releasing the lock."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE task_queue SET lock_status = 'open', locked_by = NULL "
+            "WHERE lock_status = 'locked' AND "
+            "((julianday('now') - julianday(created_at)) * 86400.0) > ?",
+            (timeout_seconds,),
+        )
+        reclaimed_count = cursor.rowcount
+        conn.commit()
+        return reclaimed_count
 
     def pause_task(self, row_id: int) -> None:
         """Set a task to 'paused' state — worker will skip it until manual resume."""

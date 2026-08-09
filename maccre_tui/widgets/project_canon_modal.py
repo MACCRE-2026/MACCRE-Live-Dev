@@ -1,10 +1,9 @@
 from textual.screen import ModalScreen
 from textual.app import ComposeResult
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Label, Select, Input, Button, RichLog, OptionList
+from textual.widgets import Label, Select, Button, RichLog, OptionList
 from textual.widgets.option_list import Option
 from textual import on
-from typing import List, Dict, Any
 
 from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
 from maccre_core.utils.path_resolver import get_datacenter_path

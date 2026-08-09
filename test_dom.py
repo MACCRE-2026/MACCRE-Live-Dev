@@ -9,8 +9,6 @@ class TestApp(App):
     async def on_mount(self):
         panel = self.query_one(MacroNodeBuilderPanel)
         panel.all_agents = ["Agent_A", "Agent_B"]
-        # Trigger the type selection
-        from maccre_core.macronode_registry import TEMPLATE_CATALOG
         from textual.widgets import Select
         sel = panel.query_one("#me-type-select", Select)
         await asyncio.sleep(0.5)

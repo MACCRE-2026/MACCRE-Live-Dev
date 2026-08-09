@@ -180,7 +180,7 @@ class CognitiveMemoryEngine:
                 raw = raw[4:]
 
         extraction: dict[str, object] = json.loads(raw)
-        triplets = cast(List[object], extraction.get("triplets", []))
+        triplets = cast(List[dict[str, object]], extraction.get("triplets", []))
 
         if not triplets:
             return

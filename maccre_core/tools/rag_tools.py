@@ -138,15 +138,6 @@ def ingest_document(
             metadata=safe_meta,
         ))
 
-        # Dual-write to memory_pins legacy table (non-fatal)
-        try:
-            from maccre_core.orchestration.thought_pins import upsert_pin  # noqa: PLC0415
-            import uuid
-            tp_id = f"tp_{uuid.uuid4().hex[:8]}"
-            upsert_pin(str(project), tp_id, text, vector)
-        except Exception as vec_e:  # noqa: BLE001
-            _log.warning("[DUAL-WRITE FAULT] memory_pins upsert: %s", vec_e)
-
         return f"[RAG] Ingested '{doc_id}' into '{collection_name}'."
     except Exception as e:  # noqa: BLE001
         return f"[Memory Engine] Ingest failed: {e!s}"

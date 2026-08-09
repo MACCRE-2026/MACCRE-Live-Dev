@@ -36,7 +36,7 @@ def get_environment_matrix() -> dict[str, bool]:
         with urllib.request.urlopen(req, timeout=1.0) as r:
             if r.status == 200:
                 matrix["ollama_active"] = True
-    except (urllib.error.URLError, ConnectionError):
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
         matrix["ollama_active"] = False
         
     # 2. Hardware heuristic (rough gauge of logical processors)

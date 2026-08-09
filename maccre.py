@@ -49,8 +49,6 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
 
 from maccre_core.logger import logger  # noqa: E402
 from maccre_core.orchestration.local_broker import LocalMessageBroker  # noqa: E402
-from maccre_core.tools.rag_tools import merge_session_to_project  # noqa: E402
-from maccre_core.tools.telemetry_tools import export_and_purge_thoughts  # noqa: E402
 from maccre_core.utils.path_resolver import get_datacenter_path  # noqa: E402
 
 _DB_PATH = str(get_datacenter_path("swarm_queue.db"))

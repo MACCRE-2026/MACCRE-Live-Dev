@@ -6,6 +6,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical
 from textual.widgets import Header, Footer, RichLog, Input, RadioSet, RadioButton, Label
 from textual.widgets import Static
+from maccre_core.orchestration.live_session_manager import LiveSessionManager
 
 
 class PhysicsMonitor(Static):
@@ -13,7 +14,7 @@ class PhysicsMonitor(Static):
 
     def update_physics(self, tension: float = 0.0, silence_ms: int = 0) -> None:
         self.update(f"T:{tension:.1f} S:{silence_ms}ms")
-from maccre_core.orchestration.live_session_manager import LiveSessionManager
+
 
 class AgentPane(Vertical):
     def __init__(self, agent_name: str):

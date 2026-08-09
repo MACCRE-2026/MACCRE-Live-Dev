@@ -561,7 +561,7 @@ class UniversalRouter:
             msg_dict = _edge_data.get("choices", [{}])[0].get("message", {})
             if "tool_calls" in msg_dict and msg_dict["tool_calls"]:
                 return (f"[LOCAL TOOL CALL REQUESTED: {json.dumps(msg_dict['tool_calls'])}]", 0.0, "")
-            return (str(msg_dict.get("content", "", "")), 0.0)
+            return (str(msg_dict.get("content", "")), 0.0, "")
 
         # ── Ollama (local air-gap) ─────────────────────────────────────────────
         # Ollama tag format always has a colon: gemma3:4b, llama3.1:8b
@@ -594,7 +594,7 @@ class UniversalRouter:
             msg_dict = _ollama_data.get("message", {})
             if "tool_calls" in msg_dict:
                 return (f"[LOCAL TOOL CALL REQUESTED: {json.dumps(msg_dict['tool_calls'])}]", 0.0, "")
-            return (str(msg_dict.get("content", "", "")), 0.0)
+            return (str(msg_dict.get("content", "")), 0.0, "")
 
         # ── Google AI API-hosted Gemma (gemma-4-31b-it, gemma-3-27b-it …) ──────
         # Dash-format Gemma IDs are served by generativelanguage.googleapis.com
@@ -700,7 +700,7 @@ class AgentRouter:
 
         try:
             # Replaces OmniDaemon logic natively with the Sovereign UniversalRouter
-            raw_output, _cost = self._router.generate(
+            raw_output, _cost, _api_thought = self._router.generate(
                 model_name=effective_model,
                 payload=full_message,
                 system_prompt=_SCHEMA_INSTRUCTION,

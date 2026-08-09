@@ -53,14 +53,17 @@ def _dataclass_to_json_schema(cls: Type[Any]) -> dict[str, Any]:
         elif "bool" in t_name:
             json_type = "boolean"
         elif "list" in t_name:
-            json_type = "array"  # Very simplified for now
+            json_type = "array"
         elif "dict" in t_name:
             json_type = "object"
         else:
             json_type = "string"  # Fallback
         
         desc = field.metadata.get("description", "")
-        properties[field.name] = {"type": json_type, "description": desc}
+        field_schema: dict[str, Any] = {"type": json_type, "description": desc}
+        if json_type == "array":
+            field_schema["items"] = {"type": "string"}
+        properties[field.name] = field_schema
         
         # If it doesn't have a default, it's required
         if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
@@ -76,9 +79,11 @@ def _dataclass_to_json_schema(cls: Type[Any]) -> dict[str, Any]:
 class OmniDaemon:
     """The central inference driver. Uses pure urllib to execute the Strangler Fig routing."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.matrix = get_environment_matrix()
-        self.api_key = get_provider_credential("MACCRE_Sovereign")
+
+    def _get_api_key(self) -> str:
+        return get_provider_credential("MACCRE_Sovereign") or ""
         
     def _route_local(self, prompt: str, schema: Optional[Type[Any]], system_instruction: str, temperature: float) -> str:
         """Route entirely locally to Ollama."""
@@ -139,7 +144,8 @@ class OmniDaemon:
 
     def _route_cloud(self, prompt: str, model_id: str, schema: Optional[Type[Any]], system_instruction: str, temperature: float) -> str:
         """Route to Google Generative Language Engine using the sovereign GeminiClient."""
-        if not self.api_key:
+        api_key = self._get_api_key()
+        if not api_key:
             raise ValueError("No API key available for cloud routing.")
 
         from maccre_core._net.gemini_client import GeminiClient, user_turn  # noqa: PLC0415

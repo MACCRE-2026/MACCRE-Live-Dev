@@ -3,7 +3,6 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, TextArea
-from textual import work
 from maccre_core.orchestration.macro_factory import TEMPLATE_CATALOG
 
 class MacroNodeEditorModal(ModalScreen[dict | None]):

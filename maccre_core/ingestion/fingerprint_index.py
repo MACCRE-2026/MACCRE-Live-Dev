@@ -37,8 +37,7 @@ class FingerprintManager:
         self.index_path = get_datacenter_path(
             "02_Dynamic_Context", 
             "KnowledgeStore", 
-            "ingestion_fingerprints.json", 
-            project_id=self.project_id
+            "ingestion_fingerprints.json"
         )
         self._cache: Dict[str, str] = self._load_index()
 

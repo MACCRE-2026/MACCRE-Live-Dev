@@ -153,7 +153,6 @@ class UniversalSwarmWorker:
         from maccre_core.orchestration.queues import JsonFileQueue
         import threading
         import time
-        import asyncio
         import json
         
         message_bus = JsonFileQueue("live_session_bus")
@@ -197,29 +196,34 @@ class UniversalSwarmWorker:
                 with open(custom_dict_path, "r", encoding="utf-8") as f:
                     chat_profile = json.load(f)
                     agent_config = chat_profile.get(current_node, {})
-                    if agent_config:
+                    if isinstance(agent_config, dict):
                         system_prompt = agent_config.get("system_prompt", system_prompt)
                         model_id = agent_config.get("model", model_id)
                         temperature = float(agent_config.get("temperature", temperature))
                         tools_str = agent_config.get("tools_allowed", tools_str)
-                        if ai_options is not None:
-                            ai_options.update(agent_config.get("ai_studio_options", {}))
+                        if isinstance(ai_options, dict):
+                            ai_options.update(agent_config.get("ai_studio_options") or {})
                         else:
-                            ai_options = agent_config.get("ai_studio_options", {})
+                            ai_options = agent_config.get("ai_studio_options") or {}
+                                
+                    if not isinstance(ai_options, dict):
+                        ai_options = {}
                             
-                        # Inject search tools based on UI toggles
-                        _t_list = [t.strip() for t in tools_str.replace("|", ",").split(",") if t.strip() and t.strip() != "none"]
-                        if ai_options.get("grounding_google_search"):
-                            if "google_search" not in _t_list: _t_list.append("google_search")
-                        elif "google_search" in _t_list:
-                            _t_list.remove("google_search")
+                    # Inject search tools based on UI toggles
+                    _t_list = [t.strip() for t in tools_str.replace("|", ",").split(",") if t.strip() and t.strip() != "none"]
+                    if ai_options.get("grounding_google_search"):
+                        if "google_search" not in _t_list:
+                            _t_list.append("google_search")
+                    elif "google_search" in _t_list:
+                        _t_list.remove("google_search")
                             
-                        if ai_options.get("grounding_brave_search"):
-                            if "search_web" not in _t_list: _t_list.append("search_web")
-                        elif "search_web" in _t_list:
-                            _t_list.remove("search_web")
+                    if ai_options.get("grounding_brave_search"):
+                        if "search_web" not in _t_list:
+                            _t_list.append("search_web")
+                    elif "search_web" in _t_list:
+                        _t_list.remove("search_web")
                             
-                        tools_str = ",".join(_t_list) if _t_list else "none"
+                    tools_str = ",".join(_t_list) if _t_list else "none"
             except Exception as e:
                 logger.error(f"Failed to load chat .dict: {e}")
                 
@@ -266,15 +270,11 @@ class UniversalSwarmWorker:
                     loop_payload = session_history
                     
                     for turn_idx in range(max_tool_turns + 1):
-                        prompt = (
-                            f"{system_prompt}\n\n"
-                            f"CURRENT SESSION HISTORY:\n{loop_payload}\n\n"
-                        )
-                        
                         try:
                             # Run synchronous generation
                             # Since this is an async worker originally, we wrap synchronous router 
                             # Or we just call the router since router IS sync!
+                            ai_opts: dict[str, Any] = ai_options if isinstance(ai_options, dict) else {}
                             raw_response, loop_cost, api_thought = self.router.generate(
                                 model_name=model_id,
                                 payload=loop_payload,
@@ -282,8 +282,8 @@ class UniversalSwarmWorker:
                                 tools_str=tools_str,
                                 temperature=temperature,
                                 expect_multiple_reads=True,
-                                thinking_level=ai_options.get('thinking_level', 'none'),
-                                safety_level=ai_options.get('safety_level', 'BLOCK_NONE')
+                                thinking_level=ai_opts.get('thinking_level', 'none'),
+                                safety_level=ai_opts.get('safety_level', 'BLOCK_NONE')
                             )
                             if api_thought:
                                 write_thought(f"<api_thought>\n{api_thought}\n</api_thought>")
@@ -505,7 +505,7 @@ class UniversalSwarmWorker:
             
         return current_payload, total_cost, tools_str
 
-    def execute_cycle(
+    def execute_cycle(  # type: ignore[reportGeneralTypeIssues]
         self, 
         pause_event: Optional[Any] = None, 
         stop_event: Optional[Any] = None
@@ -622,8 +622,10 @@ class UniversalSwarmWorker:
                     self.broker.pause_task(row_id)
                     sys.stdout = orig_stdout
                     sys.stderr = orig_stderr
-                    dual_out.close()
-                    dual_err.close()
+                    if dual_out is not None:
+                        dual_out.close()
+                    if dual_err is not None:
+                        dual_err.close()
                     return True
 
                 # ── Multi-target fan-out (SCATTER / CONDITIONAL_ROUTE) ────────
@@ -645,6 +647,7 @@ class UniversalSwarmWorker:
                             source_payload_path=source_payload_path,
                             flow_line_id=flow_line_id,
                             flow_vector=flow_vector,
+                            tether_id=tether_id,
                         )
                     logger.info(
                         "[%s] DET fan-out: %d targets on tether=%s",
@@ -652,6 +655,8 @@ class UniversalSwarmWorker:
                     )
                 elif det_result.next_node:
                     # Single target override (existing behavior)
+                    config = node_config or {}
+                    tether_id = str(config.get("tether_id", "") or task.get("tether_id", ""))
                     self.broker.route_task(
                         row_id=row_id,
                         job_id=job_id,
@@ -660,10 +665,13 @@ class UniversalSwarmWorker:
                         source_payload_path=source_payload_path,
                         flow_line_id=str(task.get("flow_line_id", "")),
                         flow_vector=flow_vector,
+                        tether_id=tether_id,
                     )
                 else:
                     # Default topology routing
                     next_node = str(node_config.get("Next_Node", "END"))
+                    config = node_config or {}
+                    tether_id = str(config.get("tether_id", "") or task.get("tether_id", ""))
                     self.broker.route_task(
                         row_id=row_id,
                         job_id=job_id,
@@ -672,11 +680,14 @@ class UniversalSwarmWorker:
                         source_payload_path=source_payload_path,
                         flow_line_id=str(task.get("flow_line_id", "")),
                         flow_vector=flow_vector,
+                        tether_id=tether_id,
                     )
                 sys.stdout = orig_stdout
                 sys.stderr = orig_stderr
-                dual_out.close()
-                dual_err.close()
+                if dual_out is not None:
+                    dual_out.close()
+                if dual_err is not None:
+                    dual_err.close()
                 return True
             
             prompt_name = node_config.get("prompt", "none")
@@ -1250,8 +1261,10 @@ All file paths must strictly resolve to these five silos:
                         self.broker.pause_task(row_id)
                         sys.stdout = orig_stdout
                         sys.stderr = orig_stderr
-                        dual_out.close()
-                        dual_err.close()
+                        if dual_out is not None:
+                            dual_out.close()
+                        if dual_err is not None:
+                            dual_err.close()
                         return True
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
@@ -1297,15 +1310,15 @@ All file paths must strictly resolve to these five silos:
                         self.broker.pause_task(row_id)
                         sys.stdout = orig_stdout
                         sys.stderr = orig_stderr
-                        dual_out.close()
-                        dual_err.close()
+                        if dual_out is not None:
+                            dual_out.close()
+                        if dual_err is not None:
+                            dual_err.close()
                         return True
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
 
             elif _is_live_node:
-
-                import asyncio
                 logger.info(f"[{AGENT_ID}] Executing via STREAM 4 LIVE SESSION.")
                 final_output_text = self._run_interactive_diamond_loop(model_id, system_prompt, current_payload, job_id, current_node, locals().get("ai_options", {}), float(node_config.get("temperature", 1.0)), tools_str)
                 task_cost = 0.0
@@ -1533,6 +1546,17 @@ All file paths must strictly resolve to these five silos:
                                 if str(t_cfg.get("agent_name", "")).strip().lower() == cand_part.lower():
                                     matched_node_id = t_node
                                     break
+                            if not matched_node_id:
+                                try:
+                                    from maccre_core.orchestration.deterministic_nodes import _levenshtein  # noqa: PLC0415
+                                    best_dist = 4
+                                    for t_node in combined_map.keys():
+                                        dist = _levenshtein(cand_part, t_node)
+                                        if dist < best_dist:
+                                            best_dist = dist
+                                            matched_node_id = t_node
+                                except Exception:  # noqa: BLE001
+                                    pass
                                     
                         if matched_node_id:
                             resolved_targets.append(matched_node_id)
@@ -1617,6 +1641,7 @@ All file paths must strictly resolve to these five silos:
             except Exception as e:
                 logger.warning(f"[{AGENT_ID}] Failed to live-update or route unified session ledger: {e}")
 
+            _tether_id = str(node_config.get("tether_id", "") or task.get("tether_id", ""))
             self.broker.route_task(
                 row_id,
                 job_id,
@@ -1627,6 +1652,7 @@ All file paths must strictly resolve to these five silos:
                 max_recursion=max_rec,
                 flow_line_id=str(task.get("flow_line_id", "")),
                 flow_vector=flow_vector,
+                tether_id=_tether_id,
             )
             
             # Update the session with the live ledger
@@ -1669,8 +1695,10 @@ All file paths must strictly resolve to these five silos:
         finally:
             sys.stdout = orig_stdout
             sys.stderr = orig_stderr
-            dual_out.close()
-            dual_err.close()
+            if dual_out is not None:
+                dual_out.close()
+            if dual_err is not None:
+                dual_err.close()
         
         return True
 

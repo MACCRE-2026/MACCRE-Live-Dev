@@ -26,7 +26,8 @@ any arbitrary secret without waiting for a fingerprint pattern.
 """
 import re
 
-from maccre_core.orchestration.universal_vault import protect_string, clear_windows_clipboard
+from maccre_core.orchestration.windows_vault import protect_string
+from maccre_core.orchestration.universal_vault import clear_windows_clipboard
 
 # Fingerprint Map: Regex -> Target Vault Name
 _FINGERPRINTS: dict[str, str] = {

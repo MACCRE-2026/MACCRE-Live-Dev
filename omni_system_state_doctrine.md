@@ -28,6 +28,9 @@ Omni is the absolute boundary between code and execution. You must **never** inv
 - All executions must flow through **`omni run`**. 
 - All testing/compilation must flow through **`omni qa`** and **`omni build`**. 
 
+### Ia. System-Wide QA Scope Mandate (No Success-Siloing)
+When executing quality assurance gates via `omni qa`, you MUST ONLY invoke it targeting the root directory as **`omni qa .`**. Invoking `omni qa` on individual files or subdirectories (e.g., `omni qa path/to/file.py` or `omni qa path/to/folder`) is strictly unacceptable. Isolated checks create "success-siloing"—concealing cross-module type mismatches, signature breaking changes, and import cascades in adjacent function scopes. The entire codebase must be mathematically valid after EVERY change, or the system must be considered mathematically invalid until proven valid at the root level (`omni qa .`).
+
 ### II. External Isolation (Zero-Dependency Rule)
 Omni is installed globally (`C:\OmniBuilder\omni.py`) and is intentionally kept entirely decoupled from project-level `requirements.txt` or `Pipfile` environments. Security and governance tooling that depends on the environment it secures is a circular failure. Omni must never be imported as a Python package inside MACCREv2 or any other project. It is invoked strictly as a CLI terminal tool.
 

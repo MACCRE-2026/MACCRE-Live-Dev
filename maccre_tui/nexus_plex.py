@@ -4469,6 +4469,9 @@ class NexusPlex(App[None]):
             
         self.write_agent_log(f"[dim]Debug:[/dim] Passing baked_tools to NodeConfigModal: {baked_tools}")
         
+        if isinstance(self.screen, NodeConfigModal):
+            return
+
         self.push_screen(NodeConfigModal(
             node_name=node.macronode_name,
             current_payload_mode=getattr(node, "payload_mode", "Unified Ledger"),

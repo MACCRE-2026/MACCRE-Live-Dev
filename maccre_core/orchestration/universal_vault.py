@@ -76,7 +76,7 @@ class FernetVaultAdapter(AuthVault):
     
     def __init__(self, master_key: bytes) -> None:
         self._fernet = Fernet(master_key)
-        self._vault_path = get_datacenter_path("02_Dynamic_Context", "auth_vault.bin", project_id="GLOBAL")
+        self._vault_path = get_datacenter_path("02_Dynamic_Context", "auth_vault.bin")
         self._vault_path.parent.mkdir(parents=True, exist_ok=True)
         
     def _load(self) -> dict[str, str]:

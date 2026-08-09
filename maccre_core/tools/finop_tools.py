@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, Optional
 import json
 
 from maccre_core.finops._finop_daemon_ import get_finop_daemon
@@ -27,7 +27,7 @@ def query_finops_ledger(filters: Dict[str, Any]) -> str:
         
     return json.dumps(entries, indent=2)
 
-def get_aggregated_cost(project_name: str, session_id: str = None) -> str:
+def get_aggregated_cost(project_name: str, session_id: Optional[str] = None) -> str:
     """
     Retrieves the total aggregated USD cost for a specific project (and optionally a specific session).
     """

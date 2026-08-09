@@ -163,16 +163,20 @@ def log_system_event(
     model_id: str = "",
     input_tokens: int = 0,
     output_tokens: int = 0,
+    flow_vector: str = "",
+    tether_id: str = "",
 ) -> None:
     """Log an agent action, routing hop, or FinOps cost event to system_logs.db."""
     with _wal_conn(get_db_path("system_logs.db")) as conn:
         conn.execute(
             "INSERT INTO system_logs "
             "(session_id, project_id, agent_id, source_node, timestamp, "
-            " action_type, payload, cost, model_id, input_tokens, output_tokens) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " action_type, payload, cost, model_id, input_tokens, output_tokens, "
+            " flow_vector, tether_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (session_id, project_id, agent_id, source_node, _now(),
-             action_type, payload, cost, model_id, input_tokens, output_tokens),
+             action_type, payload, cost, model_id, input_tokens, output_tokens,
+             flow_vector, tether_id),
         )
 
 
