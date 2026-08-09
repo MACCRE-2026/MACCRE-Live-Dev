@@ -106,9 +106,139 @@ We will need to have a new DET_CHAT node. This node will be multi-function and u
 - **`flow_line_id` Wiring:** Fix swarm_worker to handle `det_result.next_nodes` (plural) for scatter fan-out; propagate `flow_line_id` through `broker.route_task()`; assign dot-delimited flow_line_ids (`main.tether_a.0`) during scatter execution
 
 
+### 4.75.7 CTRL_SCATTER Agent Slotting & Telemetry Vector Schema Groundwork
+- **NodeConfigModal Agent Slotting UI:** `NexusPlex` `NodeConfigModal` supports up to `MAX_SCATTER = 8` agent slots per scatter node, dynamic active project roster querying with `GLOBAL` fallback, per-agent profile override modals (`AgentProfileOverridesModal`), and dynamic slot mounting/removal.
+- **FlowEngine Auto-Wrap & DAG Synthesis:** `FlowEngine._get_macronode()` auto-wraps `CTRL_SCATTER` steps into entry, slotted parallel agent, and fan-in `CTRL_MERGE` DAG nodes (`Wait_For: "|".join(scatter_agents)`). Auto-wraps generic `CTRL_` nodes into single-node topologies and bypasses preflight checks for control primitives.
+- **Topology Visualizer Enhancements:** Inner MacroNode topologies default to expanded display (`_expand_states.get(node_id, True)`), featuring `Ctrl+E` collapse toggles and condensed summary line formatting (`[+] MacroNode ⟩ N nodes ⟩ NextNode`).
+- **Telemetry Vector Lineage & Tether Isolation:** `local_broker.py` `task_queue` and `telemetry_db.py` `system_logs.db` upgraded with `flow_vector` and `tether_id` schema columns. `SwarmWorker` builds lineage vector strings using `>` delimiter (`ROOT>SCATTER_0>Worker_A>MERGE_0`) and isolates gather payloads by `tether_id`.
+- **RAG Client Thread Safety:** `rag_tools.py` instantiated `_rag_lock = threading.Lock()` around `_get_rag_client()`, guaranteeing thread-safe lazy embedding client initialization during parallel subagent scatter bursts.
+
+---
+
+## Phase 4.99: User Testing Action List (Mathematically Comprehensive Feature Test)
+*Objective: Execute a mathematically comprehensive, 5-Oracle-aligned feature test suite before proceeding into Phase 5. Map-Reduce 38 domain test scenarios into single multi-scope TUI actions and siloed edge validations.*
+
+### 4.99.1 Map-Reduce Domain Overlap Matrix
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                           PHASE 4.99 MAP-REDUCE OVERLAP MATRIX                              │
+├─────────────────────────────────────┬───────────────────┬───────────────────────────────────┤
+│ Tier / Overlap Level                │ Scope Coverage    │ Test Action Focus                 │
+├─────────────────────────────────────┼───────────────────┼───────────────────────────────────┤
+│ Tier 1: 5-Scope Omni-Actions        │ ALL 5 ORACLES     │ • 8-Agent Scatter Burst & Lineage │
+│ (Hits all domains simultaneously)   │ (TUI+Eng+Tools+   │ • Quadrivector Routing & Live HITL│
+│                                     │  Net+State)       │   Context Injection               │
+├─────────────────────────────────────┼───────────────────┼───────────────────────────────────┤
+│ Tier 2: 4-Scope High-Overlap        │ 4 ORACLES         │ • Session Canonization & Bridge   │
+│                                     │ (TUI+Tools+State+ │ • Excel Intake Swarm Materializer │
+│                                     │  Net)             │                                   │
+├─────────────────────────────────────┼───────────────────┼───────────────────────────────────┤
+│ Tier 3: 3-Scope / 2-Scope Mid       │ 3 or 2 ORACLES    │ • Dual-Pipeline Media Isolation   │
+│                                     │ (Tools+State+Net /│ • FastMCP Stdio & Micro-Tests     │
+│                                     │  Eng+State)       │ • Recursive Loop & Crash Reclaim  │
+├─────────────────────────────────────┼───────────────────┼───────────────────────────────────┤
+│ Tier 4: Single-Scope Targeted Edge   │ 1 ORACLE          │ • Modal Re-entrancy & Terminal Res│
+│                                     │ (Targeted Domain) │ • 7-Point Preflight Anomaly Test  │
+│                                     │                   │ • WebSocket Drop & Modality Lock  │
+│                                     │                   │ • 3-Tier Security PIN Elevation   │
+└─────────────────────────────────────┴───────────────────┴───────────────────────────────────┘
+```
+
+---
+
+### 4.99.2 Siloed Overlap Categorization
+
+#### Tier 1: 5-Scope Omni-Actions (Simultaneously Stressing All 5 Oracle Subsystems)
+- **Omni-Action 1: High-Concurrency 8-Agent Scatter Burst & Lineage Audit**
+  - *TUI*: `NodeConfigModal` 8-slot allocation, active roster dropdowns, per-agent `AgentProfileOverridesModal`, `Ctrl+E` tree collapse toggle, VCR transport status monitoring.
+  - *Engine*: `CTRL_SCATTER` auto-wrap DAG synthesis, `tether_id` isolation, 8 parallel worker claims, `CTRL_MERGE` fan-in wait.
+  - *Tools & RAG*: Restricted tool profiles (`Tools_Allowed`), hybrid search, `_rag_lock` thread-safety, RAG context lineage filtering.
+  - *Net & Client*: Zero-SDK `urllib` paid-tier REST burst (~1,000+ RPM), `ModelSentinel` latency tracking, `ctypes.memset` RAM key zeroing under parallel workers.
+  - *State & Sovereignty*: 5-tier datacenter output (`03_Agent_Ledgers`), SQLite WAL concurrency (`task_queue`, `system_logs.db`), composite tether indexing, `flow_vector` lineage logging (`>`).
+
+- **Omni-Action 2: Quadrivector Failback Routing with Edge Hardware Failover & Live Context Injection**
+  - *TUI*: VCR Pause state transition, Live Node Chat input pane context injection, radio-dot execution status updating.
+  - *Engine*: `CTRL_CONDITIONAL_ROUTE` Quadrivector failback (Structured → Keyword → Score → Fuzzy), predicate gate evaluation.
+  - *Net & Client*: Hardware probing (`environment_probe.py`), local Ollama port 11434 detection/fallback, ModelSentinel health recalculation.
+  - *Tools & RAG*: Dynamic context update, restricted tool execution, RAG hybrid search failback.
+  - *State & Sovereignty*: 4-silo telemetry matrix logging (`user_interactions.db`, `system_logs.db`), DPAPI vault key retrieval & RAM wiping.
+
+#### Tier 2: 4-Scope High-Overlap Actions (TUI + Tools + State + Net)
+- **4-Scope Action 1: Session Canonization, Semantic Memory Pruning & Bridge Compilation**
+  - Promote L1 ephemeral scratchpad thoughts to L2 project canon (`agent_thoughts.db`), deduplicate vectors (>0.92 cosine similarity) while preserving FlowStasis pins, compile markdown canon via `SessionBridgeCompiler`, and hot-reload session trees in `SessionManagerModal`.
+- **4-Scope Action 2: Excel Intake Swarm Materialization & Workspace Seeding**
+  - Intake malformed `MACCRE_Swarm_Request.xlsx`, run `check_workbook_completeness`, fallback to vendored openpyxl (`maccre_core._vendor`), and instantiate 5-tier datacenter folders anchored strictly via `get_maccre_root()`.
+
+#### Tier 3: 3-Scope & 2-Scope Mid-Overlap Actions
+- **3-Scope Action 1 (Tools + State + Net): Dual-Pipeline Media Render Stem Isolation & FFmpeg Failback**
+  - Execute parallel TTS/Imagen 3 render requests with identical output names, verifying isolated stems (`05_Rendered_Media/<job_id>_<node_id>_<timestamp>/`) and audio fallback reports when FFmpeg is missing.
+- **3-Scope Action 2 (Tools + State + Net): FastMCP Stdio Protocol Hygiene & Micro-Test Automation**
+  - Run `omni run scripts/maccre_micro_test.py` across all 61 atomic tools, enforcing sub-30s timeouts and stdout isolation over FastMCP JSON-RPC stdio streams.
+- **2-Scope Action 1 (Engine + State): Recursive Loop Boundary & Max Iteration Guardrail**
+  - Execute cyclic workflow (`Node_A` -> `Node_B` -> `CTRL_RECURSION` -> `Node_A`), verifying `max_recursion` boundary interception, fallback routing, and iteration breadcrumbs.
+- **2-Scope Action 2 (Engine + State): Worker Process Crash Recovery & Zombie Lock Reclaim**
+  - Abruptly kill worker process during `PROCESSING` state; verify `local_broker` lock monitor reclaims zombie task after 15s timeout, resets to `PENDING`, and increments retry count.
+
+#### Tier 4: Single-Scope Targeted Edge Actions
+- **TUI Edge**: Test modal double-click re-entrancy prevention (`push_screen` guard) and 21-modal cascade navigation under terminal window resizing.
+- **Engine Edge**: Run 7-point preflight topology validation (`topology_engine.py`) against synthetic multi-fault DAG sheets (orphans, cycles, missing anchors).
+- **Net Edge**: Trigger Gemini Live WebSocket TCP socket drops, validating text-only modality lockdown (`[types.Modality.TEXT]`) and credential zeroing in `finally` blocks.
+- **State Edge**: Test 3-tier access control PIN elevation (`access_control.py`) and non-destructive file deletion via `trash_file()` archive protocol.
+
+---
+
+### 4.99.3 Sequential TUI Operator Execution Plan
+
+Below is the linear, step-by-step sequence of TUI operator commands and GUI interactions that fully satisfies all 38 test actions from all 5 Oracles in a single comprehensive testing run:
+
+1. **Environment Initialization & Gatekeeper Check:**
+   ```bash
+   omni clean .
+   omni qa .
+   omni run maccre_tui/app.py
+   ```
+2. **Workspace Seeding & Workbook Intake (Tier 2 Action 2):**
+   - In `NexusPlex`, press `Ctrl+P` (Project Canon Modal) or `Ctrl+S` (Session Manager).
+   - Ingest `MACCRE_Swarm_Request.xlsx`. Verify readiness score report and 5-tier datacenter folder generation under `get_maccre_root()`.
+3. **Topology Design & 8-Agent Scatter Slotting (Tier 1 Omni-Action 1 & TUI Edge):**
+   - Click `MacroNode Workshop` and load `CTRL_SCATTER`.
+   - Press `F2` or double-click to open `NodeConfigModal`. Rapidly double-click to verify modal re-entrancy protection.
+   - Slot 8 agents from the active project roster dropdown. Verify the 9th attempt is blocked (`Scatter Agent Slots (8/8)` disabled).
+   - Click `⚙ Overrides` on Slot #2 to launch `AgentProfileOverridesModal`. Set Model to `gemini-2.5-pro`, temp to `0.2`, set custom instructions, and save.
+   - Click `Save` on `NodeConfigModal`. Verify synthesized DAG (`CTRL_SCATTER` → 8 Agents → `CTRL_MERGE`) mounts in `TopologyVisualizer`.
+4. **Tree Visualizer Density & Expansion Test (Tier 1 Omni-Action 1 & TUI Edge):**
+   - Press `Ctrl+E` in `NexusPlex` to toggle tree collapse. Verify condensed summary line formatting (`[+] MacroNode ⟩ 8 nodes ⟩ CTRL_MERGE`). Press `Ctrl+E` again to expand.
+5. **Execution Launch & VCR Transport Mid-Scatter Intercept (Tier 1 Omni-Action 1 & Omni-Action 2):**
+   - Click `#btn-vcr-play` (or press VCR Play shortcut) to start flow execution.
+   - While the 8 scatter workers run concurrently, click `#btn-vcr-pause`.
+   - Observe worker threads yield state cleanly to `[PAUSED]`.
+   - In the right-hand **Live Node Chat** input pane, type a custom context string: `Injecting dynamic priority context for scatter branch` and press `Send`.
+   - Click `#btn-vcr-step` to step a single sub-task node, then click `#btn-vcr-play` to resume.
+6. **Concurrency, Grounding & Security Verification (Tier 1 Omni-Action 1 & 3-Scope Action 1):**
+   - Monitor `ModelSentinel` latency & throughput logs during the 8-agent paid-tier REST burst.
+   - Verify `_rag_lock` thread-safety during concurrent RAG queries and check that decrypted API keys are wiped via `ctypes.memset`.
+   - Check `03_Agent_Ledgers` to confirm `flow_vector` lineage breadcrumbs use the `>` delimiter (`ROOT>SCATTER_0>Worker_A>MERGE_0`) and gather payloads are isolated by `tether_id`.
+7. **Quadrivector Failback & Local Edge Hardware Probing (Tier 1 Omni-Action 2 & Net Edge):**
+   - Inject an un-structured payload into `CTRL_CONDITIONAL_ROUTE`.
+   - Verify failback cascade: Pass 1 JSON Schema → Pass 2 Keyword Search → Pass 3 Score Threshold → Pass 4 Catch-All.
+   - Simulate an Ollama service network drop on port 11434. Verify `environment_probe.py` sets `ollama_active = False` without throwing unhandled exceptions.
+8. **Recursive Loop & Crash Recovery Stress (Tier 3 / 2-Scope Actions):**
+   - Trigger a `CTRL_RECURSION` loop with `max_recursion=5`. Verify loop boundary log interception at iteration 5.
+   - In a terminal, send `SIGKILL` to a running worker process. Wait 15 seconds; verify `local_broker` lock monitor reclaims the zombie task and resets status to `PENDING`.
+9. **Session Canonization & Teardown (Tier 2 Action 1 & FastMCP):**
+   - Press `Ctrl+S` (Session Manager Modal). Rename session to `Phase 4.99 Full System Test`.
+   - Click `Compile & Canonize`. Verify L1 scratchpad thoughts are promoted to L2 `agent_thoughts.db` and semantically deduplicated (>0.92 cosine similarity) while FlowStasis pins are preserved.
+   - Exit `NexusPlex`. Run FastMCP automated micro-tests:
+     ```bash
+     omni run scripts/maccre_micro_test.py
+     ```
+   - Verify all 61 atomic tools pass JSON-RPC stdio protocol tests cleanly within 30 seconds.
+
 ---
 
 ## Phase 5: Multimodal Ingestion & High-Cost Authorizations (The Horizon Goal)
+
 *Objective: Execute the Alphabet Oracle's design for semantic visual ingestion, temporal extrapolation, and introduce FinOps gates for generative heavies.*
 
 ### 5.1 The Visionary Scout
