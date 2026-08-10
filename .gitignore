@@ -1,81 +1,46 @@
 # ==============================================================================
-# OMNI-BUILDER STRICT OPT-IN ALLOWLIST (.gitinclude Pattern)
+# MACCREv2 SOVEREIGN EDGE BUILD SYSTEM — PUBLIC GITIGNORE
 # ==============================================================================
 
-# 1. IGNORE EVERYTHING AT ROOT BY DEFAULT
-/*
-
-# 2. ALLOWLIST PRODUCTION SOURCE PACKAGES & TEMPLATES
-!/maccre_core/
-!/maccre_tui/
-!/maccre_dashboard/
-!/templates/
-!/.agent/
-
-# NOTE: /scripts/ and /tests/ are EXCLUDED from auto-tracking per user policy.
-# Add individual scripts/tests manually using: git add -f scripts/my_script.py
-
-# 3. ALLOWLIST CORE ENTRYPOINTS & BUILD CONFIGS
-!/pyproject.toml
-!/pyrightconfig.json
-!/ruff.toml
-!/requirements.txt
-!/requirements-global.txt
-!/requirements-optional.txt
-!/requirements-sovereign.txt
-!/maccre.py
-!/maccre_mcp.py
-!/run.py
-!/setup_mcp.py
-!/setup.ps1
-!/.gitattributes
-!/.gitignore
-
-# 4. ALLOWLIST OFFICIAL DOCUMENTATION & ROADMAPS
-!/README.md
-!/LICENSE
-!/LICENSE_ADDENDUM.md
-!/CONTRIBUTING.md
-!/Era2_architectural_roadmap.md
-!/Era3_architectural_roadmap.md
-!/FeatureRequests.md
-!/MACCRE_Operator_Manual.md
-!/MACCRE_Agent_Showcase.md
-!/maccre_system_architecture_overview.md
-!/omni_system_state_doctrine.md
-
-# ==============================================================================
-# SUB-DIRECTORY RE-EXCLUSIONS (Prevent runtime clutter)
-# ==============================================================================
-
-# Python Runtime & Caches
+# Python Runtime & Build Artifacts
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.egg-info/
-dist/
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Test & Type Check Caches
 .pytest_cache/
 .ruff_cache/
-.venv/
+.mypy_cache/
+.pyre/
 
-# Databases & Runtime State
-*.db
-*.db-shm
-*.db-wal
-.session_pids.json
-
-# Logs & Render Outputs
+# Generic Runtime Output Wildcards
 *.log
-build_pipeline.log
-maccre_system.log
-dist_omni/
+*.sqlite3
+*.tmp
 
-# 5-Tier Datacenter & Transitory Folders
-__DATACENTER/
-.oracle_artifacts/
-.tmp.driveupload/
-secrets/
-.env
-.env.*
+# OS Metadata Defaults
+.DS_Store
+Thumbs.db
