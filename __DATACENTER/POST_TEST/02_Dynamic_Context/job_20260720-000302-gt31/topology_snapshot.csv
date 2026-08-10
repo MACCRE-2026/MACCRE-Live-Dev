@@ -1,5 +1,0 @@
-Node_ID,Agent_Name,Model_Override,Next_Node,Temperature,Instruction_Override,Wait_For,Failure_Target,Max_Recursion,Artifact_Path,Live_Profile,Dialogue_Partner,Dialogue_Rounds,Payload_Mode,Tools_Allowed
-C_ADV_TOPPERSHEPHE_c7c15884_S0,TopperShepherd,gemini-2.5-flash,C_JUDGE_c7c15884_S0,1.0,,None,FAILED,3,,FALSE,None,0,Unified Ledger,
-C_ADV_TOPPERANGRY_c7c15884_S0,TopperAngry,gemini-2.5-flash,C_JUDGE_c7c15884_S0,1.0,,None,FAILED,3,,FALSE,None,0,Unified Ledger,
-C_ADV_TOPPERBUDDY_c7c15884_S0,TopperBuddy,gemini-2.5-flash,C_JUDGE_c7c15884_S0,1.0,,None,FAILED,3,,FALSE,None,0,Unified Ledger,
-C_JUDGE_c7c15884_S0,GretchenHarwell,gemini-2.5-pro,END,0.2,,C_ADV_TOPPERSHEPHE_c7c15884_S0|C_ADV_TOPPERANGRY_c7c15884_S0|C_ADV_TOPPERBUDDY_c7c15884_S0,FAILED,3,,FALSE,None,0,Unified Ledger,

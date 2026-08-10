@@ -1,2 +1,0 @@
-Agent_Name,Model,Tools_Allowed,System_Prompt,Description
-MicroTestAgent,gemini-2.5-flash,none,You are a micro-test agent. Respond only with 'TEST_OK'.,

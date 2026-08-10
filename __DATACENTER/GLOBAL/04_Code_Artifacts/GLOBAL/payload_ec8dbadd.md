@@ -1,1 +1,0 @@
-Lets look into recent payouts to Meta executives and how people are feeling about it.

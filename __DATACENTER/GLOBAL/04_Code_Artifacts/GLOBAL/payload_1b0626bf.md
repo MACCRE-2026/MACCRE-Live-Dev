@@ -1,1 +1,0 @@
-Lets look at consuer snetiment regarding the Inspiron 7737 laptop with the Nvidia 750M and 16g ram.

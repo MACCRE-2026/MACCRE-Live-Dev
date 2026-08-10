@@ -1,1 +1,0 @@
-Say hello to the unified thoughts ledger.

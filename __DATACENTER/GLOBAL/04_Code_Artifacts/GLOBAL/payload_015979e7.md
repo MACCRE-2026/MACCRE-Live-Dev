@@ -1,1 +1,0 @@
-Lets talk about the latest tranche of UAP disclosures.

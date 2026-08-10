@@ -1,1 +1,0 @@
-Please examine the Trump Administrations executive order regarding quantum computing.

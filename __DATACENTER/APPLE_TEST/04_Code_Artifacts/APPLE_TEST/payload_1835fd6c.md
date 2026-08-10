@@ -1,1 +1,0 @@
-Please explain the public reaction to the farmer in california giving away all of his tangerines for free.

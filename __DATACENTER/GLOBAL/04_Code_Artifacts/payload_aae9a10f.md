@@ -1,1 +1,0 @@
-Examine the current situation in Iran as of today and provide a timeline of events starting in January 2026 that lead up to the current events.

@@ -1,1 +1,0 @@
-Lets talk about recent findings in cryptography.

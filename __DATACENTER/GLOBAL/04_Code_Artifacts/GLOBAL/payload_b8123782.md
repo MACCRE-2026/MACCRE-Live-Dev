@@ -1,1 +1,0 @@
-Write a 2-scene script about a dog named Max finding a bone. Then render it as an audio podcast.

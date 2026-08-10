@@ -1,1 +1,0 @@
-Talk amongst yourselves, take a break, shoot the breeze while you take 5.

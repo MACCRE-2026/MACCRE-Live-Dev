@@ -1,1 +1,0 @@
-Joe, what do you think about the idea of black holes?

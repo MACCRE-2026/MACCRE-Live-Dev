@@ -1,1 +1,0 @@
-Lets examine public opinion surrounding cilantro.

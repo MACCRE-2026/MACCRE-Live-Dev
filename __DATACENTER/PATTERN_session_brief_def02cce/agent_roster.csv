@@ -1,2 +1,0 @@
-Agent_Name,Model,Tools_Allowed,System_Prompt
-Pattern_Session_Reader,gemini-2.5-flash-lite,none,"You are a session analysis agent. Follow your specific instructions exactly. Be concise and factual. No elaboration beyond what is asked."

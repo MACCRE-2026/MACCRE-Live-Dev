@@ -1,1 +1,0 @@
-Lets talk about data centers in rural communities.

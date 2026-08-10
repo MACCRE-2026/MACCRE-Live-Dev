@@ -1,1 +1,0 @@
-Joe, we are running tests today. Id like you to pretend i gave you a report on AI Prompt Building.

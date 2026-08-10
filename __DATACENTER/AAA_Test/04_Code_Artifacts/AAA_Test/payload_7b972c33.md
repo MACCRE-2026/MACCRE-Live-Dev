@@ -1,1 +1,0 @@
-Lets examine all documents released by the Department of War under PURSUE. Please provide a historical timeline of events covered in the documents released and look for connections to previous accounts of the events and how the authorities responded to questions.
