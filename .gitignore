@@ -1,5 +1,54 @@
-# ── Python runtime ────────────────────────────────────────────────────────────
-.venv/
+# ==============================================================================
+# OMNI-BUILDER STRICT OPT-IN ALLOWLIST (.gitinclude Pattern)
+# ==============================================================================
+
+# 1. IGNORE EVERYTHING AT ROOT BY DEFAULT
+/*
+
+# 2. ALLOWLIST PRODUCTION SOURCE PACKAGES & TEMPLATES
+!/maccre_core/
+!/maccre_tui/
+!/maccre_dashboard/
+!/templates/
+!/.agent/
+
+# NOTE: /scripts/ and /tests/ are EXCLUDED from auto-tracking per user policy.
+# Add individual scripts/tests manually using: git add -f scripts/my_script.py
+
+# 3. ALLOWLIST CORE ENTRYPOINTS & BUILD CONFIGS
+!/pyproject.toml
+!/pyrightconfig.json
+!/ruff.toml
+!/requirements.txt
+!/requirements-global.txt
+!/requirements-optional.txt
+!/requirements-sovereign.txt
+!/maccre.py
+!/maccre_mcp.py
+!/run.py
+!/setup_mcp.py
+!/setup.ps1
+!/.gitattributes
+!/.gitignore
+
+# 4. ALLOWLIST OFFICIAL DOCUMENTATION & ROADMAPS
+!/README.md
+!/LICENSE
+!/LICENSE_ADDENDUM.md
+!/CONTRIBUTING.md
+!/Era2_architectural_roadmap.md
+!/Era3_architectural_roadmap.md
+!/FeatureRequests.md
+!/MACCRE_Operator_Manual.md
+!/MACCRE_Agent_Showcase.md
+!/maccre_system_architecture_overview.md
+!/omni_system_state_doctrine.md
+
+# ==============================================================================
+# SUB-DIRECTORY RE-EXCLUSIONS (Prevent runtime clutter)
+# ==============================================================================
+
+# Python Runtime & Caches
 __pycache__/
 *.pyc
 *.pyo
@@ -7,59 +56,26 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-*.spec
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
+.venv/
 
-# ── MACCREv2 Datacenter — per-job run outputs (re-generated, never committed) ─
-__DATACENTER/*/03_Agent_Ledgers/job_*/
-__DATACENTER/*/04_Code_Artifacts/job_*/
-__DATACENTER/*/05_Rendered_Media/job_*/
-
-# Memory pins are transient per-job thought snapshots
-__DATACENTER/*/02_Dynamic_Context/memory_pins/
-
-# Session snapshot XLSXes (frozen copies of workbooks, not source)
-__DATACENTER/*/CompletedSessions/
-
-# SQLite databases (runtime state, re-created on launch)
+# Databases & Runtime State
 *.db
 *.db-shm
 *.db-wal
+.session_pids.json
 
-# ── Secrets & vault ───────────────────────────────────────────────────────────
-__DATACENTER/.vault/
-.env
-.env.*
-secrets/
-vault_keys.json
-mcp_config.json
-
-# ── Keep source workbooks, topology CSVs, and agent cards ─────────────────────
-!__DATACENTER/*/MACCRE_Swarm_Request.xlsx
-!__DATACENTER/*/02_Dynamic_Context/topology.csv
-!__DATACENTER/*/02_Dynamic_Context/agent_roster.csv
-!__DATACENTER/*/02_Dynamic_Context/agent_extras.json
-!__DATACENTER/*/01_Raw_Source/input.md
-
-# ── OS noise ──────────────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# ── Editor ────────────────────────────────────────────────────────────────────
-.vscode/settings.json
-.idea/
-
-# ── Build / log outputs ───────────────────────────────────────────────────────
+# Logs & Render Outputs
 *.log
 build_pipeline.log
+maccre_system.log
 dist_omni/
 
-# User Ignored Folders
-_legacy/
-scratch/
-scripts/
-tests/
-user_scripts/
+# 5-Tier Datacenter & Transitory Folders
+__DATACENTER/
+.oracle_artifacts/
+.tmp.driveupload/
+secrets/
+.env
+.env.*
