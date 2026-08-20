@@ -311,12 +311,128 @@ AgentBuilderPanel Label {
 }
 
 /* ── Modals ──────────────────────────────────────────────────────────────── */
-NewProjectModal, SelectProjectModal, SystemInstructionsModal {
+NewProjectModal, SelectProjectModal, SystemInstructionsModal, BootSplashModal, LoadingSplashModal {
     align: center middle;
 }
 
 ContextInjectModalScreen {
     align: center middle;
+}
+
+/* ── Boot Splash & Loading Modals ────────────────────────────────────────── */
+
+#boot-splash-dialog {
+    width: 65;
+    max-width: 80;
+    height: auto;
+    background: #161b22;
+    border: thick #58a6ff;
+    padding: 2 3;
+}
+
+#boot-title {
+    width: 100%;
+    text-align: center;
+    color: #58a6ff;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#boot-subtitle {
+    width: 100%;
+    text-align: center;
+    color: #8b949e;
+    margin-bottom: 2;
+}
+
+.boot-section {
+    height: auto;
+    margin-bottom: 1;
+    padding: 1 2;
+    background: #0d1117;
+    border: solid #30363d;
+}
+
+.boot-section Label {
+    color: #e6edf3;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.boot-section Input, .boot-section Select {
+    width: 100%;
+    margin-bottom: 1;
+    background: #21262d;
+    color: #e6edf3;
+    border: solid #30363d;
+}
+
+.boot-section Button {
+    width: 100%;
+    margin-top: 1;
+}
+
+#loading-splash-dialog {
+    width: 60;
+    height: auto;
+    background: #161b22;
+    border: thick #3fb950;
+    padding: 2 3;
+    align: center middle;
+}
+
+#loading-quote {
+    color: #58a6ff;
+    text-align: center;
+    margin: 1 0;
+    text-style: italic;
+}
+
+#loading-progress {
+    width: 100%;
+    margin-top: 1;
+}
+
+/* ── Universal Select & OptionList High-Contrast Defaults ────────────────── */
+
+Select {
+    background: #21262d;
+    color: #e6edf3;
+    border: solid #30363d;
+}
+
+SelectCurrent {
+    background: #21262d;
+    color: #e6edf3;
+    border: none;
+    padding: 0 1;
+}
+
+SelectOverlay {
+    background: #161b22;
+    border: solid #58a6ff;
+}
+
+OptionList {
+    background: #161b22;
+    color: #e6edf3;
+}
+
+OptionList > .option-list--option {
+    color: #e6edf3;
+    background: #161b22;
+    padding: 0 1;
+}
+
+OptionList > .option-list--option.-highlighted {
+    color: #ffffff;
+    background: #1f6feb;
+    text-style: bold;
+}
+
+OptionList > .option-list--option.-selected {
+    color: #58a6ff;
+    background: #21262d;
 }
 
 #hitl-split-layout {
