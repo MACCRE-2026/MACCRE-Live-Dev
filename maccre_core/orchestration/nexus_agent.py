@@ -500,7 +500,8 @@ class NexusAgent:
                 # Preserve the model's exact turn to prevent API 400 errors
                 if response.text:
                     self._embed_and_save(response.text, "nexus_thought")
-                    self.print_cb(f"[bold cyan]Nexus (Thinking):[/bold cyan] {response.text}")
+                    self.print_cb("\n[bold cyan]Nexus (Thinking):[/bold cyan]")
+                    self.print_cb(response.text)
                     
                 self.history.append({
                     "role": "model",
@@ -533,7 +534,8 @@ class NexusAgent:
                 if text_out:
                     self._embed_and_save(text_out, "nexus_response")
                     self.history.append({"role": "model", "parts": [{"text": text_out}]})
-                    self.print_cb(f"[bold cyan]Nexus:[/bold cyan] {text_out}")
+                    self.print_cb("\n[bold cyan]Nexus:[/bold cyan]")
+                    self.print_cb(text_out)
                 else:
                     import json
                     self.print_cb(f"[red]Nexus Diagnostic:[/red] Model returned empty text and no function call. API Body: {json.dumps(response.raw)}")

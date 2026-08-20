@@ -2958,29 +2958,58 @@ class NexusPlex(App[None]):
         if hasattr(self, "nexus"):
             self.nexus.close()
 
-    def write_nexus_log(self, text: str) -> None:
+    def write_nexus_log(self, text: Any) -> None:
         import threading
-        log = self.query_one("#nexus-log", RichLog)
-        if self._thread_id == threading.get_ident():
-            log.write(text)
-        else:
-            self.call_from_thread(log.write, text)
+        from rich.errors import MarkupError
+        from rich.text import Text
 
-    def write_agent_log(self, text: str) -> None:
+        def _do_write() -> None:
+            try:
+                log = self.query_one("#nexus-log", RichLog)
+                if isinstance(text, Text):
+                    log.write(text)
+                else:
+                    try:
+                        log.write(str(text))
+                    except MarkupError:
+                        log.write(Text(str(text)))
+            except Exception:  # noqa: BLE001
+                pass
+
+        if self._thread_id == threading.get_ident():
+            _do_write()
+        else:
+            self.call_from_thread(_do_write)
+
+    def write_agent_log(self, text: Any) -> None:
         import threading
+        from rich.errors import MarkupError
+        from rich.text import Text
 
         def _do_write() -> None:
             """Write to both the main flow log and the monitor overlay (main-thread only)."""
             try:
                 log = self.query_one("#flow-execution-log", RichLog)
-                log.write(text)
+                if isinstance(text, Text):
+                    log.write(text)
+                else:
+                    try:
+                        log.write(str(text))
+                    except MarkupError:
+                        log.write(Text(str(text)))
             except Exception:  # noqa: BLE001
                 pass
             # Mirror to Flow Monitor Overlay if visible
             try:
                 monitor = self.query_one(FlowMonitorOverlay)
                 if not monitor.has_class("hidden"):
-                    monitor.write_log(text)
+                    if isinstance(text, Text):
+                        monitor.write_log(text)
+                    else:
+                        try:
+                            monitor.write_log(str(text))
+                        except MarkupError:
+                            monitor.write_log(Text(str(text)))
             except Exception:  # noqa: BLE001
                 pass
 
