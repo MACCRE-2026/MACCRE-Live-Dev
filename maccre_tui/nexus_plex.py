@@ -48,6 +48,7 @@ from maccre_tui.widgets.topology_visualizer import (
     TopologyNodeSelected,
     TopologyVisualizer,
 )
+from maccre_core.orchestration.concurrency import MAX_SCATTER_AGENTS
 from maccre_core.orchestration.nexus_agent import NexusAgent
 from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
@@ -2189,7 +2190,12 @@ class NodeConfigModal(ModalScreen[dict | None]):
                 )
 
             # ── Scatter Agent Slots ────────────────────────────────────
-            MAX_SCATTER: int = 8
+            # MAX_SCATTER_AGENTS is imported from maccre_core.orchestration.concurrency,
+            # the same constant the worker pool sizes itself from. It used to be a
+            # function-local `MAX_SCATTER: int = 8` redeclared in three separate
+            # methods here, so the number of slots the UI offered and the number of
+            # threads the engine would actually run were free to drift apart.
+            MAX_SCATTER: int = MAX_SCATTER_AGENTS
             yield Label(
                 f"[bold]Scatter Agent Slots ({len(self._scatter_agents)}/{MAX_SCATTER})[/bold]",
                 classes="category-title",
@@ -2595,7 +2601,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
     @on(Button.Pressed, "#btn-scatter-add-agent")
     def _scatter_add_agent(self) -> None:
         """Add an agent to the scatter slot list."""
-        MAX_SCATTER: int = 8
+        MAX_SCATTER: int = MAX_SCATTER_AGENTS
         try:
             sel = self.query_one("#cfg-scatter-agent-select", Select)
         except Exception:  # noqa: BLE001
@@ -2662,7 +2668,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
 
         # ── Scatter Remove ────────────────────────────────────────────
         if btn_id.startswith("btn-scatter-rm-"):
-            MAX_SCATTER: int = 8
+            MAX_SCATTER: int = MAX_SCATTER_AGENTS
             idx_str = btn_id.replace("btn-scatter-rm-", "")
             try:
                 idx_val = int(idx_str)
@@ -4923,6 +4929,18 @@ class NexusPlex(App[None]):
             """Called when a MacroNode step begins — update topology and monitor."""
             self.call_from_thread(self._highlight_active_node, step_index, macronode_name)
 
+        def _on_node_active(
+            step_index: int | None, node_id: str, slot: int | None
+        ) -> None:
+            """Called from a worker thread as each node starts."""
+            self.call_from_thread(self._mark_node_active, step_index, node_id, slot)
+
+        def _on_node_finished(
+            step_index: int | None, node_id: str, slot: int | None
+        ) -> None:
+            """Called from a worker thread as each node ends."""
+            self.call_from_thread(self._mark_node_finished, step_index, node_id, slot)
+
         def _on_hitl_pause(step_index: int, job_id: str, payload: str) -> None:
             """Called from flow engine thread when CTRL_PAUSE fires."""
             self._hitl_job_id = job_id
@@ -4942,6 +4960,8 @@ class NexusPlex(App[None]):
                 hitl_callback=_on_hitl_pause,
                 job_started_callback=_on_job_started,
                 node_started_callback=_on_node_started,
+                node_active_callback=_on_node_active,
+                node_finished_callback=_on_node_finished,
             )
             if self._flow_cancel_event and self._flow_cancel_event.is_set():
                 self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
@@ -4986,6 +5006,18 @@ class NexusPlex(App[None]):
             """Called when a MacroNode step begins — update topology and monitor."""
             self.call_from_thread(self._highlight_active_node, step_index, macronode_name)
 
+        def _on_node_active(
+            step_index: int | None, node_id: str, slot: int | None
+        ) -> None:
+            """Called from a worker thread as each node starts."""
+            self.call_from_thread(self._mark_node_active, step_index, node_id, slot)
+
+        def _on_node_finished(
+            step_index: int | None, node_id: str, slot: int | None
+        ) -> None:
+            """Called from a worker thread as each node ends."""
+            self.call_from_thread(self._mark_node_finished, step_index, node_id, slot)
+
         def _on_hitl_pause(step_index: int, hitl_job_id: str, payload: str) -> None:
             self._hitl_job_id = hitl_job_id
             self.call_from_thread(self._surface_hitl_pause, step_index, hitl_job_id, payload)
@@ -5003,6 +5035,8 @@ class NexusPlex(App[None]):
                 hitl_callback=_on_hitl_pause,
                 job_started_callback=_on_job_started,
                 node_started_callback=_on_node_started,
+                node_active_callback=_on_node_active,
+                node_finished_callback=_on_node_finished,
             )
             if self._flow_cancel_event.is_set():
                 self.write_agent_log("[yellow]Flow execution was cancelled by user.[/yellow]")
@@ -5054,7 +5088,12 @@ class NexusPlex(App[None]):
             pass
 
     def _highlight_active_node(self, step_index: int, macronode_name: str) -> None:
-        """Update the TopologyVisualizer and FlowMonitorOverlay when a step starts."""
+        """Update the TopologyVisualizer and FlowMonitorOverlay when a step starts.
+
+        Per-**step**, so it still uses the single-active display. Per-**node**
+        updates arrive via _mark_node_active / _mark_node_finished below, which is
+        what shows a scatter's lanes running together.
+        """
         try:
             viz = self.query_one(TopologyVisualizer)
             viz.set_active_node(macronode_name)
@@ -5067,6 +5106,50 @@ class NexusPlex(App[None]):
                 monitor.set_current_node(macronode_name, "", "")
         except Exception:  # noqa: BLE001
             pass
+
+    def _sync_concurrency_readout(self) -> None:
+        """Push the visualiser's active-node set into the monitor's N/8 readout.
+
+        The visualiser's node state is the single source of truth for what is
+        running, so the readout is derived from it rather than counted separately —
+        two counters would be two things to keep correct.
+        """
+        try:
+            viz = self.query_one(TopologyVisualizer)
+            active = viz.active_nodes
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            monitor = self.query_one(FlowMonitorOverlay)
+            if not monitor.has_class("hidden"):
+                monitor.update_concurrency(active, MAX_SCATTER_AGENTS)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _mark_node_active(
+        self, step_index: int | None, node_id: str, slot: int | None
+    ) -> None:
+        """A node started. Light it up without disturbing its siblings.
+
+        Runs on the TUI thread via ``call_from_thread`` — the engine fires these
+        from worker threads, and Textual widgets may only be touched from the app's
+        own thread.
+        """
+        try:
+            self.query_one(TopologyVisualizer).mark_node_active(node_id)
+        except Exception:  # noqa: BLE001
+            pass
+        self._sync_concurrency_readout()
+
+    def _mark_node_finished(
+        self, step_index: int | None, node_id: str, slot: int | None
+    ) -> None:
+        """A node finished, on any path including failure."""
+        try:
+            self.query_one(TopologyVisualizer).mark_node_finished(node_id)
+        except Exception:  # noqa: BLE001
+            pass
+        self._sync_concurrency_readout()
 
     def _update_monitor_progress(self, completed: int, total: int) -> None:
         """Update the FlowMonitorOverlay progress bar."""

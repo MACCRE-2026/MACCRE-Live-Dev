@@ -33,11 +33,36 @@ import atexit
 import os
 import json
 import sqlite3
-from typing import Any, Optional
+import threading
+from typing import Any, Literal, Optional
 
 
 from maccre_core.utils.path_resolver import get_datacenter_path
 from maccre_core.orchestration.broker_interface import MessageBroker
+from maccre_core.orchestration.concurrency import DEFAULT_HEARTBEAT_SECONDS
+from maccre_core.orchestration.topology_graph import is_terminal_target
+
+#: Seconds a lock may go unrefreshed before :meth:`
+#: LocalMessageBroker.reclaim_zombie_locks` treats it as abandoned.
+#:
+#: Expressed as a multiple of the heartbeat interval rather than as a bare number,
+#: because the only thing that makes any threshold safe is its relationship to how
+#: often a live worker checks in. At 24 missed beats a worker has been silent for
+#: two minutes; a node that is merely slow keeps its lock indefinitely.
+#:
+#: The previous default was 15 s measured from *enqueue*, which under an 8-wide
+#: scatter routinely elapsed before a lane was even claimed.
+DEFAULT_ZOMBIE_TIMEOUT_SECONDS: float = DEFAULT_HEARTBEAT_SECONDS * 24
+
+#: ``(job_id, node_id, tether_id)`` triples already reported as a tether scope
+#: mismatch. The gather gate is evaluated on every poll tick for every open task,
+#: so an undeduplicated warning would flood the log at roughly the poll rate.
+_SCOPE_WARNED: set[tuple[str, str, str]] = set()
+_SCOPE_WARN_LOCK = threading.Lock()
+
+#: Result of evaluating a task's Gather Gate. See :meth:`LocalMessageBroker._gather_gate_state`.
+GateState = Literal["ready", "waiting", "upstream_failed"]
+
 
 class LocalMessageBroker(MessageBroker):
     """Zero-dependency SQLite Scatter-Gather State Machine."""
@@ -45,7 +70,11 @@ class LocalMessageBroker(MessageBroker):
     def __init__(self, db_path: str | None = None) -> None:
         self.db_path = db_path or str(get_datacenter_path("swarm_queue.db"))
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._conn: sqlite3.Connection | None = None
+        # Connections are per-thread — see _get_conn() for why. _all_conns exists
+        # only so close() can tear down connections it does not own.
+        self._local = threading.local()
+        self._all_conns: list[sqlite3.Connection] = []
+        self._conns_lock = threading.Lock()
         self._init_db()
 
         # Phase 22 ZMQ IPC Setup — optional (paused per EXO-GANS handover §1)
@@ -69,9 +98,17 @@ class LocalMessageBroker(MessageBroker):
     def close(self) -> None:
         """Tear down SQLite + ZMQ resources. Registered via atexit for reliable cleanup."""
         try:
-            if self._conn:
-                self._conn.close()
-                self._conn = None
+            with self._conns_lock:
+                conns = list(self._all_conns)
+                self._all_conns.clear()
+            for _conn in conns:
+                try:
+                    _conn.close()
+                except Exception:
+                    pass
+            # Drop this thread's handle so a later _get_conn() reopens cleanly.
+            if getattr(self._local, "conn", None) is not None:
+                self._local.conn = None
             if self.pub_socket:
                 self.pub_socket.close()
                 self.pub_socket = None
@@ -92,19 +129,41 @@ class LocalMessageBroker(MessageBroker):
     # ── Schema Bootstrap ──────────────────────────────────────────────────────────
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Return the persistent SQLite connection, creating it if needed.
+        """Return this thread's SQLite connection, creating it on first use.
 
-        Uses WAL journal mode for better concurrent read performance and
-        check_same_thread=False for cross-thread safety (the broker is
-        accessed from both the TUI main thread and worker threads).
+        **One connection per thread, not one per broker.** This is a correctness
+        requirement, not an optimisation.
+
+        A single ``sqlite3.Connection`` can only hold one transaction at a time,
+        regardless of ``check_same_thread``. If two threads shared a connection,
+        thread B's statements would silently join whatever transaction thread A
+        had open — so the ``BEGIN EXCLUSIVE`` in :meth:`fetch_and_lock_task`
+        would stop isolating anything and the TOCTOU race it exists to prevent
+        would come straight back. Sharing also means one thread's ``commit()``
+        or ``rollback()`` ends another thread's transaction.
+
+        With a connection per thread, ``BEGIN EXCLUSIVE`` contends at the SQLite
+        file level, which is exactly where the serialisation is wanted.
+
+        ``row_factory`` is set here, once, rather than being reassigned by
+        individual query methods — reassigning it on a shared connection is a
+        cross-thread side effect, and every consumer in this module already
+        tolerates ``sqlite3.Row`` (it supports positional indexing, iteration
+        and unpacking).
         """
-        if self._conn is None:
-            self._conn = sqlite3.connect(
-                self.db_path, check_same_thread=False, timeout=30.0
-            )
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-        return self._conn
+        conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            # Wait rather than raising "database is locked" while another thread
+            # holds the exclusive claim lock. Tuned against measured contention
+            # in Phase 6.12B; see the risk register in the task artifact.
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
+            with self._conns_lock:
+                self._all_conns.append(conn)
+        return conn
 
     def _init_db(self) -> None:
         conn = self._get_conn()
@@ -128,6 +187,7 @@ class LocalMessageBroker(MessageBroker):
                 current_node         TEXT NOT NULL,
                 lock_status          TEXT DEFAULT 'open',
                 locked_by            TEXT,
+                locked_at            TIMESTAMP,
                 actual_cost          REAL DEFAULT 0.0,
                 flow_line_id         TEXT DEFAULT '',
                 tether_id            TEXT DEFAULT '',
@@ -154,6 +214,9 @@ class LocalMessageBroker(MessageBroker):
             "ALTER TABLE task_queue ADD COLUMN flow_line_id TEXT DEFAULT ''",
             "ALTER TABLE task_queue ADD COLUMN tether_id TEXT DEFAULT ''",
             "ALTER TABLE task_queue ADD COLUMN flow_vector TEXT DEFAULT ''",
+            # Phase 6.13 A1: lock-acquisition timestamp. Distinct from created_at,
+            # which measures time in the queue, not time holding the lock.
+            "ALTER TABLE task_queue ADD COLUMN locked_at TIMESTAMP",
         ):
             try:
                 conn.execute(_col_sql)
@@ -210,7 +273,6 @@ class LocalMessageBroker(MessageBroker):
     def get_resumable_sessions(self) -> list[dict[str, Any]]:
         """Retrieve sessions that crashed or were paused."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
             "SELECT * FROM job_sessions WHERE status IN ('failed', 'paused', 'cancelled', 'active', 'completed') ORDER BY updated_at DESC"
@@ -274,7 +336,6 @@ class LocalMessageBroker(MessageBroker):
     def get_task_errors(self, job_id: str) -> dict[str, Any]:
         """Fetch the last known states and errors for a failed session for Nexus to inspect."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
         cursor = conn.execute(
             "SELECT * FROM task_queue WHERE job_id = ? ORDER BY id DESC LIMIT 5",
             (job_id,)
@@ -284,6 +345,151 @@ class LocalMessageBroker(MessageBroker):
 
     # ── Worker Interface ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _resolve_wait_for(topology_engine: Any, node_id: str) -> str:
+        """Resolve a node's ``wait_for`` string. Unknown nodes gate on nothing."""
+        if topology_engine is None:
+            return "none"
+        try:
+            config: dict[str, Any] = topology_engine.get_node_config(node_id)
+            return str(config.get("wait_for", "none"))
+        except Exception:
+            return "none"
+
+    def _gather_gate_state(
+        self,
+        cursor: sqlite3.Cursor,
+        task: dict[str, Any],
+        wait_for_str: str,
+    ) -> GateState:
+        """Evaluate one task's Gather Gate against the current queue.
+
+        Pure read — issues SELECTs on the caller's cursor and returns a verdict.
+        The caller decides what to do about it, which is what lets
+        :meth:`fetch_and_lock_task` (which claims and cancels) and
+        :meth:`count_ready_tasks` (which only counts) share one rule set instead
+        of maintaining two copies that drift apart.
+
+        Returns:
+            ``"ready"`` when every prerequisite has completed (or there are
+            none), ``"waiting"`` when at least one is outstanding, and
+            ``"upstream_failed"`` when a prerequisite failed — in which case
+            this task can never become ready.
+        """
+        if wait_for_str.strip().lower() in ("none", "", "null"):
+            return "ready"
+
+        required_nodes = [
+            n.strip() for n in wait_for_str.replace("|", ",").split(",") if n.strip()
+        ]
+        if not required_nodes:
+            return "ready"
+
+        placeholders = ",".join(["?"] * len(required_nodes))
+        task_tether_id = str(task.get("tether_id", "") or "")
+
+        # Tether-scoped gather: when the current task carries a tether_id, only
+        # check predecessor completion within the same scatter scope. Without
+        # this, lane 2 of one scatter could satisfy lane 1's gate.
+        if task_tether_id:
+            cursor.execute(
+                f"""
+                SELECT current_node, lock_status
+                FROM task_queue
+                WHERE job_id = ? AND current_node IN ({placeholders})
+                      AND tether_id = ?
+                ORDER BY id ASC
+                """,  # noqa: S608 - placeholders are generated '?' marks, not user data
+                [task["job_id"], *required_nodes, task_tether_id],
+            )
+        else:
+            cursor.execute(
+                f"""
+                SELECT current_node, lock_status
+                FROM task_queue
+                WHERE job_id = ? AND current_node IN ({placeholders})
+                ORDER BY id ASC
+                """,  # noqa: S608 - placeholders are generated '?' marks, not user data
+                [task["job_id"], *required_nodes],
+            )
+
+        # Keep only the latest status for each node (ordered by id ASC above, so
+        # later rows overwrite earlier ones).
+        latest_status: dict[str, str] = {}
+        for r in cursor.fetchall():
+            latest_status[r[0]] = r[1]
+
+        if not latest_status and task_tether_id:
+            # The tether-scoped query matched nothing at all. Either the
+            # predecessors have not been created yet (normal, early in a scatter)
+            # or they exist under a *different* tether — a scope mismatch, which
+            # this gate can never resolve on its own.
+            #
+            # The second case deserves a diagnostic because its symptom is
+            # indistinguishable from ordinary waiting: the task stays `open`, the
+            # pool keeps spawning workers that cannot claim it, and each retires
+            # idle. That churn continues to the wall-clock timeout with nothing in
+            # the log explaining it. Naming the mismatch once turns an hour of
+            # silent spin into a one-line answer.
+            self._warn_on_tether_scope_mismatch(
+                cursor, task, required_nodes, task_tether_id, placeholders
+            )
+            return "waiting"
+
+        if any(stat == "failed" for stat in latest_status.values()):
+            return "upstream_failed"
+
+        completed_count = sum(1 for stat in latest_status.values() if stat == "completed")
+        if completed_count < len(required_nodes):
+            return "waiting"
+        return "ready"
+
+    def _warn_on_tether_scope_mismatch(
+        self,
+        cursor: sqlite3.Cursor,
+        task: dict[str, Any],
+        required_nodes: list[str],
+        task_tether_id: str,
+        placeholders: str,
+    ) -> None:
+        """Log once when predecessors exist but under a different tether.
+
+        Only reached when the scoped query found nothing, which after correct
+        configuration never happens — so the extra read costs nothing on the
+        healthy path.
+        """
+        node_id = str(task.get("current_node", ""))
+        key = (str(task.get("job_id", "")), node_id, task_tether_id)
+        with _SCOPE_WARN_LOCK:
+            if key in _SCOPE_WARNED:
+                return
+            _SCOPE_WARNED.add(key)
+
+        try:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT tether_id
+                FROM task_queue
+                WHERE job_id = ? AND current_node IN ({placeholders})
+                """,  # noqa: S608 - placeholders are generated '?' marks, not user data
+                [task["job_id"], *required_nodes],
+            )
+            found = sorted({str(r[0] or "") for r in cursor.fetchall()})
+        except sqlite3.Error:
+            return
+
+        if not found:
+            return  # predecessors genuinely not created yet — nothing to report
+
+        import logging  # noqa: PLC0415
+        logging.getLogger("maccre_core").warning(
+            "[BROKER] Gather gate for %s cannot open: it waits on %d node(s) in "
+            "tether %r, but those nodes exist under tether(s) %s. This is a scope "
+            "mismatch, not a pending dependency — the gate will never open and the "
+            "pool will spin on an unclaimable task.",
+            node_id, len(required_nodes), task_tether_id, found,
+        )
+
     def fetch_and_lock_task(
         self,
         agent_id: str,
@@ -291,99 +497,128 @@ class LocalMessageBroker(MessageBroker):
     ) -> Optional[dict[str, Any]]:
         """
         Atomically claim the oldest 'open' task whose Gather Gate dependencies
-        are satisfied.  Uses BEGIN EXCLUSIVE so only one worker process can
-        enter this block at a time, eliminating the TOCTOU race condition.
+        are satisfied.  Uses BEGIN EXCLUSIVE so only one worker can enter this
+        block at a time, eliminating the TOCTOU race condition.
+
+        The claim is the **sole correctness authority** for who owns a task.
+        :meth:`count_ready_tasks` is only a sizing hint and never grants
+        ownership.
+
+        Everything from ``BEGIN EXCLUSIVE`` to the single ``commit()`` runs in
+        one transaction. Cancellations of tasks with failed upstreams are staged
+        into that same transaction rather than committed mid-scan: committing
+        early would release the exclusive lock while the loop was still
+        iterating, so the subsequent claim UPDATE would run unprotected and the
+        race this method exists to prevent would return.
         """
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("BEGIN EXCLUSIVE")
+        try:
+            cursor.execute(
+                "SELECT * FROM task_queue WHERE lock_status = 'open' ORDER BY created_at ASC"
+            )
+            open_tasks = cursor.fetchall()
 
-        cursor.execute(
-            "SELECT * FROM task_queue WHERE lock_status = 'open' ORDER BY created_at ASC"
-        )
-        open_tasks = cursor.fetchall()
+            for row in open_tasks:
+                task = dict(row)
+                node_id: str = task["current_node"]
 
-        for row in open_tasks:
-            task = dict(row)
-            node_id: str = task["current_node"]
-            task_tether_id: str = str(task.get("tether_id", "") or "")
-
-            # Resolve wait_for from topology — unknown nodes default to 'none'
-            try:
-                config: dict[str, Any] = topology_engine.get_node_config(node_id)
-                wait_for_str: str = config.get("wait_for", "none")
-            except Exception:
-                wait_for_str = "none"
-
-            # Gather Gate: skip if any upstream prerequisite is not yet completed
-            if wait_for_str.lower() not in ("none", ""):
-                required_nodes = [
-                    n.strip()
-                    for n in wait_for_str.replace("|", ",").split(",")
-                    if n.strip()
-                ]
-                placeholders = ",".join(["?"] * len(required_nodes))
-
-                # Tether-scoped gather: when the current task carries a tether_id,
-                # only check predecessor completion within the same tether scope.
-                if task_tether_id:
-                    cursor.execute(
-                        f"""
-                        SELECT current_node, lock_status
-                        FROM task_queue
-                        WHERE job_id = ? AND current_node IN ({placeholders})
-                              AND tether_id = ?
-                        ORDER BY id ASC
-                        """,
-                        [task["job_id"]] + required_nodes + [task_tether_id],
+                # A terminal sentinel is an edge label, not a node. It should never
+                # reach the queue, but if anything puts one there it must not be
+                # executable: a row named 'FAILED' has no topology entry and no roster
+                # entry, so a worker falls through to default agent handling and spends
+                # real inference on it. Observed live — the resulting FAILED_*.md was
+                # then captured as the step output and passed to the next step.
+                if is_terminal_target(node_id):
+                    import logging  # noqa: PLC0415
+                    logging.getLogger("maccre_core").error(
+                        "[BROKER] Refusing to execute terminal sentinel %r as a node "
+                        "(row %s). Marking it cancelled. Something routed a sentinel "
+                        "into the queue.",
+                        node_id, task.get("id"),
                     )
-                else:
                     cursor.execute(
-                        f"""
-                        SELECT current_node, lock_status
-                        FROM task_queue
-                        WHERE job_id = ? AND current_node IN ({placeholders})
-                        ORDER BY id ASC
-                        """,
-                        [task["job_id"]] + required_nodes,
+                        "UPDATE task_queue SET lock_status = 'cancelled' WHERE id = ?",
+                        (task["id"],),
                     )
-                rows = cursor.fetchall()
-                
-                # Keep only the latest status for each node
-                latest_status = {}
-                for r in rows:
-                    latest_status[r[0]] = r[1]
-                
-                # Check if we should abort due to failure
-                if any(stat == "failed" for stat in latest_status.values()):
-                    # A dependency failed. We must abort this node to prevent ghost ledgers
+                    continue
+
+                wait_for_str = self._resolve_wait_for(topology_engine, node_id)
+                gate = self._gather_gate_state(cursor, task, wait_for_str)
+
+                if gate == "upstream_failed":
+                    # A dependency failed. Abort this node to prevent ghost ledgers.
                     import logging  # noqa: PLC0415
                     logging.getLogger("maccre_core").error(
                         f"[BROKER] Upstream dependency for {node_id} failed. Aborting {node_id}."
                     )
                     cursor.execute(
                         "UPDATE task_queue SET lock_status = 'cancelled' WHERE id = ?",
-                        (task["id"],)
+                        (task["id"],),
                     )
-                    conn.commit()
-                    continue
-                
-                # Check if all required nodes are completed
-                completed_count = sum(1 for stat in latest_status.values() if stat == "completed")
-                if completed_count < len(required_nodes):
                     continue
 
-            # Claim the task atomically within the same EXCLUSIVE transaction
-            cursor.execute(
-                "UPDATE task_queue SET lock_status = 'locked', locked_by = ? WHERE id = ?",
-                (agent_id, task["id"]),
-            )
+                if gate == "waiting":
+                    continue
+
+                # Claim the task atomically within the same EXCLUSIVE transaction.
+                # locked_at is stamped here, alongside the status change, so the
+                # status and the lock age can never diverge. Reclaim ages on this
+                # column, never on created_at.
+                cursor.execute(
+                    "UPDATE task_queue SET lock_status = 'locked', locked_by = ?, "
+                    "locked_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (agent_id, task["id"]),
+                )
+                conn.commit()
+                return task
+
             conn.commit()
-            return task
+            return None
+        except Exception:
+            # Never leave the exclusive lock held — it would block every other
+            # worker thread until the connection was garbage collected.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
 
-        conn.commit()
-        return None
+    def count_ready_tasks(
+        self,
+        job_id: str,
+        topology_engine: Any = None,
+        cap: int = 0,
+    ) -> int:
+        """Estimate how many open tasks for *job_id* are currently claimable.
+
+        Read-only sizing hint for :class:`DynamicSwarmPool`. Takes no locks,
+        opens no transaction, and writes nothing — so it is safe to call from
+        the orchestrating thread while workers are claiming.
+
+        Deliberately advisory. See the ABC docstring: the count can be stale the
+        instant it is returned, and the only cost of over-counting is a worker
+        thread that finds no work and retires.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM task_queue WHERE lock_status = 'open' AND job_id = ? "
+            "ORDER BY created_at ASC",
+            (job_id,),
+        )
+        open_tasks = cursor.fetchall()
+
+        ready = 0
+        for row in open_tasks:
+            task = dict(row)
+            wait_for_str = self._resolve_wait_for(topology_engine, task["current_node"])
+            if self._gather_gate_state(cursor, task, wait_for_str) == "ready":
+                ready += 1
+                if cap > 0 and ready >= cap:
+                    break
+        return ready
 
     def route_task(
         self,
@@ -425,7 +660,8 @@ class LocalMessageBroker(MessageBroker):
             conn = self._get_conn()
             conn.execute(
                 "UPDATE task_queue "
-                "SET lock_status = 'awaiting_orders', payload_path = ?, actual_cost = ? "
+                "SET lock_status = 'awaiting_orders', payload_path = ?, actual_cost = ?, "
+                "locked_at = NULL "
                 "WHERE id = ?",
                 (new_payload_path, actual_cost, row_id),
             )
@@ -441,7 +677,8 @@ class LocalMessageBroker(MessageBroker):
         conn = self._get_conn()
         conn.execute(
             "UPDATE task_queue "
-            "SET lock_status = ?, payload_path = ?, actual_cost = ?, completed_at = CURRENT_TIMESTAMP "
+            "SET lock_status = ?, payload_path = ?, actual_cost = ?, "
+            "completed_at = CURRENT_TIMESTAMP, locked_at = NULL "
             "WHERE id = ?",
             (status, new_payload_path, actual_cost, row_id),
         )
@@ -459,11 +696,23 @@ class LocalMessageBroker(MessageBroker):
                         existing_lock: str = existing[1]
 
                         # ── Fan-in detection ──────────────────────────────────────────
-                        # If the node is currently 'open' (never executed yet this cycle),
-                        # this arrival is a convergent fan-in from a parallel upstream node,
-                        # NOT a recursive self-call. Update payload only — do not increment
-                        # loop_iteration_count so the recursion limit is not falsely tripped.
-                        if existing_lock == "open":
+                        # Recursion means "this node already executed and is being asked
+                        # to run again". Anything that has *not* completed is therefore
+                        # not recursion, and must not increment the counter.
+                        #
+                        # This previously tested only for 'open', which left a real hole.
+                        # When one lane of a scatter fails, the gather gate moves the merge
+                        # row to 'cancelled' (see fetch_and_lock_task). Every remaining lane
+                        # then arrived at a row that was neither 'open' nor 'completed',
+                        # fell through to the ON CONFLICT below, and incremented
+                        # loop_iteration_count. At eight lanes the count passed
+                        # max_recursion and a convergent fan-in was misdiagnosed as runaway
+                        # recursion. Observed live: CTRL_MERGE_S1 reached count=3, was
+                        # rerouted, and never ran.
+                        #
+                        # 'paused' and 'awaiting_orders' matter too — reopening either would
+                        # break a HITL gate the operator is standing at.
+                        if existing_lock != "completed":
                             conn.execute(
                                 "UPDATE task_queue SET payload_path=?, source_payload_path=?, tether_id=? "
                                 "WHERE job_id=? AND current_node=?",
@@ -472,20 +721,28 @@ class LocalMessageBroker(MessageBroker):
                             continue
 
                         # ── True recursion guard ──────────────────────────────────────
-                        # Node has already executed (lock_status='completed') and is being
-                        # re-queued. This is genuine recursion — check the limit.
+                        # The node has completed and is being re-queued. Genuine recursion.
                         if existing_count >= max_recursion:
                             import logging  # noqa: PLC0415
-                            logging.getLogger("maccre_core").warning(
-                                "[BROKER] Epistemic recursion limit reached for %s (count=%d). "
-                                "Rerouting to FAILED.",
-                                node, existing_count,
+                            logging.getLogger("maccre_core").error(
+                                "[BROKER] Recursion limit reached for %s (count=%d >= %d). "
+                                "Marking it failed; downstream gather gates will report "
+                                "upstream_failed.",
+                                node, existing_count, max_recursion,
                             )
+                            # Mark the offending node failed. Do NOT insert a row named
+                            # 'FAILED': that is a terminal sentinel, and this branch used to
+                            # create one as a real queue row — three lines after the
+                            # docstring promising "terminal sentinels; no new rows inserted".
+                            # A worker then claimed it, found no topology or roster entry,
+                            # fell through to default agent handling and spent real inference
+                            # on it, writing a FAILED_*.md that the flow engine captured as
+                            # the step's output and fed to the next step as input.
                             conn.execute(
-                                "INSERT OR IGNORE INTO task_queue "
-                                "(job_id, payload_path, source_payload_path, current_node, tether_id) "
-                                "VALUES (?, ?, ?, ?, ?)",
-                                (job_id, new_payload_path, source_payload_path, "FAILED", tether_id),
+                                "UPDATE task_queue SET lock_status = 'failed', "
+                                "completed_at = CURRENT_TIMESTAMP, locked_at = NULL "
+                                "WHERE job_id = ? AND current_node = ?",
+                                (job_id, node),
                             )
                             continue
 
@@ -497,6 +754,7 @@ class LocalMessageBroker(MessageBroker):
                         "VALUES (?, ?, ?, ?, 0, ?, ?, ?) "
                         "ON CONFLICT(job_id, current_node) DO UPDATE SET "
                         "lock_status='open', "
+                        "locked_at=NULL, "
                         "payload_path=excluded.payload_path, "
                         "flow_line_id=excluded.flow_line_id, "
                         "flow_vector=excluded.flow_vector, "
@@ -516,40 +774,157 @@ class LocalMessageBroker(MessageBroker):
         self.broadcast_topology_event("NODE_ROUTED", event_payload)
 
     def release_task(self, row_id: int) -> None:
-        """Return a locked task to 'open' state (used in worker finally blocks)."""
+        """Return a locked task to 'open' state so another worker can claim it.
+
+        Clears ``locked_at`` alongside ``locked_by``, preserving the invariant
+        that ``locked_at`` is non-NULL only while ``lock_status = 'locked'``.
+        """
         conn = self._get_conn()
         conn.execute(
-            "UPDATE task_queue SET lock_status = 'open', locked_by = NULL WHERE id = ?",
+            "UPDATE task_queue SET lock_status = 'open', locked_by = NULL, "
+            "locked_at = NULL WHERE id = ?",
             (row_id,),
         )
         conn.commit()
 
-    def reclaim_zombie_locks(self, timeout_seconds: float = 15.0) -> int:
-        """Reclaim locked tasks whose workers died or timed out without releasing the lock."""
+    def heartbeat_task(self, row_id: int) -> bool:
+        """Refresh a held lock's ``locked_at``, proving the worker is still alive.
+
+        The ``lock_status = 'locked'`` predicate is load-bearing, not defensive.
+        The heartbeat runs on a separate daemon thread from the node it is
+        vouching for, so it can fire *after* the node finished and committed its
+        completion. Unscoped, that late beat would stamp a fresh ``locked_at``
+        onto a completed row, breaking the invariant that only locked rows carry
+        a lock age — and leaving a permanently "recently locked" completed task
+        for any diagnostic to trip over.
+
+        Returns:
+            True if a locked row was refreshed; False if the row is no longer
+            locked, which tells the heartbeat thread to stop.
+        """
         conn = self._get_conn()
         cursor = conn.execute(
-            "UPDATE task_queue SET lock_status = 'open', locked_by = NULL "
-            "WHERE lock_status = 'locked' AND "
-            "((julianday('now') - julianday(created_at)) * 86400.0) > ?",
-            (timeout_seconds,),
+            "UPDATE task_queue SET locked_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND lock_status = 'locked'",
+            (row_id,),
         )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def reclaim_zombie_locks(
+        self,
+        timeout_seconds: float = DEFAULT_ZOMBIE_TIMEOUT_SECONDS,
+        job_id: str | None = None,
+    ) -> int:
+        """Return locks held by dead workers to the queue.
+
+        A lock is considered abandoned when nothing has refreshed it for
+        *timeout_seconds*. Because :meth:`heartbeat_task` refreshes ``locked_at``
+        every few seconds for as long as a node is running, a stale timestamp is
+        evidence the *worker* stopped, not merely that the node is slow.
+
+        What this used to get wrong
+        --------------------------
+        The age test keyed off ``created_at`` — when the row was *enqueued* — so
+        it measured time spent waiting in the queue, not time spent holding the
+        lock. Sequentially the two were nearly identical, since a task was
+        claimed almost as soon as it was queued. Under an 8-wide scatter they
+        diverge by however long a lane waits for a free worker, which routinely
+        exceeded the old 15 s default. A freshly-claimed task therefore looked
+        abandoned the instant it was picked up: reclaiming set it back to
+        ``open``, a second worker claimed it, and the node ran twice — duplicate
+        ledger writes and duplicate API spend, with no error anywhere.
+
+        Two things had to exist before this could be correct, and now do:
+        ``locked_at`` (Task A1) to measure the right interval, and
+        :meth:`heartbeat_task` (Task A2) to keep a live worker's lock fresh.
+
+        Args:
+            timeout_seconds: Seconds without a refresh before a lock is treated
+                as abandoned. The default is many heartbeat intervals wide, so a
+                worker must miss a long run of beats before anything is taken
+                from it.
+            job_id: Restrict reclamation to one job. ``None`` sweeps every job,
+                which is only appropriate for a cold-start cleanup — a running
+                job should never reclaim across into another job's locks.
+
+        Returns:
+            Number of locks reclaimed.
+
+        Note:
+            Rows locked *before* the ``locked_at`` migration have a NULL
+            timestamp and are deliberately never reclaimed: with no lock-age
+            information the safe assumption is that the lock is live. Such a row
+            has to be cleared with :meth:`release_task`.
+        """
+        sql = (
+            "UPDATE task_queue SET lock_status = 'open', locked_by = NULL, "
+            "locked_at = NULL "
+            "WHERE lock_status = 'locked' AND locked_at IS NOT NULL AND "
+            "((julianday('now') - julianday(locked_at)) * 86400.0) > ?"
+        )
+        params: list[Any] = [timeout_seconds]
+        if job_id is not None:
+            sql += " AND job_id = ?"
+            params.append(job_id)
+
+        conn = self._get_conn()
+        cursor = conn.execute(sql, tuple(params))
         reclaimed_count = cursor.rowcount
         conn.commit()
+        if reclaimed_count:
+            import logging  # noqa: PLC0415
+            logging.getLogger("maccre_core").warning(
+                "[BROKER] Reclaimed %d abandoned lock(s) idle >%.0fs%s. "
+                "A worker died without resolving its task.",
+                reclaimed_count, timeout_seconds,
+                f" for job {job_id}" if job_id else "",
+            )
         return reclaimed_count
 
     def pause_task(self, row_id: int) -> None:
         """Set a task to 'paused' state — worker will skip it until manual resume."""
         conn = self._get_conn()
         conn.execute(
-            "UPDATE task_queue SET lock_status = 'paused', locked_by = NULL WHERE id = ?",
+            "UPDATE task_queue SET lock_status = 'paused', locked_by = NULL, "
+            "locked_at = NULL WHERE id = ?",
             (row_id,),
         )
         conn.commit()
 
-    def resume_paused_task(self, job_id: str, new_payload_path: str = "") -> bool:
+    def resume_paused_task(
+        self,
+        job_id: str,
+        new_payload_path: str = "",
+        topology_engine: Any = None,
+    ) -> bool:
         """Resume the first paused task for a job, optionally with injected context.
 
-        Returns True if a paused task was found and resumed.
+        A paused **pause node** cannot simply be reopened: the worker would run it
+        again and it would pause again. It has to be completed and routed onward
+        instead.
+
+        Where "onward" is used to be hardcoded::
+
+            # In a macro flow, the Next_Node is END. For now, we assume END.
+            self.route_task(row_id, job_id, "END", payload, ...)
+
+        That was correct only because the review auto-wrap also hardcoded
+        ``Next_Node = "END"``. Now that a control node's successor is config-driven
+        (``step.config["next_node"]``), the resume path has to read the same
+        topology the worker would have read, or a review node with a configured
+        successor would resume straight to END and silently drop the rest of the
+        lane.
+
+        Args:
+            job_id: Job whose paused task should resume.
+            new_payload_path: Optional injected context (the HITL payload).
+            topology_engine: Provider used to look up the paused node's
+                ``next_node``. When ``None`` or when the node is unknown, falls
+                back to ``"END"`` — the previous behaviour.
+
+        Returns:
+            True if a paused task was found and resumed.
         """
         conn = self._get_conn()
         cursor = conn.execute(
@@ -562,12 +937,13 @@ class LocalMessageBroker(MessageBroker):
             return False
         row_id, old_payload, current_node, source_payload = row
         payload = new_payload_path or old_payload
-        
-        if str(current_node).upper().startswith("CTRL_PAUSE") or str(current_node).upper().startswith("DET_PAUSE"):
-            # PAUSE nodes have no action other than pausing. 
-            # If we reopen them, they'll just pause again. Route them to the next node.
-            # In a macro flow, the Next_Node is END. For now, we assume END.
-            self.route_task(row_id, job_id, "END", payload, source_payload_path=source_payload)
+
+        node_upper = str(current_node).upper()
+        if node_upper.startswith("CTRL_PAUSE") or node_upper.startswith("DET_PAUSE"):
+            next_node = self._resolve_next_node(topology_engine, str(current_node))
+            self.route_task(
+                row_id, job_id, next_node, payload, source_payload_path=source_payload
+            )
         else:
             conn.execute(
                 "UPDATE task_queue SET lock_status = 'open', payload_path = ? WHERE id = ?",
@@ -575,6 +951,20 @@ class LocalMessageBroker(MessageBroker):
             )
             conn.commit()
         return True
+
+    @staticmethod
+    def _resolve_next_node(topology_engine: Any, node_id: str) -> str:
+        """Look up a node's configured successor, defaulting to ``"END"``."""
+        if topology_engine is None:
+            return "END"
+        try:
+            config: dict[str, Any] = topology_engine.get_node_config(node_id)
+        except Exception:
+            return "END"
+        candidate = str(
+            config.get("next_node_success", config.get("next_node", config.get("Next_Node", "")))
+        ).strip()
+        return candidate or "END"
 
     def has_paused_tasks(self, job_id: str) -> bool:
         """Check if any tasks are in 'paused' state for a job."""
@@ -654,6 +1044,7 @@ class LocalMessageBroker(MessageBroker):
                 "VALUES (?, ?, ?, ?, 0) "
                 "ON CONFLICT(job_id, current_node) DO UPDATE SET "
                 "lock_status='open', "
+                "locked_at=NULL, "
                 "payload_path=excluded.payload_path, "
                 "source_payload_path=excluded.source_payload_path, "
                 "loop_iteration_count=task_queue.loop_iteration_count + 1",
@@ -661,12 +1052,65 @@ class LocalMessageBroker(MessageBroker):
             )
         conn.commit()
 
+    def get_completed_payload_paths(
+        self,
+        job_id: str,
+        nodes: list[str],
+        tether_id: str | None = None,
+    ) -> dict[str, str]:
+        """Map each completed node in *nodes* to the payload path it produced.
+
+        Used to feed a deterministic fan-in node (``CTRL_MERGE``, ``CTRL_CONCAT``)
+        the outputs of its upstream nodes. Those handlers take a
+        ``predecessor_payloads`` list, and the worker had no way to build one — so
+        it passed nothing and an 8-lane merge merged a single source.
+
+        A completing node's row carries its *output* in ``payload_path``, because
+        :meth:`route_task` writes ``new_payload_path`` onto the row it is closing.
+        So the completed row is the authoritative record of what that node produced.
+
+        Args:
+            job_id: Job to search.
+            nodes: Node ids to look for. Nodes with no completed row are simply
+                absent from the result.
+            tether_id: When given, restrict to that scatter scope so one scatter's
+                lanes cannot be gathered by another's merge.
+
+        Returns:
+            ``{node_id: payload_path}``, containing only completed nodes with a
+            non-empty path.
+        """
+        if not nodes:
+            return {}
+
+        placeholders = ",".join(["?"] * len(nodes))
+        sql = (
+            "SELECT current_node, payload_path FROM task_queue "
+            f"WHERE job_id = ? AND current_node IN ({placeholders}) "  # noqa: S608
+            "AND lock_status = 'completed'"
+        )
+        params: list[Any] = [job_id, *nodes]
+        if tether_id:
+            sql += " AND tether_id = ?"
+            params.append(tether_id)
+        # id ASC so a re-queued node's latest row wins, matching the convention in
+        # _gather_gate_state.
+        sql += " ORDER BY id ASC"
+
+        conn = self._get_conn()
+        found: dict[str, str] = {}
+        for row in conn.execute(sql, tuple(params)).fetchall():
+            node_id = str(row[0] or "")
+            path = str(row[1] or "")
+            if node_id and path:
+                found[node_id] = path
+        return found
+
     # ── Tether-Scoped Queries ──────────────────────────────────────────────────
 
     def get_completed_by_tether(self, job_id: str, tether_id: str) -> list[dict[str, Any]]:
         """Get all completed tasks for a given job that share the same tether_id."""
         conn = self._get_conn()
-        conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM task_queue WHERE job_id = ? AND tether_id = ? AND lock_status = 'completed'",
             (job_id, tether_id),

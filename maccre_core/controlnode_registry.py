@@ -123,11 +123,20 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
         "status": "active",
     },
     {
+        # Authoring-level alias for CTRL_PAUSE. flow_engine resolves this to the
+        # node id "CTRL_PAUSE_MANUAL" via
+        # deterministic_nodes.resolve_primitive_node_id, so the runtime handler is
+        # the ordinary pause handler below.
+        #
+        # The previous entry declared handler_func="intercept_review_via_route_task"
+        # in local_broker. That function has never existed anywhere in the
+        # repository, so this registry row pointed at nothing and any registry-driven
+        # dispatch would have failed on it.
         "name": "CTRL_REVIEW",
         "category": "HITL",
-        "description": "Live swarm intercept — pauses the task via broker route_task interception for manual resume.",
-        "handler_module": "maccre_core.orchestration.local_broker",
-        "handler_func": "intercept_review_via_route_task",
+        "description": "Human-in-the-loop review checkpoint — halts the task for manual resume (alias of CTRL_PAUSE).",
+        "handler_module": _DEFAULT_HANDLER_MODULE,
+        "handler_func": "_handle_pause",
         "status": "active",
     },
     {

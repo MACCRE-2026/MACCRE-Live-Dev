@@ -35,6 +35,7 @@ import logging
 import os
 import shutil
 import sys
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -131,42 +132,95 @@ logger: logging.Logger = setup_maccre_logger("maccre_core")
 
 # ── Session Management ────────────────────────────────────────────────────────
 
-def setup_session_loggers(project_id: str, session_id: str) -> None:
+#: The (project_id, session_id) currently wired into ``ops_log``, or None.
+#: Guarded by _SESSION_LOGGER_LOCK. Enables the idempotency check below.
+_ACTIVE_SESSION_LOGGERS: tuple[str, str] | None = None
+_SESSION_LOGGER_LOCK = threading.Lock()
+
+
+def setup_session_loggers(
+    project_id: str,
+    session_id: str,
+    force: bool = False,
+) -> None:
     """
     Called by SwarmWorker immediately upon parsing the requested Workbook.
     Isolates telemetry natively into Datacenter Op-logs and Bug-logs.
-    """
-    from maccre_core.logger import ops_log
-    
-    # 1. Purge the default global fallback file handler
-    for handler in ops_log._log.handlers[:]:
-        if isinstance(handler, logging.FileHandler):
-            ops_log._log.removeHandler(handler)
-            handler.close()
 
-    # Ensure paths exist
-    from maccre_core.utils.path_resolver import get_maccre_root
-    dc_root = get_maccre_root() / "__DATACENTER" / project_id
-    op_dir = dc_root / "Op-logs"
-    bug_dir = dc_root / "Bug-logs"
-    
-    os.makedirs(op_dir, exist_ok=True)
-    os.makedirs(bug_dir, exist_ok=True)
-    
-    # 2. Wire Human Operational Logger
-    op_handler = logging.FileHandler(str(op_dir / f"{session_id}.log"), encoding="utf-8")
-    op_handler.setLevel(logging.INFO)
-    op_handler.setFormatter(HumanFormatter())
-    ops_log._log.addHandler(op_handler)
-    
-    # 3. Wire JSON Debug Logger natively
-    if ENABLE_DEBUG_LOGGING:
-        bug_handler = logging.FileHandler(str(bug_dir / f"{session_id}.log"), encoding="utf-8")
-        bug_handler.setLevel(logging.DEBUG)
-        bug_handler.setFormatter(JSONFormatter())
-        ops_log._log.addHandler(bug_handler)
-    
-    ops_log.tool_fired("setup_session_loggers", session_id, project_id, result_summary="Session Telemetry Active")
+    **Idempotent per session, and thread-safe.** ``execute_cycle`` calls this on
+    every task claim. The body closes and re-adds every ``FileHandler`` on a
+    *shared* logger, so under Phase 6.12 concurrency a second worker calling it
+    would close the handlers a first worker was mid-write through, producing
+    ``ValueError: I/O operation on closed file`` and losing log lines.
+
+    Repeat calls for the same ``(project_id, session_id)`` are therefore a no-op.
+    A different session still re-wires, since only one session is active at a time.
+
+    This also removes a duplicate-telemetry artefact: the verified Aug 29 baseline
+    job has **three** ``TOOL_FIRED`` rows for ``setup_session_loggers`` and nothing
+    else, one per node claim. Only the first is meaningful.
+
+    Args:
+        project_id: Active project, used to locate ``Op-logs`` / ``Bug-logs``.
+        session_id: Job id; also the log file stem.
+        force: Re-wire even if this session is already configured. For tests and
+            for recovery after handlers have been torn down externally.
+    """
+    global _ACTIVE_SESSION_LOGGERS
+
+    from maccre_core.logger import ops_log
+
+    with _SESSION_LOGGER_LOCK:
+        if not force and _ACTIVE_SESSION_LOGGERS == (project_id, session_id):
+            return
+
+        # 1. Purge the default global fallback file handler
+        for handler in ops_log._log.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                ops_log._log.removeHandler(handler)
+                handler.close()
+
+        # Ensure paths exist
+        from maccre_core.utils.path_resolver import get_maccre_root
+        dc_root = get_maccre_root() / "__DATACENTER" / project_id
+        op_dir = dc_root / "Op-logs"
+        bug_dir = dc_root / "Bug-logs"
+
+        os.makedirs(op_dir, exist_ok=True)
+        os.makedirs(bug_dir, exist_ok=True)
+
+        # 2. Wire Human Operational Logger
+        op_handler = logging.FileHandler(str(op_dir / f"{session_id}.log"), encoding="utf-8")
+        op_handler.setLevel(logging.INFO)
+        op_handler.setFormatter(HumanFormatter())
+        ops_log._log.addHandler(op_handler)
+
+        # 3. Wire JSON Debug Logger natively
+        if ENABLE_DEBUG_LOGGING:
+            bug_handler = logging.FileHandler(str(bug_dir / f"{session_id}.log"), encoding="utf-8")
+            bug_handler.setLevel(logging.DEBUG)
+            bug_handler.setFormatter(JSONFormatter())
+            ops_log._log.addHandler(bug_handler)
+
+        _ACTIVE_SESSION_LOGGERS = (project_id, session_id)
+
+    # Emitted outside the lock: ops_log writes through the handlers just wired,
+    # and holding the setup lock across a telemetry write would invite a
+    # lock-ordering problem with the telemetry layer.
+    ops_log.tool_fired(
+        "setup_session_loggers", session_id, project_id,
+        result_summary="Session Telemetry Active",
+    )
+
+
+def reset_session_loggers() -> None:
+    """Forget which session is wired, so the next setup call re-wires.
+
+    For tests and for teardown paths that dispose of the handlers directly.
+    """
+    global _ACTIVE_SESSION_LOGGERS
+    with _SESSION_LOGGER_LOCK:
+        _ACTIVE_SESSION_LOGGERS = None
 
 
 def clear_session_logs(project_id: str, session_id: str, target: str = "all") -> str:

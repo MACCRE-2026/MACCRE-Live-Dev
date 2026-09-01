@@ -44,7 +44,7 @@ import time
 import urllib.error
 import urllib.request
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from maccre_core.orchestration.universal_vault import wipe_string
 
@@ -155,13 +155,37 @@ def _model_priority(name: str) -> tuple[int, str]:
     return (tier_idx, name)
 
 
+def _dedupe(names: Iterable[str]) -> list[str]:
+    """Order-preserving deduplication."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
 def _strip_prefix(name: str) -> str:
     """'models/gemini-2.5-flash' → 'gemini-2.5-flash'."""
     return name.removeprefix("models/")
 
 
 # ── Hardcoded fallback chains (TEXT_GENERATION surface) ──────────────────────
-# Used when the live probe fails.
+# COLD START ONLY. Consulted when the live probe has not succeeded.
+#
+# This table is hand-maintained and will always lag the provider — it was written
+# in the 3.1 era and the API now serves 3.5, 3.6 and 3.7 models. That lag is
+# tolerable for *ordering*, but it used to be fatal for *coverage*: the lookup was
+# ``_FALLBACK_CHAINS.get(name, [name])``, so any model absent from the table got a
+# chain containing only itself — no failover at all. A run pinned to
+# ``gemini-3.7-flash`` had nothing to fall back to the moment the probe was
+# unavailable.
+#
+# :func:`_build_fallback_chain` now treats these entries as *tier exemplars* rather
+# than an exhaustive index, so an unknown model still inherits a usable chain from
+# its own tier. Adding new models here improves ordering; forgetting to no longer
+# removes failover.
 
 _FALLBACK_CHAINS: dict[str, list[str]] = {
     "gemini-2.5-pro": [
@@ -189,6 +213,56 @@ _FALLBACK_CHAINS: dict[str, list[str]] = {
         "gemini-3.1-flash-lite-preview", "gemini-2.5-flash-lite",
     ],
 }
+
+def _known_fallback_models() -> list[str]:
+    """Every model named anywhere in :data:`_FALLBACK_CHAINS`, in table order.
+
+    Keys first, then chain members, so the table's own preference ordering is
+    preserved rather than re-sorted alphabetically.
+    """
+    names: list[str] = list(_FALLBACK_CHAINS.keys())
+    for chain in _FALLBACK_CHAINS.values():
+        names.extend(chain)
+    return _dedupe(names)
+
+
+def _build_fallback_chain(model_name: str) -> list[str]:
+    """Cold-start failover chain for *model_name*, derived from the table's tiers.
+
+    Mirrors :meth:`ModelRegistry._build_text_chain` — requested model first,
+    same-tier peers next, then a bounded drop into the next lower tier — but reads
+    its candidate pool from :data:`_FALLBACK_CHAINS` instead of live probe data.
+    Using one strategy for both paths means degraded-mode routing behaves the same
+    way as healthy routing, only from a staler pool.
+
+    An exact table hit is honoured as-is, so curated orderings are not second-
+    guessed. Anything else is derived, which is what stops a newer model from
+    getting a chain of one.
+    """
+    exact = _FALLBACK_CHAINS.get(model_name)
+    if exact:
+        return list(exact)
+
+    requested_tier = _classify_tier(model_name)
+    tier_idx = (
+        _TIER_ORDER.index(requested_tier) if requested_tier in _TIER_ORDER else 99
+    )
+
+    by_tier: dict[str, list[str]] = {}
+    for known in _known_fallback_models():
+        by_tier.setdefault(_classify_tier(known), []).append(known)
+
+    chain: list[str] = [model_name]
+    chain.extend(m for m in by_tier.get(requested_tier, []) if m != model_name)
+
+    for next_tier in _TIER_ORDER[tier_idx + 1:]:
+        peers = [m for m in by_tier.get(next_tier, []) if m != model_name]
+        if peers:
+            chain.extend(peers[:2])
+            break
+
+    return _dedupe(chain)
+
 
 # Fallback surface → preferred model (used when live data unavailable)
 _FALLBACK_SURFACE_DEFAULTS: dict[ModelSurface, list[str]] = {
@@ -287,7 +361,10 @@ class ModelRegistry:
             ordered = [normalized] + [m for m in surface_list if m != normalized]
             return ordered if ordered else [normalized]
 
-        return _FALLBACK_CHAINS.get(normalized, [normalized])
+        # Degraded mode. Derived rather than looked up: a bare
+        # ``_FALLBACK_CHAINS.get(normalized, [normalized])`` gave any model missing
+        # from the hand-maintained table a chain of one, i.e. no failover.
+        return _build_fallback_chain(normalized)
 
     def get_models_for_surface(self, surface: ModelSurface) -> list[str]:
         """Return all model names for a given capability surface.
@@ -494,15 +571,7 @@ class ModelRegistry:
                 chain.extend(peers[:2])
                 break
 
-        # Deduplicate preserving order
-        seen: set[str] = set()
-        deduped: list[str] = []
-        for m in chain:
-            if m not in seen:
-                seen.add(m)
-                deduped.append(m)
-
-        return deduped or [model_name]
+        return _dedupe(chain) or [model_name]
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

@@ -1242,7 +1242,7 @@ def main() -> None:
                 print(f"[WORKBOOK] No workbook found at {_wb_path}. Run 'workbook refresh' first.")
             else:
                 from maccre_core.tools.sheet_parser import parse_workbook as _parse  # noqa: PLC0415
-                _parsed = _parse(str(_wb_path))
+                _parsed = _parse(_wb_path)
                 _project = _parsed.project_name.strip()
                 _start = _parsed.start_node or "START"
                 if not _project:
@@ -1255,7 +1255,7 @@ def main() -> None:
                             return
                     print(f"[WORKBOOK] Materialising and launching '{_project}'...")
                     from maccre_core.tools.sheet_parser import materialise_from_sheet  # noqa: PLC0415
-                    print(materialise_from_sheet(str(_wb_path)))
+                    print(materialise_from_sheet(_wb_path))
                     ignite_swarm(payload_path=str(_root / "__DATACENTER" / _project / "01_Raw_Source" / "input.md"),
                                  starting_node=_start)
                     # Archive workbook

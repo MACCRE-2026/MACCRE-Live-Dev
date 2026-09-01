@@ -19,6 +19,7 @@ writes them to topology.csv dynamically, and executes them sequentially.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sqlite3
@@ -26,16 +27,92 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from maccre_core.macronode_registry import get_macronode_store
+from maccre_core.orchestration.concurrency import atomic_write_text, file_lock
+from maccre_core.orchestration.deterministic_nodes import (
+    is_deterministic_node,
+    resolve_primitive_node_id,
+)
 from maccre_core.orchestration.local_broker import LocalMessageBroker
-from maccre_core.orchestration.swarm_worker import UniversalSwarmWorker
+from maccre_core.orchestration.swarm_pool import DynamicSwarmPool
+from maccre_core.orchestration.topology_engine import TopologyEngine
+from maccre_core.orchestration.topology_graph import (
+    entry_nodes,
+    is_terminal_target,
+    parse_targets,
+)
 from maccre_core.tools.admin_tools import build_topology, ensure_project_workbook
 from maccre_core.utils.path_resolver import get_datacenter_path
 from maccre_core.utils.session_manager import generate_session_id
 
 logger = logging.getLogger(__name__)
+
+
+def _default_tether_id(scatter_agents: Sequence[str]) -> str:
+    """Generate a scatter's tether scope when the operator did not name one.
+
+    Derived from the agent set, so it is **stable**: the same scatter produces the
+    same tether on every call and in every process.
+
+    That stability matters more than it looks. The previous default was
+    ``f"scatter_{id(scatter_agents) % 9999:04d}"`` — keyed on a CPython object
+    address, which is neither reproducible across runs nor guaranteed identical
+    between two calls in one run. The auto-wrap *is* called twice per step, once
+    for pre-flight validation and once for execution, so the tether validated was
+    not necessarily the tether executed. All rows within a single call agreed,
+    which is why it never broke outright, but nothing about it was load-bearing by
+    design.
+
+    Deriving from the agent set also keeps two different scatters in one job from
+    colliding into a single gather scope, which an address-derived value could do
+    by coincidence.
+    """
+    digest = hashlib.sha1("|".join(scatter_agents).encode("utf-8")).hexdigest()[:8]
+    return f"scatter_{digest}"
+
+
+#: ``FlowStep.config`` keys whose values name routing targets, and so must carry
+#: the ``_S{step}`` suffix that :meth:`FlowRunner._hydrate_topology` applies to the
+#: topology itself.
+#:
+#: Kept as an explicit allow-list rather than "hydrate anything that looks like a
+#: node name". Most config values are not node references — ``scatter_mode``,
+#: ``merge_delimiter``, ``auto_resume_after`` — and suffixing one of those would
+#: corrupt it silently. Adding a routing key to config means adding it here.
+_ROUTING_CONFIG_KEYS: tuple[str, ...] = (
+    "scatter_targets",
+    "next_node",
+    "wait_for",
+)
+
+
+def _hydrate_config_targets(config: dict[str, Any], step_index: int) -> dict[str, Any]:
+    """Copy *config* with routing-target values suffixed for *step_index*.
+
+    Handles both list-valued keys (``scatter_targets``) and delimited strings
+    (``next_node``, ``wait_for``), and leaves terminal sentinels alone so ``END``
+    does not become ``END_S0``.
+    """
+    hydrated = dict(config)
+    for key in _ROUTING_CONFIG_KEYS:
+        if key not in hydrated:
+            continue
+        value = hydrated[key]
+        if isinstance(value, list):
+            hydrated[key] = [
+                name if is_terminal_target(str(name)) else f"{str(name).strip()}_S{step_index}"
+                for name in value
+                if str(name).strip()
+            ]
+        elif isinstance(value, str) and value.strip():
+            if is_terminal_target(value):
+                continue
+            hydrated[key] = ",".join(
+                f"{name}_S{step_index}" for name in parse_targets(value)
+            )
+    return hydrated
 
 
 class FlowStep:
@@ -168,7 +245,12 @@ class FlowRunner:
         # ── CTRL_ Node Auto-Wrap ──────────────────────────────────────────────
         # CTRL_ nodes are deterministic control-flow primitives. They don't
         # exist in the MacroNode registry — synthesize a topology on the fly.
-        if name.upper().startswith("CTRL_"):
+        #
+        # Gate on is_deterministic_node() rather than a literal startswith("CTRL_"):
+        # it also admits the legacy DET_ prefix, which the hardcoded review
+        # intercept used to handle separately (DET_REVIEW would otherwise fall
+        # through to the KeyError below).
+        if is_deterministic_node(name):
             cfg = step_config or {}
             scatter_agents: list[str] = cfg.get("scatter_agents", [])
 
@@ -176,7 +258,18 @@ class FlowRunner:
             if name.upper().startswith("CTRL_SCATTER") and scatter_agents:
                 agent_overrides: dict[str, dict[str, Any]] = cfg.get("scatter_agent_overrides", {})
                 scatter_mode: str = cfg.get("scatter_mode", "full_copy")
-                tether_id: str = str(cfg.get("tether_id", f"scatter_{id(scatter_agents) % 9999:04d}"))
+                # `or` rather than a .get default, because the authoring UI writes
+                # the key even when the field is blank. `_collect_ctrl_config` does
+                # cfg["tether_id"] = <input>.value.strip(), so saving a CTRL_SCATTER
+                # with the Tether ID box empty stores "" — a *present* key. A
+                # .get("tether_id", <generated>) then returns "" and the generated
+                # value never applies. Measured live: every task_queue row carried
+                # an empty tether, which left the tether-scoped fan-in unreachable
+                # and an 8-lane CTRL_MERGE gathering 1 source instead of 8.
+                tether_id: str = (
+                    str(cfg.get("tether_id") or "").strip()
+                    or _default_tether_id(scatter_agents)
+                )
                 topo_rows: list[dict[str, Any]] = []
 
                 # 1. CTRL_SCATTER entry node → fans out to all agents
@@ -236,22 +329,48 @@ class FlowRunner:
                     "template_config": None,
                 }
 
-            # Generic CTRL_ node (PAUSE, GATE, CHECKPOINT, etc.) → single-node passthrough
-            logger.info("[FLOW_ENGINE] Auto-wrapping CTRL node '%s' as single-node topology.", name)
+            # Generic CTRL_ node (PAUSE, REVIEW, GATE, CHECKPOINT, ...) →
+            # single-node passthrough.
+            #
+            # Node_ID goes through resolve_primitive_node_id so authoring-level
+            # aliases land on the primitive that actually implements them. This is
+            # what replaced the hardcoded
+            #     if step.macronode_name.upper() in ("CTRL_REVIEW", "DET_REVIEW"):
+            #         macro_def = {... "Node_ID": "CTRL_PAUSE_MANUAL", "Next_Node": "END"}
+            # blocks that used to sit inline in execute_flow and resume_flow. Those
+            # violated Law III (registry-driven, no string special-casing), skipped
+            # preflight validation entirely, and discarded step.config — so an
+            # operator-set auto_resume_after was silently ignored.
+            node_id = resolve_primitive_node_id(name)
+
+            # Next_Node and Wait_For are config-driven with the previous literals
+            # as defaults. "END" terminates this macronode's *internal* DAG only;
+            # the outer step loop in execute_flow still advances to the next
+            # FlowStep, which is why the 3-step baseline reaches S2. Allowing an
+            # override is what lets a control node sit mid-lane inside a scatter
+            # and continue to that lane's successor instead of closing the lane.
+            next_node = str(cfg.get("next_node", "END")).strip() or "END"
+            wait_for = str(cfg.get("wait_for", "none")).strip() or "none"
+
+            logger.info(
+                "[FLOW_ENGINE] Auto-wrapping control node '%s' as single-node topology "
+                "(node_id=%s, next=%s).",
+                name, node_id, next_node,
+            )
             return {
                 "name": name,
                 "description": f"Auto-wrapped control node: {name}",
                 "is_template": False,
                 "agent_slots": [],
                 "topology_rows": [{
-                    "Node_ID": name,
+                    "Node_ID": node_id,
                     "Agent_Name": "SYSTEM",
                     "Model_Override": "none",
-                    "Next_Node": "END",
+                    "Next_Node": next_node,
                     "Temperature": "0",
-                    "Instruction_Override": "",
-                    "Wait_For": "none",
-                    "Failure_Target": "FAILED",
+                    "Instruction_Override": str(cfg.get("instruction_override", "")),
+                    "Wait_For": wait_for,
+                    "Failure_Target": str(cfg.get("failure_target", "FAILED")),
                 }],
                 "roster_rows": [],
                 "template_type": "",
@@ -288,9 +407,11 @@ class FlowRunner:
             macro_name = step.macronode_name
 
             # ── (a) MacroNode existence ───────────────────────────────────────
-            if macro_name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
-                continue  # CTRL_REVIEW is a hardcoded intercept node, bypass validation
-
+            # Review nodes used to be skipped here ("CTRL_REVIEW is a hardcoded
+            # intercept node, bypass validation"). They now resolve through the
+            # ordinary control-node auto-wrap, so they are validated like anything
+            # else — a review step with a bad next_node or wait_for is caught
+            # before the flow spends money.
             try:
                 macro_def = self._get_macronode(macro_name, step_config=getattr(step, "config", {}))
             except KeyError:
@@ -399,20 +520,18 @@ class FlowRunner:
 
             if node_id:
                 node_id = f"{node_id}_S{step_index}"
-            if next_node and next_node.upper() not in ("END", "FAILED"):
-                parts = [p.strip() for p in next_node.split(",") if p.strip()]
-                hydrated_parts = [
-                    f"{p}_S{step_index}" if p.upper() not in ("END", "FAILED") else p
-                    for p in parts
-                ]
-                next_node = ",".join(hydrated_parts)
+            # Both fields go through the shared parser, so a hand-authored
+            # topology means the same thing here as it does to the broker that
+            # enqueues successors. This used to split Next_Node on "," alone while
+            # route_task accepted "," and "|", so a pipe-delimited Next_Node
+            # hydrated into one phantom token ("B|C_S0") and neither successor ran.
+            if next_node and not is_terminal_target(next_node):
+                targets = parse_targets(next_node)
+                next_node = ",".join(f"{p}_S{step_index}" for p in targets)
             if wait_for and wait_for.lower() not in ("none", ""):
-                parts = []
-                for p in wait_for.replace("|", ",").split(","):
-                    p = p.strip()
-                    if p:
-                        parts.append(f"{p}_S{step_index}")
-                wait_for = "|".join(parts)
+                wait_for = "|".join(
+                    f"{p}_S{step_index}" for p in parse_targets(wait_for)
+                )
 
             instr = str(row_dict.get("Instruction_Override", ""))
             if custom_instructions:
@@ -421,7 +540,14 @@ class FlowRunner:
                 
             tools_allowed = agent_tools_overrides.get(agent_name, "")
 
-            # Standard order: Node_ID, Agent_Name, Model_Override, Next_Node, Temp, Instr, Wait, Fail, MaxRec, Artifact, Live, Partner, Rounds, Payload_Mode, Tools_Allowed
+            # Standard order: Node_ID, Agent_Name, Model_Override, Next_Node, Temp,
+            # Instr, Wait, Fail, MaxRec, Artifact, Live, Partner, Rounds,
+            # Payload_Mode, Tools_Allowed, Tether_ID
+            #
+            # Tether_ID is last and was previously absent. The scatter auto-wrap
+            # computed a tether and wrote it into every row dict, but this flatten
+            # step had no slot for it, so it was dropped before reaching the CSV —
+            # and with it the whole tether-scoped fan-in path.
             row_list = [
                 node_id,
                 agent_name,
@@ -438,28 +564,49 @@ class FlowRunner:
                 str(row_dict.get("Dialogue_Rounds", "0")),
                 payload_mode,
                 tools_allowed,
+                str(row_dict.get("Tether_ID", "")),
             ]
             hydrated.append(row_list)
         return hydrated
 
     def _find_starting_nodes(self, topology_rows: list[dict[str, Any]], step_index: int = 0) -> list[str]:
-        """Heuristically find all starting Node_IDs of a MacroNode DAG."""
+        """Find the entry Node_IDs of a MacroNode DAG, hydrated with the step suffix.
+
+        An entry point is a node **nothing else routes to**. That is a property of
+        the graph's edges, so it is read from the edges — see
+        :mod:`maccre_core.orchestration.topology_graph`.
+
+        This previously inferred entry points from ``Wait_For == "none"``, which
+        conflated two different things. ``Wait_For`` is the *gather gate*: how many
+        upstreams must finish before a node may run. It is not a predecessor list.
+        For most topologies the two happen to agree, which is why it survived; for
+        a scatter they diverge completely, because the auto-wrap gives every lane
+        ``Wait_For: "none"`` (a lane gathers from nothing) while every lane is
+        clearly downstream of the scatter.
+
+        Read as entry points, all eight lanes of an 8-wide scatter were seeded
+        directly against the raw job payload in parallel with the scatter that was
+        supposed to feed them — so every agent executed twice. Measured live in
+        UT-0: 16 inference calls for an 8-lane scatter, and the flow still reported
+        success.
+        """
         if not topology_rows:
             return [f"OSINT_S{step_index}"]
-        
-        start_nodes = []
-        for row in topology_rows:
-            wait_for = str(row.get("Wait_For", "none")).strip().lower()
-            if wait_for in ("none", "", "null"):
-                node_id = str(row.get("Node_ID", "OSINT"))
-                start_nodes.append(f"{node_id}_S{step_index}")
-        
-        if not start_nodes:
-            # Fallback if somehow there's a circular Wait_For loop with no entry
-            node_id = str(topology_rows[0].get("Node_ID", "OSINT"))
-            start_nodes.append(f"{node_id}_S{step_index}")
-            
-        return start_nodes
+
+        start_nodes = [
+            f"{node_id}_S{step_index}" for node_id in entry_nodes(topology_rows)
+        ]
+        if start_nodes:
+            return start_nodes
+
+        # No Node_IDs at all in these rows. entry_nodes already handles the cyclic
+        # case by nominating a node, so reaching here means the rows are malformed.
+        node_id = str(topology_rows[0].get("Node_ID", "OSINT"))
+        logger.warning(
+            "[FLOW_ENGINE] Step %d topology has no usable Node_ID; seeding %r.",
+            step_index + 1, node_id,
+        )
+        return [f"{node_id}_S{step_index}"]
 
     def _find_final_ledger_path(self, job_id: str, topology_rows: list[dict[str, Any]]) -> str | None:
         """Find the final expected artifact path for the DAG to pass it sequentially to the next step."""
@@ -474,6 +621,250 @@ class FlowRunner:
         return None
 
 
+    # ── Phase 6.12B: shared worker-pool driver ─────────────────────────────────
+
+    @staticmethod
+    def _build_topology_overlays(
+        topo_rows: list[dict[str, Any]],
+        step_config: dict[str, Any],
+        step_index: int,
+    ) -> dict[str, dict[str, Any]]:
+        """Map ``FlowStep.config`` onto the step's hydrated control-node ids.
+
+        Only control nodes get an overlay: agent rows take their configuration
+        from the roster and the topology row itself.
+
+        Previously this lived inline in ``execute_flow`` only, so a resumed flow
+        silently ran its control nodes **without** their config — an operator's
+        ``auto_resume_after`` or gate predicate applied on the first run and
+        vanished on resume.
+
+        Node-name-bearing config keys are hydrated with the step suffix
+        ------------------------------------------------------------------
+        ``step_config`` comes straight from the authoring UI, where node names are
+        written bare. The topology those names refer to is hydrated to
+        ``NAME_S{step}``. Any config value that is a *routing target* therefore has
+        to be hydrated too, or the control node routes somewhere the topology does
+        not describe.
+
+        ``CTRL_SCATTER`` is where this bit: its ``scatter_targets`` were passed
+        through untouched, so the deterministic node routed to bare ``Testy``,
+        ``Regular_Joe``, ... while the topology described ``Testy_S0``,
+        ``Regular_Joe_S0``, ... The broker happily created rows for both sets, so
+        every lane of an 8-wide scatter existed twice and every agent ran twice.
+        """
+        overlays: dict[str, dict[str, Any]] = {}
+        if not step_config:
+            return overlays
+        for row in topo_rows:
+            raw_node_id = str(row.get("Node_ID", ""))
+            if raw_node_id and is_deterministic_node(raw_node_id):
+                overlays[f"{raw_node_id}_S{step_index}"] = _hydrate_config_targets(
+                    step_config, step_index
+                )
+        return overlays
+
+    def _run_worker_pool(
+        self,
+        job_id: str,
+        step_index: int,
+        broker: LocalMessageBroker,
+        topo_rows: list[dict[str, Any]],
+        step_config: dict[str, Any],
+        current_payload: str,
+        pause_event: threading.Event | None = None,
+        cancel_event: threading.Event | None = None,
+        hitl_callback: Callable[[int, str, str], None] | None = None,
+        node_active_callback: Callable[[int | None, str, int | None], None] | None = None,
+        node_finished_callback: Callable[[int | None, str, int | None], None] | None = None,
+        max_workers: int | None = None,
+        timeout_seconds: float = 3600.0,
+    ) -> str:
+        """Execute one flow step's DAG on a :class:`DynamicSwarmPool`.
+
+        Replaces the two near-identical ``for _ in range(500): worker.execute_cycle()``
+        loops that used to live in :meth:`execute_flow` and :meth:`resume_flow`.
+        Having one copy is the point: the duplicates had already drifted — only
+        ``execute_flow`` applied the step's config overlay, and only it logged the
+        HITL gate.
+
+        Concurrency comes from the pool; this method stays single-threaded and
+        keeps the HITL pause gate exactly where it was.
+
+        Returns:
+            ``"completed"``, ``"cancelled"``, ``"timeout"`` or ``"stalled"``.
+
+            ``"stalled"`` means tasks were left ``locked`` with no worker alive to
+            finish them — a claimed node that never ran. It is reported separately
+            from ``"timeout"`` because the two need different responses: a timeout
+            may just need a longer budget, while a stall is a worker that died.
+        """
+        overlays = self._build_topology_overlays(topo_rows, step_config, step_index)
+        if overlays:
+            logger.info(
+                "[FLOW_ENGINE] Step %d: applying step config to %d control node(s): %s",
+                step_index + 1, len(overlays), sorted(overlays),
+            )
+
+        # Resolve the concurrency ceiling from the step's own configuration. A
+        # scatter with 4 slotted agents should not open 8 threads.
+        scatter_agents = step_config.get("scatter_agents") or []
+        if max_workers is None and scatter_agents:
+            max_workers = len(scatter_agents)
+
+        topology_for_gate = TopologyEngine()
+        topology_for_gate.flush_cache()
+        for node_id, overlay in overlays.items():
+            topology_for_gate.merge_config_overlay(node_id, overlay)
+
+        pool = DynamicSwarmPool(
+            job_id=job_id,
+            max_workers=max_workers,
+            # Advisory sizing only. The atomic claim in the broker remains the
+            # sole authority on who owns a task.
+            demand_estimator=lambda cap: broker.count_ready_tasks(
+                job_id, topology_for_gate, cap
+            ),
+            on_node_start=node_active_callback,
+            on_node_finish=node_finished_callback,
+            topology_overlays=overlays,
+        )
+
+        # One connection for the whole step, not one per poll tick. The old loops
+        # opened a fresh sqlite3.connect() on every iteration — up to 500 per step,
+        # each with its own WAL handshake.
+        db_path = str(get_datacenter_path("swarm_queue.db"))
+        deadline = time.time() + timeout_seconds
+
+        with sqlite3.connect(db_path, timeout=30.0) as poll_conn:
+
+            def count_by_status(status: str) -> int:
+                return int(
+                    poll_conn.execute(
+                        "SELECT COUNT(*) FROM task_queue "
+                        "WHERE lock_status = ? AND job_id = ?",
+                        (status, job_id),
+                    ).fetchone()[0]
+                )
+
+            # Each iteration is one drain-then-check-for-HITL cycle. A flow with
+            # two review nodes in one step goes round twice.
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("[FLOW_ENGINE] Cancellation requested — aborting current MacroNode.")
+                    return "cancelled"
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    logger.info("[FLOW_ENGINE] Swarm Worker Timeout reached.")
+                    return "timeout"
+
+                result = pool.run_until_drained(
+                    is_drained=lambda: count_by_status("open") == 0,
+                    pause_event=pause_event,
+                    stop_event=cancel_event,
+                    timeout_seconds=remaining,
+                    # Without this the pool cannot tell "everything finished" from
+                    # "a worker died still holding its task". Both look like an
+                    # empty queue, because a locked row is not an open one.
+                    locked_probe=lambda: count_by_status("locked"),
+                )
+                logger.info(
+                    "[FLOW_ENGINE] Step %d pool: drained=%s peak_concurrency=%d "
+                    "nodes=%d spawned=%d",
+                    step_index + 1, result.drained, result.peak_concurrency,
+                    result.cycles_worked, result.workers_spawned,
+                )
+                for err in result.errors:
+                    logger.error("[FLOW_ENGINE] Worker error: %s", err)
+
+                if result.stopped:
+                    return "cancelled"
+                if result.timed_out:
+                    return "timeout"
+                if result.stalled:
+                    # Checked before the HITL gate: a stall means a claimed node
+                    # never ran, so there is no artifact for the next step to
+                    # consume. Continuing would propagate a hole.
+                    logger.critical(
+                        "[FLOW_ENGINE] Step %d STALLED: %d task(s) left locked with "
+                        "no worker alive. Those nodes did not execute; refusing to "
+                        "report the step complete.",
+                        step_index + 1, result.orphaned_locks,
+                    )
+                    return "stalled"
+
+                still_paused = count_by_status("paused")
+                if still_paused > 0:
+                    # ── HITL Pause Gate ────────────────────────────────────────
+                    # Everything is finished except paused task(s) — surface to the
+                    # TUI for operator input, then block until it resumes us.
+                    logger.info("[FLOW_ENGINE] HITL pause detected — awaiting user input.")
+                    if hitl_callback is not None:
+                        try:
+                            hitl_callback(step_index, job_id, current_payload)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if not self._wait_for_hitl_resume(pause_event, cancel_event, deadline):
+                        if cancel_event is not None and cancel_event.is_set():
+                            return "cancelled"
+                        return "timeout"
+                    # The paused task should now be 'open' again — go round.
+                    continue
+
+                if result.aborted:
+                    logger.error(
+                        "[FLOW_ENGINE] Step %d abandoned: worker error budget exhausted.",
+                        step_index + 1,
+                    )
+                    return "timeout"
+
+                return "completed"
+
+    @staticmethod
+    def _wait_for_hitl_resume(
+        pause_event: threading.Event | None,
+        cancel_event: threading.Event | None,
+        deadline: float,
+    ) -> bool:
+        """Block until the TUI signals that HITL input has been injected.
+
+        .. note::
+           **Known ownership inversion, preserved deliberately.**
+
+           ``pause_event`` is created and owned by the TUI (``nexus_plex``); the
+           flow engine only receives it. Under
+           ``orchestration_oracle_principles.md`` that makes the engine an
+           observer, which may not call ``.clear()``. It does so here.
+
+           This is pre-existing baseline behaviour and it is load-bearing: the
+           TUI's contract is "pause_event set == running", and the engine clears
+           it to park itself until the TUI re-sets it after writing
+           ``HITL_injection.md``. Removing the ``clear()`` without moving it into
+           the TUI's ``hitl_callback`` would make the engine spin straight past
+           the gate and resume the flow with no operator input — exactly the class
+           of silent skip that caused the Phase 6.12 rollback.
+
+           The correct fix is for the owner to clear its own event inside
+           ``hitl_callback``. That is a TUI change, tracked for Phase 6.12C, and
+           deliberately not bundled into this refactor.
+
+        Returns:
+            True when resumed, False if cancelled or the deadline passed.
+        """
+        if pause_event is None:
+            # No pause channel: nothing can resume us, so do not spin.
+            return False
+        pause_event.clear()
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                return False
+            if time.time() > deadline:
+                return False
+            # Bounded wait so cancellation and the deadline stay observable.
+            if pause_event.wait(timeout=0.25):
+                return True
+
     def resume_flow(
         self,
         job_id: str,
@@ -483,8 +874,16 @@ class FlowRunner:
         hitl_callback: Callable[[int, str, str], None] | None = None,
         job_started_callback: Callable[[str], None] | None = None,
         node_started_callback: Callable[[int, str], None] | None = None,
+        node_active_callback: Callable[[int | None, str, int | None], None] | None = None,
+        node_finished_callback: Callable[[int | None, str, int | None], None] | None = None,
     ) -> str:
-        """Resume a failed or paused flow from its last known step."""
+        """Resume a failed or paused flow from its last known step.
+
+        ``node_active_callback`` / ``node_finished_callback`` fire per **node**
+        with ``(step_index, node_id, slot)``, unlike ``node_started_callback``
+        which fires per **step**. Under concurrency several nodes are live at once,
+        so a per-step signal can no longer describe what is running.
+        """
         os.environ["MACCRE_ACTIVE_PROJECT"] = self.project_name
         ensure_project_workbook(self.project_name)
 
@@ -516,6 +915,7 @@ class FlowRunner:
         
         current_payload = current_ledger_path
         is_cancelled = False
+        is_stalled = False
         
         # When resuming, the tasks for start_idx might already be in task_queue, or the step might have failed before injection.
         # We'll just run the worker. It will pick up 'open' tasks. If there are none, it will exit immediately.
@@ -544,15 +944,13 @@ class FlowRunner:
                     except Exception:  # noqa: BLE001
                         pass
                 
-                # 1. Load MacroNode
-                if step.macronode_name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
-                    macro_def = {"topology_rows": [{"Node_ID": "CTRL_PAUSE_MANUAL", "Model_Override": "none", "Wait_For": "none", "Next_Node": "END"}]}
-                else:
-                    try:
-                        macro_def = self._get_macronode(step.macronode_name, step_config=getattr(step, "config", {}))
-                    except KeyError:
-                        logger.error(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
-                        return current_payload
+                # 1. Load MacroNode — review nodes included, via the registry-driven
+                # control-node auto-wrap (no name special-casing here).
+                try:
+                    macro_def = self._get_macronode(step.macronode_name, step_config=getattr(step, "config", {}))
+                except KeyError:
+                    logger.error(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
+                    return current_payload
                         
                 topo_rows = macro_def.get("topology_rows", [])
                 hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, step.payload_mode, step_index=idx, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
@@ -594,42 +992,27 @@ class FlowRunner:
                 else:
                     logger.info(f"[FLOW_ENGINE] Step {idx+1}: {open_tasks} open, {paused_tasks} paused, {completed_tasks} completed task(s). Resuming worker.")
                 
-                db_path = str(get_datacenter_path("swarm_queue.db"))
-                worker = UniversalSwarmWorker()
-                if worker.topology:
-                    worker.topology.flush_cache()
-                    
-                start_time = time.time()
-                timeout_seconds = 3600
-                
-                for _ in range(500):
-                    if cancel_event and cancel_event.is_set():
-                        is_cancelled = True
-                        break
-                    if pause_event is not None:
-                        pause_event.wait()
-                    if time.time() - start_time > timeout_seconds:
-                        break
-                        
-                    worker.execute_cycle(pause_event=pause_event, stop_event=cancel_event)
-                    
-                    with sqlite3.connect(db_path) as _q:
-                        still_open = _q.execute("SELECT COUNT(*) FROM task_queue WHERE lock_status = 'open' AND job_id = ?", (job_id,)).fetchone()[0]
-                        still_paused = _q.execute("SELECT COUNT(*) FROM task_queue WHERE lock_status = 'paused' AND job_id = ?", (job_id,)).fetchone()[0]
-
-                    if still_open == 0 and still_paused > 0:
-                        if hitl_callback is not None:
-                            try:
-                                hitl_callback(idx, job_id, current_payload)
-                            except Exception:
-                                pass
-                        if pause_event is not None:
-                            pause_event.clear()
-                            pause_event.wait()
-                        continue
-                        
-                    if still_open == 0:
-                        break
+                # Execute this step's DAG on the worker pool. Same helper as
+                # execute_flow, so the resume path can no longer drift from it.
+                pool_status = self._run_worker_pool(
+                    job_id=job_id,
+                    step_index=idx,
+                    broker=broker,
+                    topo_rows=topo_rows,
+                    step_config=getattr(step, "config", {}) or {},
+                    current_payload=current_payload,
+                    pause_event=pause_event,
+                    cancel_event=cancel_event,
+                    hitl_callback=hitl_callback,
+                    node_active_callback=node_active_callback,
+                    node_finished_callback=node_finished_callback,
+                )
+                if pool_status == "cancelled":
+                    is_cancelled = True
+                    break
+                if pool_status == "stalled":
+                    is_stalled = True
+                    break
 
                 latest_ledger = self._find_final_ledger_path(job_id, topo_rows)
                 if latest_ledger:
@@ -648,6 +1031,8 @@ class FlowRunner:
         finally:
             if is_cancelled:
                 broker.update_session_status(job_id, "cancelled")
+            elif is_stalled:
+                broker.update_session_status(job_id, "failed")
             else:
                 broker.update_session_status(job_id, "completed")
 
@@ -686,10 +1071,16 @@ class FlowRunner:
         hitl_callback: Callable[[int, str, str], None] | None = None,
         job_started_callback: Callable[[str], None] | None = None,
         node_started_callback: Callable[[int, str], None] | None = None,
+        node_active_callback: Callable[[int | None, str, int | None], None] | None = None,
+        node_finished_callback: Callable[[int | None, str, int | None], None] | None = None,
     ) -> str:
         """
         Execute a sequential linear flow of MacroNodes.
-        
+
+        Steps run in order, but the nodes **within** a step run concurrently on a
+        :class:`DynamicSwarmPool` sized to the work available — one thread for a
+        linear step, up to the slotted agent count for a scatter.
+
         Args:
             steps: List of FlowStep objects.
             initial_payload_path: Starting context.
@@ -698,6 +1089,13 @@ class FlowRunner:
                          Must be set (unblocked) to allow execution.
             step_callback: Optional callable(step_index: int, output_path: str) — called after each step.
             hitl_callback: Optional callable(step_index: int, job_id: str, payload: str) — called on HITL pause.
+            node_started_callback: Optional callable(step_index: int, macronode_name: str) —
+                fires once per **step**. Retained for compatibility.
+            node_active_callback: Optional callable(step_index, node_id, slot) — fires
+                once per **node** as it starts. Several nodes are live at once during
+                a scatter, which a per-step signal cannot express.
+            node_finished_callback: Optional callable(step_index, node_id, slot) — fires
+                as each node ends, on every path including failure.
 
         Returns:
             The path to the final output file from the last step in the flow.
@@ -722,6 +1120,7 @@ class FlowRunner:
         broker.create_session(job_id, topology_csv_str)
         
         is_cancelled = False
+        is_stalled = False
         try:
             for idx, step in enumerate(steps):
                 broker.update_session_step_index(job_id, idx)
@@ -744,22 +1143,13 @@ class FlowRunner:
                     except Exception:  # noqa: BLE001
                         pass
             
-                # 1. Load the MacroNode
-                if step.macronode_name.strip().upper() in ("CTRL_REVIEW", "DET_REVIEW"):
-                    macro_def = {
-                        "topology_rows": [{
-                            "Node_ID": "CTRL_PAUSE_MANUAL",
-                            "Model_Override": "none",
-                            "Wait_For": "none",
-                            "Next_Node": "END"
-                        }]
-                    }
-                else:
-                    try:
-                        macro_def = self._get_macronode(step.macronode_name, step_config=getattr(step, "config", {}))
-                    except KeyError:
-                        logger.error(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
-                        return current_payload
+                # 1. Load the MacroNode — review nodes included, via the
+                # registry-driven control-node auto-wrap (no name special-casing here).
+                try:
+                    macro_def = self._get_macronode(step.macronode_name, step_config=getattr(step, "config", {}))
+                except KeyError:
+                    logger.error(f"[FLOW_ENGINE] ERROR: MacroNode '{step.macronode_name}' not found. Aborting flow.")
+                    return current_payload
                 
                 # 2. Hydrate Agent Slots
                 topo_rows = macro_def.get("topology_rows", [])
@@ -775,70 +1165,34 @@ class FlowRunner:
                     broker.inject_task(job_id=job_id, payload_path=current_payload, starting_node=start_node)
                     logger.info(f"[FLOW_ENGINE] Queued entrypoint: {start_node} with payload '{current_payload}'")
 
-                # 5. Ignite the Swarm Worker for this DAG
-                db_path = str(get_datacenter_path("swarm_queue.db"))
-                worker = UniversalSwarmWorker()
-            
-                # Invalidate any cached topologies in the worker so it reads the new topology.csv
-                if worker.topology:
-                    worker.topology.flush_cache()
-
-                # 5b. Inject FlowStep.config as topology overlay for CTRL_ nodes
-                step_config = getattr(step, "config", {})
-                if step_config and worker.topology:
-                    for row_dict in topo_rows:
-                        raw_node_id = str(row_dict.get("Node_ID", ""))
-                        if raw_node_id.startswith("CTRL_"):
-                            suffixed_id = f"{raw_node_id}_S{idx}"
-                            worker.topology.merge_config_overlay(suffixed_id, step_config)
-                            logger.info(f"[FLOW_ENGINE] Injected step config overlay for {suffixed_id}")
-                
-                start_time = time.time()
-                timeout_seconds = 3600
-            
-                for _ in range(500):
-                    if cancel_event and cancel_event.is_set():
-                        logger.info("[FLOW_ENGINE] Cancellation requested — aborting current MacroNode.")
-                        break
-
-                    # VCR pause gate — blocks inside the worker loop too
-                    if pause_event is not None:
-                        pause_event.wait()
-
-                    if time.time() - start_time > timeout_seconds:
-                        logger.info("[FLOW_ENGINE] Swarm Worker Timeout reached.")
-                        break
-                    
-                    worker.execute_cycle(pause_event=pause_event, stop_event=cancel_event)
-                
-                    with sqlite3.connect(db_path) as _q:
-                        still_open: int = _q.execute(
-                            "SELECT COUNT(*) FROM task_queue WHERE lock_status = 'open' AND job_id = ?",
-                            (job_id,)
-                        ).fetchone()[0]
-                        still_paused: int = _q.execute(
-                            "SELECT COUNT(*) FROM task_queue WHERE lock_status = 'paused' AND job_id = ?",
-                            (job_id,)
-                        ).fetchone()[0]
-
-                    if still_open == 0 and still_paused > 0:
-                        # ── HITL Pause Gate ────────────────────────────────────────
-                        # All tasks done except paused ones — surface to TUI for user input
-                        logger.info("[FLOW_ENGINE] HITL pause detected — awaiting user input.")
-                        if hitl_callback is not None:
-                            try:
-                                hitl_callback(idx, job_id, current_payload)
-                            except Exception:  # noqa: BLE001
-                                pass
-                        # Block until the TUI resumes (sets pause_event after injecting context)
-                        if pause_event is not None:
-                            pause_event.clear()
-                            pause_event.wait()
-                        # After resume, the paused task should now be 'open' again
-                        continue
-
-                    if still_open == 0:
-                        break
+                # 5. Execute this step's DAG on the worker pool.
+                # Concurrency lives entirely inside _run_worker_pool: a linear step
+                # runs on one thread, a scatter step scales to its slotted agent
+                # count and back down. The step config overlay and the HITL pause
+                # gate are handled there too, shared with resume_flow.
+                pool_status = self._run_worker_pool(
+                    job_id=job_id,
+                    step_index=idx,
+                    broker=broker,
+                    topo_rows=topo_rows,
+                    step_config=getattr(step, "config", {}) or {},
+                    current_payload=current_payload,
+                    pause_event=pause_event,
+                    cancel_event=cancel_event,
+                    hitl_callback=hitl_callback,
+                    node_active_callback=node_active_callback,
+                    node_finished_callback=node_finished_callback,
+                )
+                if pool_status == "cancelled":
+                    is_cancelled = True
+                    break
+                if pool_status == "stalled":
+                    # A node was claimed and never ran, so this step produced no
+                    # artifact for the next one. Stop rather than feed the rest of
+                    # the flow a hole — and record the session as failed, which is
+                    # what the old code could not do because it never found out.
+                    is_stalled = True
+                    break
 
                 logger.info(f"[FLOW_ENGINE] MacroNode '{step.macronode_name}' completed execution.")
             
@@ -864,6 +1218,8 @@ class FlowRunner:
         finally:
             if is_cancelled:
                 broker.update_session_status(job_id, "cancelled")
+            elif is_stalled:
+                broker.update_session_status(job_id, "failed")
             else:
                 # If we got here and it is not cancelled and did not exception, it completed successfully
                 broker.update_session_status(job_id, "completed")
@@ -920,7 +1276,13 @@ class FlowRunner:
                 
                 used_agents = set()
                 with open(topo_src, newline="", encoding="utf-8") as f:
-                    for row in csv.reader(f):
+                    _reader = csv.reader(f)
+                    # Skip the header row. Without this, the literal column name
+                    # "Agent_Name" was collected as an agent and snapshotted as
+                    # {"Agent_Name": null} — visible in the verified Aug 29
+                    # baseline's as_wrapped_topology.json.
+                    next(_reader, None)
+                    for row in _reader:
                         if len(row) > 1 and row[1].strip():
                             used_agents.add(row[1].strip())
                             
@@ -932,9 +1294,15 @@ class FlowRunner:
                         except Exception:
                             as_wrapped["macronodes"][m_name] = None
                             
-                special_nodes = {"CTRL_REVIEW", "CTRL_PAUSE", "CTRL_ANCHOR", "CTRL_RECURSION", "CTRL_GATE", "CTRL_CHECKPOINT", "CTRL_DELAY", "CTRL_TRANSFORM", "DET_REVIEW", "DET_PAUSE", "DET_ANCHOR", "DET_RECURSION", "DET_GATE", "DET_CHECKPOINT", "DET_DELAY", "DET_TRANSFORM"}
+                # Control nodes and the SYSTEM pseudo-agent are not roster agents.
+                # This replaced a hand-maintained set of 16 node names that had
+                # already fallen behind the registry — it was missing CTRL_SCATTER,
+                # CTRL_MERGE, CTRL_CONCAT, CTRL_BRANCH, CTRL_FILTER, CTRL_CLEANUP,
+                # CTRL_CONDITIONAL_ROUTE, CTRL_END and CTRL_PAYLOAD_INJECT, so any
+                # of those appearing in the Agent_Name column would be looked up as
+                # an agent and snapshotted as null.
                 for a_name in used_agents:
-                    if a_name.upper() in special_nodes:
+                    if a_name.upper() == "SYSTEM" or is_deterministic_node(a_name):
                         continue
                     try:
                         as_wrapped["agents"][a_name] = agent_store.get(a_name)
@@ -1062,20 +1430,49 @@ def generate_targeted_ledger(job_id: str, target_node: str, aggregator_node: str
         # Rule 4: Discard everything else
         
     unified_text = "\n".join(parts)
-    output_path.write_text(unified_text, encoding="utf-8")
+    # Atomic: this file is read back as an agent payload during recursion.
+    with file_lock(output_path):
+        atomic_write_text(output_path, unified_text)
     return str(output_path)
+
+def unified_ledger_path(job_id: str) -> Path:
+    """Resolve the unified session ledger path for *job_id*.
+
+    Split out so the concurrency wrapper can derive the lock key without running
+    the (expensive) assembly first.
+    """
+    if job_id.startswith("studio_session_"):
+        clean_id = job_id.replace("studio_session_", "", 1)
+        artifact_dir = get_datacenter_path("04_Code_Artifacts", f"ChatStudioSessions/{clean_id}-Chat")
+        return artifact_dir / "unified_chat_ledger.md"
+    return get_datacenter_path("04_Code_Artifacts", job_id) / "unified_session_ledger.md"
+
 
 def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) -> str:
     """Assemble a unified session ledger from all agent turns in the flow.
 
     Output: ``04_Code_Artifacts/<job_id>/unified_session_ledger.md``
 
-    Contents:
-    - Session metadata (job_id, flow steps, total cost, timestamps)
-    - Chronological agent turns with content, node_id, cost, timing
-    - Tool call audits (if any)
-    - Memory pin summaries
+    **Serialised per job.** This is the single most concurrency-sensitive artifact
+    in the system: ``swarm_worker`` regenerates it on every node completion and
+    then hands the result straight to ``route_task`` as the *next* node's input
+    payload. Two nodes finishing at once would otherwise interleave a
+    read-collect-write over the same file, and a torn read there does not raise —
+    it silently feeds a truncated document to the next agent.
+
+    Serialising rather than debouncing is deliberate. A debounce would skip
+    regeneration while still returning the path, so the caller would route the
+    *previous* snapshot — missing the output of the node that just finished. That
+    trades correctness for CPU on exactly the artifact that can least afford it.
+    Under an 8-wide scatter this costs N sequential assemblies per gather; the
+    write itself is atomic, so readers are never blocked by it.
     """
+    with file_lock(unified_ledger_path(job_id)):
+        return _generate_unified_ledger_unlocked(job_id, steps)
+
+
+def _generate_unified_ledger_unlocked(job_id: str, steps: list[FlowStep] | None = None) -> str:
+    """Assembly body for :func:`generate_unified_ledger`. Hold its lock first."""
     from datetime import datetime, timezone  # noqa: PLC0415
     import sqlite3
 
@@ -1240,8 +1637,10 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
     )
 
     # ── Write ─────────────────────────────────────────────────────────────
+    # Atomic swap, not truncate-and-write. The next node reads this exact path as
+    # its input payload, so a reader must never observe a partial document.
     unified_text = "\n".join(parts)
-    output_path.write_text(unified_text, encoding="utf-8")
+    atomic_write_text(output_path, unified_text)
     logger.info(
         "[FLOW_ENGINE] Unified Session Ledger: %d chars, %d turns, %d pins, $%.6f total.",
         len(unified_text), len(ledger_entries), len(memory_pins), total_cost,
@@ -1255,15 +1654,30 @@ def generate_unified_ledger(job_id: str, steps: list[FlowStep] | None = None) ->
         
     return str(output_path)
 
+def thoughts_ledger_path(job_id: str) -> Path:
+    """Resolve the unified thoughts ledger path for *job_id*."""
+    return get_datacenter_path("04_Code_Artifacts", job_id) / "unified_thoughts_ledger.md"
+
+
 def generate_unified_thoughts_ledger(job_id: str) -> str:
     """Assemble a unified thoughts ledger from all agent logs in the flow.
 
     Output: ``04_Code_Artifacts/<job_id>/unified_thoughts_ledger.md``
 
-    Contents:
-    - Session metadata (job_id, timestamps)
-    - Chronological agent turns with their raw thoughts and tool calls extracted from their .log files.
+    Serialised per job, like :func:`generate_unified_ledger`. It reads every
+    ``*_agent.log`` in the job directory, and under concurrency those files are
+    being appended to by live nodes.
+
+    Uses a **different** lock key (its own output path), so the call made from
+    inside ``generate_unified_ledger`` cannot self-deadlock on a non-reentrant
+    lock.
     """
+    with file_lock(thoughts_ledger_path(job_id)):
+        return _generate_unified_thoughts_ledger_unlocked(job_id)
+
+
+def _generate_unified_thoughts_ledger_unlocked(job_id: str) -> str:
+    """Assembly body for :func:`generate_unified_thoughts_ledger`."""
     from datetime import datetime, timezone
     import sqlite3
     import re
@@ -1385,5 +1799,5 @@ def generate_unified_thoughts_ledger(job_id: str) -> str:
 
     # ── Write ─────────────────────────────────────────────────────────────
     unified_text = "\n".join(parts)
-    output_path.write_text(unified_text, encoding="utf-8")
+    atomic_write_text(output_path, unified_text)
     return str(output_path)

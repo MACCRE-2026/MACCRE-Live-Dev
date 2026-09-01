@@ -40,6 +40,38 @@ class MessageBroker(abc.ABC):
         """
 
     @abc.abstractmethod
+    def count_ready_tasks(
+        self,
+        job_id: str,
+        topology_engine: Any = None,
+        cap: int = 0,
+    ) -> int:
+        """Estimate how many open tasks are currently claimable for a job.
+
+        Read-only **sizing hint** for the worker pool: it answers "roughly how
+        much parallel work is available right now?" so the pool knows how many
+        threads to spawn. It applies the same Gather Gate rules as
+        :meth:`fetch_and_lock_task` but takes no locks and mutates nothing.
+
+        This is deliberately *not* authoritative. Between this call and a
+        worker's claim, another worker may take the task. The atomic claim
+        inside :meth:`fetch_and_lock_task` remains the sole correctness
+        authority; over-counting here costs at most a thread that finds no work
+        and retires.
+
+        Args:
+            job_id: Job to size. Other jobs' tasks are ignored.
+            topology_engine: Provider used to resolve each node's ``wait_for``.
+                When ``None``, every open task counts as ready.
+            cap: Stop counting once this many ready tasks are found. ``0`` or
+                negative means count them all. Lets callers avoid scanning a
+                large queue when they only care about the first N.
+
+        Returns:
+            Number of ready tasks, never more than ``cap`` when ``cap > 0``.
+        """
+
+    @abc.abstractmethod
     def route_task(
         self,
         row_id: int,
@@ -52,6 +84,7 @@ class MessageBroker(abc.ABC):
         status: str = "completed",
         flow_line_id: str = "",
         flow_vector: str = "",
+        tether_id: str = "",
     ) -> None:
         """Mark a task completed and enqueue successor node(s).
 
@@ -63,13 +96,39 @@ class MessageBroker(abc.ABC):
             actual_cost: API cost incurred for this node execution.
             source_payload_path: Original user payload path (propagated unchanged).
             max_recursion: Maximum allowed visits to the same node before FAILED routing.
+            status: Terminal status to write for the completed row.
             flow_line_id: Flow line identifier for scatter fan-out lineage tracking.
             flow_vector: Colon-delimited history of nodes traversed (telemetry lineage).
+            tether_id: Scatter scope identifier. Isolates fan-in artifact gathering
+                so lanes of one scatter do not gather across lanes of another.
         """
 
     @abc.abstractmethod
     def release_task(self, row_id: int) -> None:
-        """Return a locked task to 'open' state (used in worker finally blocks)."""
+        """Return a locked task to 'open' state so another worker can claim it."""
+
+    @abc.abstractmethod
+    def heartbeat_task(self, row_id: int) -> bool:
+        """Refresh a held lock's ``locked_at``, proving the worker is still alive.
+
+        Without this, lock age cannot distinguish a *slow* node from a *dead*
+        one. A single LLM call can run for tens of seconds, so any reclaim
+        timeout short enough to recover a crashed worker promptly is also short
+        enough to steal a task from a healthy one. The heartbeat separates the
+        two: a lock only goes stale when nothing is refreshing it.
+
+        Implementations **must** scope the write to rows that are still locked.
+        An unscoped update would resurrect the lock timestamp on a row that had
+        already completed, if a heartbeat raced the completing write.
+
+        Args:
+            row_id: ``task_queue`` row whose lock should be refreshed.
+
+        Returns:
+            True if a locked row was refreshed. False means the row is no longer
+            locked — it completed, was released, or was reclaimed — which is the
+            caller's signal to stop heartbeating.
+        """
 
     @abc.abstractmethod
     def pause_task(self, row_id: int) -> None:

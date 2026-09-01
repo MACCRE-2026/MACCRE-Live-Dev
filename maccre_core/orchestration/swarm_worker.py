@@ -26,14 +26,21 @@ import atexit
 import json
 import os
 import logging
+import re
 import time
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from maccre_core.logger import ops_log
 from maccre_core.maccre_router import UniversalRouter
 from maccre_core.memory import close_all
 from maccre_core.orchestration.broker_interface import MessageBroker
+from maccre_core.orchestration.concurrency import (
+    HeartbeatMonitor,
+    begin_thread_tee,
+    end_thread_tee,
+)
 from maccre_core.orchestration.local_broker import LocalMessageBroker
 from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
 from maccre_core.orchestration.tool_executor import ToolExecutor
@@ -45,41 +52,124 @@ from maccre_core.utils.path_resolver import get_datacenter_path
 # (normal exit, SIGTERM, or unhandled exception crash).
 atexit.register(close_all)
 
-AGENT_ID = f"universal_node_{os.getpid()}"
+#: Identity of this OS process. Stable for the process lifetime.
+#:
+#: Historically the worker's whole identity was this single module-level string.
+#: That was fine while exactly one worker ran per process, but Phase 6.12 runs up
+#: to ``MAX_SCATTER_AGENTS`` workers as threads inside one process — so every
+#: worker would have reported the same ``locked_by`` value, making it impossible
+#: to tell from ``task_queue`` or the logs which worker did what.
+PROCESS_WORKER_ID = f"universal_node_{os.getpid()}"
+
 logger = logging.getLogger("maccre_core.swarm_worker")
 
 
-class _FileTee:
-    """Lightweight file tee: mirrors writes to orig stream AND a per-job log file.
+def resolve_worker_id(slot: int | None = None) -> str:
+    """Return the identity for one worker.
 
-    fileno() and isatty() stubs prevent crashes when Python's logging,
-    subprocess, or Windows console APIs probe the redirected stream.
+    Args:
+        slot: Pool slot index. ``None`` means "the only worker in this process",
+            which preserves the pre-6.12 identity format exactly so existing
+            ledgers, telemetry and log greps keep matching.
+
+    Returns:
+        ``universal_node_<pid>`` when *slot* is ``None``, otherwise
+        ``universal_node_<pid>_t<slot>``.
     """
-    def __init__(self, filepath: str, orig_stream: Any) -> None:
-        self.orig_stream = orig_stream
-        self.log = open(filepath, "w", buffering=1, encoding="utf-8")  # noqa: SIM115
+    if slot is None:
+        return PROCESS_WORKER_ID
+    return f"{PROCESS_WORKER_ID}_t{slot}"
 
-    def write(self, msg: str) -> None:
-        self.orig_stream.write(msg)
-        self.log.write(msg)
 
-    def flush(self) -> None:
-        self.orig_stream.flush()
-        self.log.flush()
+class CycleOutcome(Enum):
+    """What one call to :meth:`UniversalSwarmWorker.execute_cycle` actually did.
 
-    def close(self) -> None:
-        self.log.close()
+    ``execute_cycle`` used to return a bare ``bool``, which conflated two states
+    the pool must be able to tell apart: "I claimed a task and ran a node"
+    (:attr:`WORKED`) and "there was nothing for me to do" (:attr:`IDLE`) both
+    returned ``True``. A demand-scaled pool cannot decide whether to retire a
+    thread without that distinction.
 
-    def fileno(self) -> int:  # Windows console API compatibility
-        return self.orig_stream.fileno()
+    ``bool(outcome)`` is ``True`` for every member except :attr:`STOPPED`, which
+    reproduces the old truth table exactly — so existing callers written as
+    ``if not worker.execute_cycle(): break`` keep working untouched.
+    """
 
-    def isatty(self) -> bool:
-        return False
+    #: Claimed a task and executed a node. There may be more work waiting.
+    WORKED = "worked"
+    #: No claimable task. Either the queue is empty or everything left is gated.
+    IDLE = "idle"
+    #: ``pause_event`` is clear — the flow is held at a HITL gate.
+    PAUSED = "paused"
+    #: ``stop_event`` is set — cancellation requested; the caller must exit.
+    STOPPED = "stopped"
+
+    def __bool__(self) -> bool:
+        return self is not CycleOutcome.STOPPED
+
+    @property
+    def did_work(self) -> bool:
+        """True only when a node actually executed."""
+        return self is CycleOutcome.WORKED
+
+
+#: Fired when a node starts and finishes. Args: ``(step_index, node_id, slot)``.
+#: ``step_index`` is ``None`` when it cannot be parsed from the node id.
+NodeLifecycleCallback = Callable[[Optional[int], str, Optional[int]], None]
+
+_STEP_SUFFIX_RE = re.compile(r"_S(\d+)$")
+
+
+def parse_step_index(node_id: str) -> int | None:
+    """Recover the flow step index from a hydrated node id.
+
+    ``FlowRunner._hydrate_topology`` appends ``_S<idx>`` to every node id, so the
+    step a running node belongs to is recoverable without threading it through
+    the broker and the task row.
+
+    Returns:
+        The step index, or ``None`` for a node id with no step suffix.
+    """
+    match = _STEP_SUFFIX_RE.search(node_id.strip())
+    return int(match.group(1)) if match else None
 
 
 class UniversalSwarmWorker:
-    def __init__(self) -> None:
-        logger.info(f"[{AGENT_ID}] Initializing Universal Swarm Node...")
+    """One swarm worker. Owns its broker, router, memory engine and tool executor.
+
+    **One instance per thread.** Nothing here is safe to share across threads:
+    the broker holds per-thread SQLite connections, and the router and tool
+    executor carry per-call mutable state. :class:`DynamicSwarmPool` therefore
+    constructs a separate worker per pool slot rather than sharing one.
+    """
+
+    def __init__(
+        self,
+        slot: int | None = None,
+        on_node_start: NodeLifecycleCallback | None = None,
+        on_node_finish: NodeLifecycleCallback | None = None,
+        idle_sleep_seconds: float = 3.0,
+        pause_poll_seconds: float = 1.0,
+    ) -> None:
+        #: Pool slot index, or ``None`` for a lone worker in this process.
+        self.slot = slot
+        #: This worker's identity. Written to ``task_queue.locked_by`` on every
+        #: claim and used as the log prefix, so a line in a shared log can always
+        #: be attributed to the thread that produced it.
+        self.worker_id = resolve_worker_id(slot)
+        #: Fired after a task is claimed and again when it finishes, on every
+        #: path including failure. Consumers are observers: exceptions raised by
+        #: a callback are logged and swallowed, never allowed to fail a node.
+        self.on_node_start = on_node_start
+        self.on_node_finish = on_node_finish
+        #: How long to sleep after finding no claimable work. Was hardcoded to
+        #: 3 s, which throttles a demand-scaled pool: a retiring thread would
+        #: hold its slot for up to 3 s after the queue drained, and a thread
+        #: spawned for a burst would take up to 3 s to notice new work.
+        self.idle_sleep_seconds = idle_sleep_seconds
+        #: How long to sleep per poll while held at a pause gate.
+        self.pause_poll_seconds = pause_poll_seconds
+        logger.info(f"[{self.worker_id}] Initializing Universal Swarm Node...")
         self.project_name = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
         self.router = UniversalRouter()
         self.topology: TopologyProvider | None = TopologyEngine()
@@ -113,14 +203,14 @@ class UniversalSwarmWorker:
         card_path = get_datacenter_path("02_Dynamic_Context", card_str)
         if not card_path.exists():
             # Short text that isn't a valid card name — warn and return as-is
-            logger.debug(f"[{AGENT_ID}] Missing ROM Cartridge -> {card_str} (using as inline instruction)")
+            logger.debug(f"[{self.worker_id}] Missing ROM Cartridge -> {card_str} (using as inline instruction)")
             return str(card_name).strip()
 
         try:
             persona_data: dict[str, Any] = json.loads(card_path.read_text(encoding="utf-8"))
             return str(persona_data.get("instructions", ""))
         except Exception as e:
-            logger.error(f"[{AGENT_ID}] ERROR reading persona {card_str}: {e}")
+            logger.error(f"[{self.worker_id}] ERROR reading persona {card_str}: {e}")
             return ""
 
     def _load_memory_pins(self) -> str:
@@ -145,7 +235,7 @@ class UniversalSwarmWorker:
             with open(payload_path, "r", encoding="utf-8") as f:
                 return f.read()
         except Exception as e:
-            logger.warning(f"[{AGENT_ID}] WARNING: Could not read payload at {payload_path}: {e}")
+            logger.warning(f"[{self.worker_id}] WARNING: Could not read payload at {payload_path}: {e}")
             return "NO PAYLOAD DATA."
 
     def _run_interactive_diamond_loop(self, model_id: str, system_prompt: str, current_payload: str, job_id: str, current_node: str, ai_options: dict | None = None, temperature: float = 1.0, tools_str: str = "none") -> str:
@@ -505,45 +595,162 @@ class UniversalSwarmWorker:
             
         return current_payload, total_cost, tools_str
 
+    def _fire_lifecycle(
+        self,
+        callback: NodeLifecycleCallback | None,
+        node_id: str,
+        label: str,
+    ) -> None:
+        """Invoke a lifecycle callback, absorbing any failure.
+
+        Callbacks come from the TUI and marshal onto its event loop. A broken
+        observer must never take down the node it is observing, which mirrors the
+        existing swallow-and-continue pattern around ``node_started_callback`` in
+        ``flow_engine``.
+        """
+        if callback is None:
+            return
+        try:
+            callback(parse_step_index(node_id), node_id, self.slot)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[%s] %s callback failed for %s: %s", self.worker_id, label, node_id, exc
+            )
+
+    def _gather_predecessor_payloads(
+        self,
+        task: dict[str, Any],
+        node_config: dict[str, Any],
+        job_id: str,
+    ) -> list[str]:
+        """Output paths of this node's ``wait_for`` predecessors, in declared order.
+
+        Feeds the ``predecessor_payloads`` argument of the deterministic fan-in
+        handlers. Ordering follows the ``wait_for`` declaration rather than
+        completion time, so a merge's output is reproducible instead of depending
+        on which lane happened to finish first.
+
+        Scoped by tether when the task carries one, so one scatter's lanes cannot
+        be gathered by another scatter's merge. An absent tether falls back to an
+        unscoped lookup, which is correct for a plain fan-in outside any scatter.
+
+        Returns an empty list for nodes that declare no predecessors, which is
+        every deterministic node except the fan-in ones.
+        """
+        wait_for_raw = str(node_config.get("wait_for", "") or "")
+        required = [
+            n.strip()
+            for n in wait_for_raw.replace("|", ",").split(",")
+            if n.strip() and n.strip().lower() not in ("none", "null")
+        ]
+        if not required:
+            return []
+
+        if not isinstance(self.broker, LocalMessageBroker):
+            return []
+
+        tether_id = str(task.get("tether_id", "") or "").strip()
+        try:
+            found = self.broker.get_completed_payload_paths(
+                job_id=job_id, nodes=required, tether_id=tether_id or None
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A fan-in with no inputs still produces output, so degrade rather than
+            # kill the node — but say so, because the output will be incomplete.
+            logger.warning(
+                "[%s] Could not gather predecessor payloads for %s: %s",
+                self.worker_id, task.get("current_node", ""), exc,
+            )
+            return []
+
+        paths = [found[node] for node in required if node in found]
+        missing = [node for node in required if node not in found]
+        if missing:
+            # The gather gate should have held this node until all predecessors
+            # completed, so anything missing here means the gate and this lookup
+            # disagree — worth surfacing rather than silently merging a subset.
+            logger.warning(
+                "[%s] Fan-in for %s gathered %d/%d predecessor payload(s); "
+                "missing %s (tether=%r).",
+                self.worker_id, task.get("current_node", ""), len(paths),
+                len(required), missing, tether_id,
+            )
+        else:
+            logger.info(
+                "[%s] Fan-in for %s gathered %d predecessor payload(s).",
+                self.worker_id, task.get("current_node", ""), len(paths),
+            )
+        return paths
+
     def execute_cycle(  # type: ignore[reportGeneralTypeIssues]
         self, 
         pause_event: Optional[Any] = None, 
         stop_event: Optional[Any] = None
-    ) -> bool:
-        """Executes a single node in the swarm topology.
-        
+    ) -> CycleOutcome:
+        """Execute a single node in the swarm topology.
+
         Args:
-            pause_event: A threading.Event (or similar) that, if set, causes the worker to idle.
-            stop_event: A threading.Event that, if set, returns False to exit the loop.
-            
+            pause_event: A ``threading.Event``. When present and **clear**, the
+                worker idles instead of claiming. **Observed, never set** — this
+                worker does not own it.
+            stop_event: A ``threading.Event``. When set, the worker returns
+                immediately. **Observed, never set.**
+
         Returns:
-            False if stopped, True otherwise.
+            A :class:`CycleOutcome`. ``bool()`` of the result is ``False`` only
+            for ``STOPPED``, preserving the previous ``bool`` contract for callers
+            that just test truthiness.
         """
         if stop_event is not None and stop_event.is_set():
-            return False
+            return CycleOutcome.STOPPED
             
         if pause_event is not None and not pause_event.is_set():
-            time.sleep(1.0)
-            return True
+            time.sleep(self.pause_poll_seconds)
+            return CycleOutcome.PAUSED
 
+        # self.worker_id (not a process-wide constant) is what lands in
+        # task_queue.locked_by, so concurrent slots are attributable: a stuck or
+        # crashed slot can be identified from the queue rather than guessed at.
         task: Optional[Dict[str, Any]] = self.broker.fetch_and_lock_task(
-            AGENT_ID, self.topology
+            self.worker_id, self.topology
         )
         if not task:
             if not self._is_sleeping:
-                logger.info(f"[{AGENT_ID}] Queue empty or waiting on dependencies. Sleeping.")
+                logger.info(f"[{self.worker_id}] Queue empty or waiting on dependencies. Sleeping.")
                 self._is_sleeping = True
-            time.sleep(3)
-            return True
+            time.sleep(self.idle_sleep_seconds)
+            return CycleOutcome.IDLE
 
         self._is_sleeping = False  # Wake up
         row_id: int = int(task["id"])
         job_id: str = str(task["job_id"])
-        # Fallback to the worker's bound project_name if the queue doesn't store project_id
+        # Fallback to the worker's bound project_name if the queue doesn't store project_id.
+        # In practice this ALWAYS takes the fallback: task_queue has no project_id
+        # column (see LocalMessageBroker._init_db), so the .get() cannot hit.
         project_id: str = str(task.get("project_id", self.project_name))
-        
-        # Explicitly scope the environment to this project for all downstream path resolution (e.g. telemetry_db)
-        os.environ["MACCRE_ACTIVE_PROJECT"] = project_id
+
+        # Scope the environment for downstream path resolution (get_datacenter_path,
+        # telemetry_db, ...). This is a *process-global* write, so under Phase 6.12
+        # concurrency N threads write it per task. It is safe only because every
+        # thread writes the same value: project_id resolves to self.project_name,
+        # which every worker read from this same variable at construction.
+        #
+        # Rather than rely on that invariant silently, assert it. A mismatch means
+        # either the queue gained a project_id column or something outside the
+        # worker moved the variable mid-flight — in which case concurrent threads
+        # would be resolving datacenter paths into different projects, and the
+        # env-driven path resolver needs replacing with explicit plumbing before
+        # cross-project concurrency is supported.
+        _current_env_project = os.environ.get("MACCRE_ACTIVE_PROJECT", "")
+        if _current_env_project != project_id:
+            if _current_env_project:
+                logger.warning(
+                    "[%s] MACCRE_ACTIVE_PROJECT changing %r -> %r mid-flow. "
+                    "Concurrent workers on different projects are NOT supported; "
+                    "datacenter paths may resolve inconsistently.",
+                    self.worker_id, _current_env_project, project_id,
+                )
+            os.environ["MACCRE_ACTIVE_PROJECT"] = project_id
         
         payload_path: str = str(task["payload_path"])
         current_node: str = str(task.get("current_node", "START"))
@@ -577,23 +784,31 @@ class UniversalSwarmWorker:
             agent_log_path = str(job_dir / f"{current_node}_{row_id}_agent.log")
 
         # ── Dual-Stream File Logger ───────────────────────────────────────────
-        import sys
-        orig_stdout = sys.stdout
-        orig_stderr = sys.stderr
-        
+        # Routes THIS THREAD's console output into the node's *_agent.log without
+        # touching sys.stdout/sys.stderr, which are process-wide. See
+        # concurrency.begin_thread_tee for why the previous global swap could not
+        # survive concurrent nodes. Torn down in the finally at the end of this
+        # method, which covers every return path and the exception path.
         is_studio_session = job_id.startswith("studio_session_")
-        dual_out = None
-        dual_err = None
-        
         if not is_studio_session:
-            dual_out = _FileTee(agent_log_path, orig_stdout)
-            dual_err = _FileTee(agent_log_path, orig_stderr)
-            sys.stdout = dual_out  # type: ignore[assignment]
-            sys.stderr = dual_err  # type: ignore[assignment]
+            begin_thread_tee(agent_log_path)
+
+        # ── Lock heartbeat ────────────────────────────────────────────────────
+        # Refreshes this task's locked_at on a background daemon thread for as
+        # long as the node runs, so lock age measures "worker went silent" rather
+        # than "node is taking a while". Started outside the try and stopped in
+        # its finally, which is what a `with` block would give us without
+        # re-indenting the thousand lines in between.
+        heartbeat = HeartbeatMonitor(self.broker, row_id)
+        heartbeat.start()
 
         try:
-            logger.info(f"\n[{AGENT_ID}] Lock Acquired: job={job_id} | row={row_id} | Node: [{current_node}]")
-            logger.info(f"[{AGENT_ID}] Ledger -> {ledger_path}")
+            # Fired inside the try so it is always paired with the finish callback
+            # in the finally below — no path can report a start without a finish.
+            self._fire_lifecycle(self.on_node_start, current_node, "on_node_start")
+
+            logger.info(f"\n[{self.worker_id}] Lock Acquired: job={job_id} | row={row_id} | Node: [{current_node}]")
+            logger.info(f"[{self.worker_id}] Ledger -> {ledger_path}")
 
             node_config = {}
             if self.topology is not None:
@@ -608,8 +823,20 @@ class UniversalSwarmWorker:
                 execute_deterministic_node,
             )
             if is_deterministic_node(current_node):
-                det_result = execute_deterministic_node(current_node, task, node_config)
-                logger.info(f"[{AGENT_ID}] DET Node: {det_result.log_message}")
+                # Fan-in handlers (CTRL_MERGE, CTRL_CONCAT) need their upstream
+                # outputs. This argument was never supplied, so it defaulted to an
+                # empty list and a merge saw only its own payload — an 8-lane
+                # scatter reported "Merged 1 sources".
+                #
+                # The AI-node fan-in injection further down cannot serve these
+                # nodes: deterministic execution returns before ever reaching it.
+                _det_predecessors = self._gather_predecessor_payloads(
+                    task, node_config, job_id
+                )
+                det_result = execute_deterministic_node(
+                    current_node, task, node_config, _det_predecessors
+                )
+                logger.info(f"[{self.worker_id}] DET Node: {det_result.log_message}")
 
                 # Write a minimal ledger entry
                 Path(ledger_path).write_text(
@@ -618,21 +845,27 @@ class UniversalSwarmWorker:
                 )
 
                 if det_result.should_pause:
-                    # Set task to 'paused' — worker will skip it until manual resume
+                    # Set task to 'paused' — worker will skip it until manual resume.
+                    # The tee is torn down by this method's finally block; returning
+                    # from inside a try still runs it.
                     self.broker.pause_task(row_id)
-                    sys.stdout = orig_stdout
-                    sys.stderr = orig_stderr
-                    if dual_out is not None:
-                        dual_out.close()
-                    if dual_err is not None:
-                        dual_err.close()
-                    return True
+                    return CycleOutcome.WORKED
 
                 # ── Multi-target fan-out (SCATTER / CONDITIONAL_ROUTE) ────────
                 if det_result.next_nodes:
                     current_flow_line = str(task.get("flow_line_id", ""))
                     config = node_config or {}
-                    tether_id = str(config.get("tether_id", "scatter"))
+                    # Never invent a scope. This used to fall back to the literal
+                    # "scatter", which is worse than falling back to nothing: an
+                    # *empty* tether makes the gather gate check predecessors
+                    # unscoped, which still works, while a *wrong* non-empty tether
+                    # makes it check a scope the predecessors are not in — so the
+                    # gate matches zero rows and can never open. Observed live as an
+                    # 8-lane merge waiting forever on eight completed lanes.
+                    tether_id = (
+                        str(config.get("tether_id") or "").strip()
+                        or str(task.get("tether_id") or "").strip()
+                    )
                     for idx, target_node in enumerate(det_result.next_nodes):
                         flow_line_id = (
                             f"{current_flow_line}.{tether_id}.{idx}"
@@ -651,7 +884,7 @@ class UniversalSwarmWorker:
                         )
                     logger.info(
                         "[%s] DET fan-out: %d targets on tether=%s",
-                        AGENT_ID, len(det_result.next_nodes), tether_id,
+                        self.worker_id, len(det_result.next_nodes), tether_id,
                     )
                 elif det_result.next_node:
                     # Single target override (existing behavior)
@@ -682,13 +915,7 @@ class UniversalSwarmWorker:
                         flow_vector=flow_vector,
                         tether_id=tether_id,
                     )
-                sys.stdout = orig_stdout
-                sys.stderr = orig_stderr
-                if dual_out is not None:
-                    dual_out.close()
-                if dual_err is not None:
-                    dual_err.close()
-                return True
+                return CycleOutcome.WORKED
             
             prompt_name = node_config.get("prompt", "none")
             base_prompt = self._load_json_card(prompt_name)
@@ -778,10 +1005,10 @@ All file paths must strictly resolve to these five silos:
                     broker=self.broker,
                     row_id=row_id
                 )
-                logger.info(f"[{AGENT_ID}] Macro expansion complete. Yielding worker.")
+                logger.info(f"[{self.worker_id}] Macro expansion complete. Yielding worker.")
                 if self.topology is not None:
                     self.topology.flush_cache()
-                return True
+                return CycleOutcome.WORKED
 
             # ── Dual-Payload Construction ─────────────────────────────────────
             # Each node receives:
@@ -797,11 +1024,11 @@ All file paths must strictly resolve to these five silos:
                     _cb_path = generate_targeted_ledger(job_id, current_node, _judge_node)
                     if _cb_path:
                         payload_path = _cb_path
-                        logger.info(f"[{AGENT_ID}] Loaded Targeted Filter Ledger: {payload_path}")
+                        logger.info(f"[{self.worker_id}] Loaded Targeted Filter Ledger: {payload_path}")
                 except Exception as e:  # noqa: BLE001
-                    logger.warning(f"[{AGENT_ID}] Failed to generate Targeted Filter Ledger: {e}")
+                    logger.warning(f"[{self.worker_id}] Failed to generate Targeted Filter Ledger: {e}")
 
-            logger.info(f"[{AGENT_ID}] Reading payload: {payload_path}")
+            logger.info(f"[{self.worker_id}] Reading payload: {payload_path}")
             ledger_content = self._read_local_payload(payload_path)
             source_content = self._read_local_payload(source_payload_path)
 
@@ -885,16 +1112,16 @@ All file paths must strictly resolve to these five silos:
                                 f"[GATHERED ARTIFACT: {_pred_node}]\n{_art_content}\n[END ARTIFACT: {_pred_node}]"
                             )
                             logger.info(
-                                f"[{AGENT_ID}] Tether-scoped inject from {_pred_node} "
+                                f"[{self.worker_id}] Tether-scoped inject from {_pred_node} "
                                 f"(tether={_tether_id}): {_resolved_path_str}"
                             )
                         else:
                             logger.warning(
-                                f"[{AGENT_ID}] WARNING: tether artifact/ledger not found for {_pred_node}"
+                                f"[{self.worker_id}] WARNING: tether artifact/ledger not found for {_pred_node}"
                             )
                     except Exception as _exc:  # noqa: BLE001
                         logger.warning(
-                            f"[{AGENT_ID}] WARNING: could not inject tether artifact for {_pred_node}: {_exc}"
+                            f"[{self.worker_id}] WARNING: could not inject tether artifact for {_pred_node}: {_exc}"
                         )
                 if _gathered_blocks:
                     payload_content = (
@@ -903,7 +1130,7 @@ All file paths must strictly resolve to these five silos:
                         + payload_content
                     )
                     logger.info(
-                        f"[{AGENT_ID}] Tether fan-in: injected {len(_gathered_blocks)} "
+                        f"[{self.worker_id}] Tether fan-in: injected {len(_gathered_blocks)} "
                         f"gathered artifact(s) for tether={_tether_id}."
                     )
 
@@ -943,18 +1170,18 @@ All file paths must strictly resolve to these five silos:
                             _gathered_blocks.append(
                                 f"[GATHERED ARTIFACT: {_pred_node}]\n{_art_content}\n[END ARTIFACT: {_pred_node}]"
                             )
-                            logger.info(f"[{AGENT_ID}] Injected artifact from {_pred_node}: {_resolved_path_str}")
+                            logger.info(f"[{self.worker_id}] Injected artifact from {_pred_node}: {_resolved_path_str}")
                         else:
-                            logger.warning(f"[{AGENT_ID}] WARNING: artifact/ledger not found for {_pred_node}")
+                            logger.warning(f"[{self.worker_id}] WARNING: artifact/ledger not found for {_pred_node}")
                     except Exception as _exc:  # noqa: BLE001
-                        logger.warning(f"[{AGENT_ID}] WARNING: could not inject artifact for {_pred_node}: {_exc}")
+                        logger.warning(f"[{self.worker_id}] WARNING: could not inject artifact for {_pred_node}: {_exc}")
                 if _gathered_blocks:
                     payload_content = (
                         "\n\n".join(_gathered_blocks)
                         + "\n\n"
                         + payload_content
                     )
-                    logger.info(f"[{AGENT_ID}] Fan-in: injected {len(_gathered_blocks)} gathered artifact(s) into payload.")
+                    logger.info(f"[{self.worker_id}] Fan-in: injected {len(_gathered_blocks)} gathered artifact(s) into payload.")
 
             # ── HOT-MIC PRIORITY INGESTION ────────────────────────────────────
             # Polled gracefully just before inference. Asynchronous intercept vector!
@@ -967,7 +1194,7 @@ All file paths must strictly resolve to these five silos:
                     f"YOU MUST PIVOT TO ADDRESS THIS IMMEDIATELY BEFORE PROCEEDING WITH YOUR NORMAL INSTRUCTIONS!]"
                 )
                 system_prompt += sys_intercept
-                logger.info(f"\n[{AGENT_ID}] 🔥 HOT-MIC INTERCEPT RECEIVED & INJECTED! 🔥")
+                logger.info(f"\n[{self.worker_id}] 🔥 HOT-MIC INTERCEPT RECEIVED & INJECTED! 🔥")
 
             model_id: str = str(node_config.get("model", "gemini-2.5-flash"))
             tools_str: str = str(node_config.get("tools_allowed", "none"))
@@ -997,7 +1224,7 @@ All file paths must strictly resolve to these five silos:
                             ai_options = _ai_opts
                         if ai_options.get("grounding_google_search") and "google_search" not in tools_str:
                             tools_str = f"{tools_str}|google_search" if tools_str.lower() != "none" else "google_search"
-                            logger.info(f"[{AGENT_ID}] Search grounding enabled for '{agent_name}' via agent_library.")
+                            logger.info(f"[{self.worker_id}] Search grounding enabled for '{agent_name}' via agent_library.")
                 except Exception:  # noqa: BLE001
                     pass  # Non-fatal — grounding simply won't activate
 
@@ -1014,7 +1241,7 @@ All file paths must strictly resolve to these five silos:
                     # Skip _flow_meta key, look for agent-keyed entries
                     _flow_dict_profile = _host_full_dict.get(agent_name, {})
                 except Exception as _hde:  # noqa: BLE001
-                    logger.error(f"[{AGENT_ID}] Failed to load flow dict for {agent_name}: {_hde}")
+                    logger.error(f"[{self.worker_id}] Failed to load flow dict for {agent_name}: {_hde}")
             if _flow_dict_profile:
                 system_prompt = _flow_dict_profile.get("system_prompt", system_prompt)
                 model_id = _flow_dict_profile.get("model", model_id)
@@ -1042,7 +1269,7 @@ All file paths must strictly resolve to these five silos:
                 elif "search_web" in _t_list:
                     _t_list.remove("search_web")
                 tools_str = ",".join(_t_list) if _t_list else "none"
-                logger.info(f"[{AGENT_ID}] Flow dict override applied for host '{agent_name}'")
+                logger.info(f"[{self.worker_id}] Flow dict override applied for host '{agent_name}'")
 
             if tools_str and tools_str.lower() != "none":
                 system_prompt += (
@@ -1063,7 +1290,7 @@ All file paths must strictly resolve to these five silos:
             if not _is_dialogue_node and not _is_live_node:
                 if current_payload.strip() != "[SYSTEM] WAIT_FOR_USER":
                     _ai_opts = locals().get("ai_options", {})
-                    current_payload, _ti_cost, tools_str = self._apply_triple_index_search(current_payload, _ai_opts, model_id, AGENT_ID, tools_str, system_prompt=system_prompt)
+                    current_payload, _ti_cost, tools_str = self._apply_triple_index_search(current_payload, _ai_opts, model_id, self.worker_id, tools_str, system_prompt=system_prompt)
                     total_cost += _ti_cost
             # ───────────────────────────────────────────────────────────────────────────
 
@@ -1148,7 +1375,7 @@ All file paths must strictly resolve to these five silos:
                                         _tls = f"{_tls}|google_search" if _tls.lower() != "none" else "google_search"
                                 break
                     except Exception as e:
-                        logger.warning(f"[{AGENT_ID}] Failed to load agent {name} from DB: {e}")
+                        logger.warning(f"[{self.worker_id}] Failed to load agent {name} from DB: {e}")
                     if not _sys:
                         _card = get_datacenter_path("02_Dynamic_Context", f"{name}.json")
                         if _card.exists():
@@ -1198,9 +1425,9 @@ All file paths must strictly resolve to these five silos:
                                 elif "search_web" in _t_list:
                                     _t_list.remove("search_web")
                                 _tls = ",".join(_t_list) if _t_list else "none"
-                                logger.info(f"[{AGENT_ID}] Flow dict override applied for '{name}'")
+                                logger.info(f"[{self.worker_id}] Flow dict override applied for '{name}'")
                         except Exception as _fde:  # noqa: BLE001
-                            logger.error(f"[{AGENT_ID}] Failed to load flow dict for {name}: {_fde}")
+                            logger.error(f"[{self.worker_id}] Failed to load flow dict for {name}: {_fde}")
 
                     return _sys, _mdl, _tmp, _tls
 
@@ -1225,9 +1452,9 @@ All file paths must strictly resolve to these five silos:
                     _abs.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         _abs.write_text(text, encoding="utf-8")
-                        logger.info(f"[{AGENT_ID}] Dialogue transcript written → {_abs}")
+                        logger.info(f"[{self.worker_id}] Dialogue transcript written → {_abs}")
                     except Exception as _we:  # noqa: BLE001
-                        logger.warning(f"[{AGENT_ID}] WARNING: Could not write dialogue artifact '{_rel}': {_we}")
+                        logger.warning(f"[{self.worker_id}] WARNING: Could not write dialogue artifact '{_rel}': {_we}")
 
                 if len(_partner_names) == 1:
                     # ── PAIR DIALOGUE (original DialogueRunner) ───────────────
@@ -1235,7 +1462,7 @@ All file paths must strictly resolve to these five silos:
                     _, _, _, _host_tls = _load_agent_cfg(_host_label, model_id, _host_temp)
                     _p_sys, _p_mdl, _p_tmp, _p_tls = _load_agent_cfg(_partner, model_id, _host_temp)
                     logger.info(
-                        f"[{AGENT_ID}] DIALOGUE MODE: {current_node} ↔ {_partner} "
+                        f"[{self.worker_id}] DIALOGUE MODE: {current_node} ↔ {_partner} "
                         f"| rounds={_dialogue_rounds} | partner_model={_p_mdl}"
                     )
                     _pair_runner = DialogueRunner(
@@ -1257,15 +1484,9 @@ All file paths must strictly resolve to these five silos:
                     except ManualInputRequired as e:
                         _sp = get_datacenter_path("02_Dynamic_Context", f"{job_id}_dialogue_state.json")
                         _sp.write_text(_json.dumps(e.checkpoint), encoding="utf-8")
-                        logger.warning(f"[{AGENT_ID}] MANUAL INTERCEPT: {e.participant_label} requires input. Pausing task {row_id}.")
+                        logger.warning(f"[{self.worker_id}] MANUAL INTERCEPT: {e.participant_label} requires input. Pausing task {row_id}.")
                         self.broker.pause_task(row_id)
-                        sys.stdout = orig_stdout
-                        sys.stderr = orig_stderr
-                        if dual_out is not None:
-                            dual_out.close()
-                        if dual_err is not None:
-                            dual_err.close()
-                        return True
+                        return CycleOutcome.WORKED
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
 
@@ -1288,7 +1509,7 @@ All file paths must strictly resolve to these five silos:
                         )
                     p_label_str = ", ".join(_partner_names)
                     logger.info(
-                        f"[{AGENT_ID}] GROUP DIALOGUE MODE: host={current_node} "
+                        f"[{self.worker_id}] GROUP DIALOGUE MODE: host={current_node} "
                         f"| participants=[{p_label_str}] | rounds={_dialogue_rounds}"
                     )
                     _grp_runner = GroupDialogueRunner(
@@ -1306,20 +1527,14 @@ All file paths must strictly resolve to these five silos:
                     except ManualInputRequired as e:
                         _sp = get_datacenter_path("02_Dynamic_Context", f"{job_id}_dialogue_state.json")
                         _sp.write_text(_json.dumps(e.checkpoint), encoding="utf-8")
-                        logger.warning(f"[{AGENT_ID}] MANUAL INTERCEPT: {e.participant_label} requires input. Pausing task {row_id}.")
+                        logger.warning(f"[{self.worker_id}] MANUAL INTERCEPT: {e.participant_label} requires input. Pausing task {row_id}.")
                         self.broker.pause_task(row_id)
-                        sys.stdout = orig_stdout
-                        sys.stderr = orig_stderr
-                        if dual_out is not None:
-                            dual_out.close()
-                        if dual_err is not None:
-                            dual_err.close()
-                        return True
+                        return CycleOutcome.WORKED
                     final_output_text = transcript
                     _write_dialogue_artifact(transcript)
 
             elif _is_live_node:
-                logger.info(f"[{AGENT_ID}] Executing via STREAM 4 LIVE SESSION.")
+                logger.info(f"[{self.worker_id}] Executing via STREAM 4 LIVE SESSION.")
                 final_output_text = self._run_interactive_diamond_loop(model_id, system_prompt, current_payload, job_id, current_node, locals().get("ai_options", {}), float(node_config.get("temperature", 1.0)), tools_str)
                 task_cost = 0.0
                 total_cost = 0.0
@@ -1343,7 +1558,7 @@ All file paths must strictly resolve to these five silos:
                     _preview = output_text[:300].replace("\n", " ").strip()
                     logger.info(
                         f"<generation_log>\n"
-                        f"model={model_id} | turn={turn_idx} | cost=${turn_cost:.6f} | agent={AGENT_ID}\n"
+                        f"model={model_id} | turn={turn_idx} | cost=${turn_cost:.6f} | agent={self.worker_id}\n"
                         f"output_preview: {_preview}{'...' if len(output_text) > 300 else ''}\n"
                         f"</generation_log>"
                     )
@@ -1363,7 +1578,7 @@ All file paths must strictly resolve to these five silos:
                         current_payload,
                         project_id=self.project_name,
                         session_id=job_id,
-                        agent_id=AGENT_ID,
+                        agent_id=self.worker_id,
                         is_final_turn=is_last,
                     )
 
@@ -1376,7 +1591,7 @@ All file paths must strictly resolve to these five silos:
                             _gs_block = output_text[_gs_start:]
                             logger.info(f"<tool_call>\n[GOOGLE_SEARCH_GROUNDING]\n{_gs_block}\n</tool_call>")
                         if tool_audit_lines:
-                            logger.info(f"[{AGENT_ID}] Tool loop complete: {turn_idx} tool turn(s) → clean output.")
+                            logger.info(f"[{self.worker_id}] Tool loop complete: {turn_idx} tool turn(s) → clean output.")
                         break
 
                     # Capture raw tool call text for forensic audit sidecar.
@@ -1389,7 +1604,7 @@ All file paths must strictly resolve to these five silos:
                         # Give it one final tool-free generation to flush accumulated work.
                         # This applies universally — any agent in any topology recovers here
                         # rather than producing a dangling tool-call as its ledger output.
-                        logger.info(f"[{AGENT_ID}] Max tool turns ({max_tool_turns}) reached — graceful close turn.")
+                        logger.info(f"[{self.worker_id}] Max tool turns ({max_tool_turns}) reached — graceful close turn.")
                         close_prompt = (
                             f"{updated_prompt}\n\n"
                             "[SYSTEM: Your tool budget is exhausted. Do not request any more tool calls. "
@@ -1407,7 +1622,7 @@ All file paths must strictly resolve to these five silos:
                         total_cost += close_cost
                         final_output_text = close_text
                         tool_audit_lines.append(f"## GRACEFUL CLOSE TURN\n{close_text}")
-                        logger.info(f"[{AGENT_ID}] Graceful close: {len(close_text)} chars flushed.")
+                        logger.info(f"[{self.worker_id}] Graceful close: {len(close_text)} chars flushed.")
                         break
 
                     # ── Terminal tool detection ───────────────────────────────────
@@ -1430,7 +1645,7 @@ All file paths must strictly resolve to these five silos:
                         else:
                             final_output_text = output_text
                             
-                        logger.info(f"[{AGENT_ID}] Terminal tool fired — extracting prose payload and closing loop.")
+                        logger.info(f"[{self.worker_id}] Terminal tool fired — extracting prose payload and closing loop.")
                         break
                     # ─────────────────────────────────────────────────────────────
 
@@ -1464,7 +1679,7 @@ All file paths must strictly resolve to these five silos:
             
             # NOTE: We do NOT strip from tool_audit_lines, so the sidecar gets the thoughts inline!
 
-            logger.info(f"[{AGENT_ID}] Generation complete. Billed Cost: ${task_cost:.6f}")
+            logger.info(f"[{self.worker_id}] Generation complete. Billed Cost: ${task_cost:.6f}")
 
             ledger_content_out = raw_model_output
             with open(ledger_path, "w", encoding="utf-8") as f:
@@ -1477,7 +1692,7 @@ All file paths must strictly resolve to these five silos:
                 from datetime import datetime, timezone  # noqa: PLC0415
                 
                 if job_id.startswith("studio_session_"):
-                    audit_path = Path(ledger_path).parent / f"{job_id}-{AGENT_ID}_thoughts_tool-calls.log"
+                    audit_path = Path(ledger_path).parent / f"{job_id}-{self.worker_id}_thoughts_tool-calls.log"
                     mode = "a"
                 else:
                     audit_path = Path(ledger_path).parent / f"thoughts_and_tools_{current_node}_{row_id}.md"
@@ -1489,13 +1704,16 @@ All file paths must strictly resolve to these five silos:
                 
                 with open(audit_path, mode, encoding="utf-8") as af:
                     af.write(audit_header + audit_body)
-                logger.info(f"[{AGENT_ID}] Thoughts and tools sidecar: {audit_path}")
+                logger.info(f"[{self.worker_id}] Thoughts and tools sidecar: {audit_path}")
 
             # ── LIVE STREAMING ACOUSTICS ──────────────────────────────────────
-            # Trigger real-time conversational streaming for non-director nodes
-            if "director" not in AGENT_ID.lower():
-                # live_stream_audio(ledger_content_out, AGENT_ID, job_id, current_node)
-                pass
+            # Placeholder for real-time conversational streaming on non-director
+            # nodes. Inert today: the call is commented out, and the intended
+            # guard could never fire anyway — it tested the *worker* identity
+            # ("universal_node_<pid>"), which never contains "director". When
+            # this is implemented it must branch on the node's agent name, e.g.
+            # node_config["agent_name"], not on the worker id.
+            # live_stream_audio(ledger_content_out, self.worker_id, job_id, current_node)
 
             next_node: str = str(node_config.get("next_node_success", node_config.get("Next_Node", "END")))
 
@@ -1517,7 +1735,7 @@ All file paths must strictly resolve to these five silos:
                 # ACCEPTED means "all gates passed — proceed to static next_node"
                 if _candidate.upper() == "ACCEPTED":
                     logger.info(
-                        f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:ACCEPTED — "
+                        f"[{self.worker_id}] CONDITIONAL ROUTE: ROUTE_TO:ACCEPTED — "
                         f"proceeding to static next_node '{next_node}'"
                     )
                 elif _candidate and _candidate.upper() not in {"STOP", "DONE", "TERMINATE", "FAILED"}:
@@ -1564,12 +1782,12 @@ All file paths must strictly resolve to these five silos:
                     if resolved_targets:
                         next_node = ",".join(resolved_targets)
                         logger.info(
-                            f"[{AGENT_ID}] CONDITIONAL ROUTE: overridden by "
+                            f"[{self.worker_id}] CONDITIONAL ROUTE: overridden by "
                             f"ROUTE_TO:{next_node} (model-directed)"
                         )
                     else:
                         logger.info(
-                            f"[{AGENT_ID}] CONDITIONAL ROUTE: ROUTE_TO:{_candidate} ignored "
+                            f"[{self.worker_id}] CONDITIONAL ROUTE: ROUTE_TO:{_candidate} ignored "
                             f"(targets not found in topology or ephemeral macros)"
                         )
 
@@ -1577,7 +1795,7 @@ All file paths must strictly resolve to these five silos:
                 agent_name=str(node_config.get("agent_name", current_node)),
                 next_node=next_node,
                 job_id=job_id,
-                agent_id=AGENT_ID,
+                agent_id=self.worker_id,
                 source_node=current_node,
             )
             # Read max_recursion config targeting exactly the NEXT node limit
@@ -1611,11 +1829,11 @@ All file paths must strictly resolve to these five silos:
                 _artifact_abs: Path = get_datacenter_path(_artifact_rel)
                 if _artifact_abs.exists():
                     routing_payload_path = str(_artifact_abs)
-                    logger.info(f"[{AGENT_ID}] Routing via artifact: {routing_payload_path}")
+                    logger.info(f"[{self.worker_id}] Routing via artifact: {routing_payload_path}")
                 else:
                     routing_payload_path = ledger_path
                     logger.info(
-                        f"[{AGENT_ID}] WARNING: artifact_path '{_artifact_rel}' not found — "
+                        f"[{self.worker_id}] WARNING: artifact_path '{_artifact_rel}' not found — "
                         f"falling back to ledger."
                     )
             else:
@@ -1625,7 +1843,7 @@ All file paths must strictly resolve to these five silos:
             try:
                 from maccre_core.orchestration.flow_engine import generate_unified_ledger
                 _ul_path = generate_unified_ledger(job_id)
-                logger.info(f"[{AGENT_ID}] Live-updated unified ledger: {_ul_path}")
+                logger.info(f"[{self.worker_id}] Live-updated unified ledger: {_ul_path}")
                 
                 payload_mode = "Unified Ledger"
                 if self.topology:
@@ -1637,9 +1855,9 @@ All file paths must strictly resolve to these five silos:
                 
                 if payload_mode == "Unified Ledger" and _ul_path:
                     routing_payload_path = _ul_path
-                    logger.info(f"[{AGENT_ID}] Routing via Unified Ledger: {routing_payload_path}")
+                    logger.info(f"[{self.worker_id}] Routing via Unified Ledger: {routing_payload_path}")
             except Exception as e:
-                logger.warning(f"[{AGENT_ID}] Failed to live-update or route unified session ledger: {e}")
+                logger.warning(f"[{self.worker_id}] Failed to live-update or route unified session ledger: {e}")
 
             _tether_id = str(node_config.get("tether_id", "") or task.get("tether_id", ""))
             self.broker.route_task(
@@ -1667,45 +1885,80 @@ All file paths must strictly resolve to these five silos:
                         topology_name=promo_name,
                         job_id=job_id,
                     )
-                    logger.info(f"[{AGENT_ID}] Topology Promotion: {promo_result}")
+                    logger.info(f"[{self.worker_id}] Topology Promotion: {promo_result}")
                 except Exception as promo_err:
-                    logger.warning(f"[{AGENT_ID}] WARNING: Topology promotion failed (non-fatal): {promo_err}")
+                    logger.warning(f"[{self.worker_id}] WARNING: Topology promotion failed (non-fatal): {promo_err}")
 
         except Exception as e:
             import traceback
-            logger.critical(f"[{AGENT_ID}] CRITICAL FAILURE: {e}.")
+            logger.critical(f"[{self.worker_id}] CRITICAL FAILURE: {e}.")
             logger.info(traceback.format_exc())
             fail_target = "FAILED"
             try:
                 fail_target = str(node_config.get("next_node_failure", "FAILED")).strip()  # type: ignore[possibly-unbound]
             except Exception:
                 pass
-            logger.info(f"[{AGENT_ID}] Routing task to [{fail_target}]")
-            self.broker.route_task(  # type: ignore[possibly-unbound]
-                row_id,
-                job_id,
-                fail_target,
-                new_payload_path=payload_path,
-                actual_cost=0.0,
-                source_payload_path=source_payload_path,
-                status="failed",
-                flow_line_id=str(task.get("flow_line_id", "")),
-                flow_vector=flow_vector,
-            )
+            logger.info(f"[{self.worker_id}] Routing task to [{fail_target}]")
+            # ── The claimed task MUST end up resolved ─────────────────────────
+            # This route is itself failure-prone: it runs *because* something
+            # already blew up, and several of the locals it reads are only bound
+            # further down the happy path (pyright flags them possibly-unbound).
+            # Unguarded, an exception here escaped into the pool, the worker
+            # retired its slot, and the row stayed 'locked' forever. The drain
+            # check counts only 'open' rows, so the flow then reported
+            # "completed" with a node that never ran — the rollback's signature
+            # failure. Releasing the row back to 'open' is the correct fallback:
+            # it is strictly better to let the task be retried than to strand it.
+            try:
+                self.broker.route_task(  # type: ignore[possibly-unbound]
+                    row_id,
+                    job_id,
+                    fail_target,
+                    new_payload_path=payload_path,
+                    actual_cost=0.0,
+                    source_payload_path=source_payload_path,
+                    status="failed",
+                    flow_line_id=str(task.get("flow_line_id", "")),
+                    flow_vector=flow_vector,
+                )
+            except Exception as route_err:  # noqa: BLE001
+                logger.critical(
+                    f"[{self.worker_id}] Could not route task {row_id} to "
+                    f"[{fail_target}] ({type(route_err).__name__}: {route_err}). "
+                    f"Releasing the lock so the row is not stranded."
+                )
+                logger.info(traceback.format_exc())
+                try:
+                    self.broker.release_task(row_id)
+                except Exception as release_err:  # noqa: BLE001
+                    # Nothing further can be done from inside this worker. Say so
+                    # loudly — A5's drain check is what turns this into a visible
+                    # stall instead of a silent success.
+                    logger.critical(
+                        f"[{self.worker_id}] Task {row_id} is STRANDED: release "
+                        f"also failed ({type(release_err).__name__}: {release_err})."
+                    )
         finally:
-            sys.stdout = orig_stdout
-            sys.stderr = orig_stderr
-            if dual_out is not None:
-                dual_out.close()
-            if dual_err is not None:
-                dual_err.close()
+            # Single teardown point for this thread's log tee and the finish
+            # notification. Covers every early return above (pause, deterministic
+            # completion, both dialogue manual intercepts) as well as the FAILED
+            # route and the exception path, because `return` and `raise` inside a
+            # `try` both run its `finally`. The four inline stream restores that
+            # used to duplicate the teardown were redundant and, worse, restored a
+            # *stale* snapshot of the process-wide streams.
+            self._fire_lifecycle(self.on_node_finish, current_node, "on_node_finish")
+            # Stop vouching for this lock. Must happen on every exit path: a
+            # heartbeat that outlives its node would keep a dead worker's task
+            # looking healthy, which is precisely the signal reclaim relies on.
+            heartbeat.stop()
+            end_thread_tee()
         
-        return True
+        return CycleOutcome.WORKED
 
 
 if __name__ == "__main__":
     worker = UniversalSwarmWorker()
-    logger.info(f"=== UNIVERSAL SWARM NODE {AGENT_ID} ONLINE ===")
+    logger.info(f"=== UNIVERSAL SWARM NODE {worker.worker_id} ONLINE ===")
     while True:
         if not worker.execute_cycle():
             break

@@ -102,11 +102,13 @@ def maccre_status() -> str:
     active = os.environ.get("MACCRE_ACTIVE_PROJECT", "GLOBAL")
     sentinel_health: dict = {}
     try:
-        from maccre_core.orchestration.windows_vault import get_native_credential
+        from maccre_core.orchestration.windows_vault import get_provider_credential
         from maccre_core._net.model_sentinel import get_sentinel
-        key = get_native_credential("MACCRE_Sovereign")
+        key = get_provider_credential("MACCRE_Sovereign")
         if key:
-            s = get_sentinel(str(key))
+            # get_sentinel takes a key *provider*, not a key: it re-reads the
+            # credential on each probe rather than holding a plaintext copy.
+            s = get_sentinel(lambda: key)
             report = s.report()
             sentinel_health = {
                 "healthy": int(report.get("healthy", 0)),
@@ -655,12 +657,12 @@ def list_model_registry() -> str:
         JSON array of models with name, surface, health_status, and pricing tier.
     """
     try:
-        from maccre_core.orchestration.windows_vault import get_native_credential
+        from maccre_core.orchestration.windows_vault import get_provider_credential
         from maccre_core._net.model_registry import get_registry
-        key = get_native_credential("MACCRE_Sovereign")
+        key = get_provider_credential("MACCRE_Sovereign")
         if not key:
             return json.dumps({"error": "No sovereign key found in vault."})
-        registry = get_registry(str(key))
+        registry = get_registry(lambda: key)
         # all_models() returns the full model list from the capability map
         models = registry.all_models()
         return json.dumps({"model_count": len(models), "models": models}, indent=2)

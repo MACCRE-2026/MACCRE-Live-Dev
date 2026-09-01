@@ -89,16 +89,25 @@ def build_topology(nodes: List[List[str]]) -> str:
     Columns written (topology_engine.py canonical schema)::
 
         Node_ID, Agent_Name, Model_Override, Next_Node, Temperature,
-        Instruction_Override, Wait_For, Failure_Target, Max_Recursion, Artifact_Path, Live_Profile
+        Instruction_Override, Wait_For, Failure_Target, Max_Recursion,
+        Artifact_Path, Live_Profile, Dialogue_Partner, Dialogue_Rounds,
+        Payload_Mode, Tools_Allowed, Tether_ID
+
+    ``Tether_ID`` is the scatter-scope identifier. It was absent from this schema
+    while ``flow_engine``'s scatter auto-wrap was already computing one and writing
+    it into every row dict, so the value was silently dropped here and every
+    ``task_queue`` row carried an empty tether. That made the tether-scoped fan-in
+    unreachable: measured in UT-0, an 8-lane ``CTRL_MERGE`` gathered 1 source
+    instead of 8.
 
     Args:
-        nodes: A list of rows. Each row is 6-15 items:
+        nodes: A list of rows. Each row is 6-16 items:
                [Node_ID, Agent_Name, Model_Override, Next_Node,
                 Temperature, Instruction_Override,
-                Wait_For?, Failure_Target?, Max_Recursion?, Artifact_Path?, Live_Profile?, Dialogue_Partner?, Dialogue_Rounds?, Payload_Mode?, Tools_Allowed?]
+                Wait_For?, Failure_Target?, Max_Recursion?, Artifact_Path?, Live_Profile?, Dialogue_Partner?, Dialogue_Rounds?, Payload_Mode?, Tools_Allowed?, Tether_ID?]
                Optional columns receive defaults.
     """
-    _DEFAULTS = ["none", "FAILED", "3", "", "FALSE", "", "0", "Unified Ledger", ""]
+    _DEFAULTS = ["none", "FAILED", "3", "", "FALSE", "", "0", "Unified Ledger", "", ""]
     try:
         topo_path = get_datacenter_path("02_Dynamic_Context", "topology.csv")
         os.makedirs(os.path.dirname(topo_path), exist_ok=True)
@@ -108,17 +117,18 @@ def build_topology(nodes: List[List[str]]) -> str:
                 "Node_ID", "Agent_Name", "Model_Override", "Next_Node",
                 "Temperature", "Instruction_Override",
                 "Wait_For", "Failure_Target", "Max_Recursion", "Artifact_Path", "Live_Profile",
-                "Dialogue_Partner", "Dialogue_Rounds", "Payload_Mode", "Tools_Allowed"
+                "Dialogue_Partner", "Dialogue_Rounds", "Payload_Mode", "Tools_Allowed",
+                "Tether_ID"
             ])
             for raw_node in nodes:
                 node: list[str] = list(raw_node)
-                if len(node) < 6 or len(node) > 15:
+                if len(node) < 6 or len(node) > 16:
                     return (
-                        f"[ADMIN_FAULT] Node malformed. Expected 6-14 items, "
+                        f"[ADMIN_FAULT] Node malformed. Expected 6-16 items, "
                         f"got {len(node)}. Node: {node}"
                     )
                 # Pad optional trailing columns with defaults
-                while len(node) < 15:
+                while len(node) < 16:
                     node.append(_DEFAULTS[len(node) - 6])
                 writer.writerow(node)
                 

@@ -47,6 +47,9 @@ class TopologyEngine(TopologyProvider):
         self._cached_graph: Dict[str, Any] = {}
         self._last_pull_time: float = 0.0
         self._cache_ttl_seconds: float = 5.0  # Fast refresh for local disk
+        #: Runtime config overlays, kept separately from the cached graph so they
+        #: survive a TTL reload. See merge_config_overlay for why that matters.
+        self._overlays: Dict[str, Dict[str, Any]] = {}
 
     def get_topology(self) -> Dict[str, Any]:
         """Returns the Swarm Graph, reloading from disk if the TTL has expired."""
@@ -55,12 +58,35 @@ class TopologyEngine(TopologyProvider):
         if not self._cached_graph or (current_time - self._last_pull_time) > self._cache_ttl_seconds:
             self._cached_graph = self._pull_from_csv()
             self._last_pull_time = current_time
+            # Re-apply overlays after every reload. A reload rebuilds the graph
+            # from topology.csv, which has no knowledge of runtime config, so
+            # without this the overlay would silently vanish once the 5 s TTL
+            # expired — see merge_config_overlay.
+            self._reapply_overlays()
         return self._cached_graph
 
+    def _reapply_overlays(self) -> None:
+        """Merge every recorded overlay back into the freshly loaded graph."""
+        for node_id, overlay in self._overlays.items():
+            if node_id in self._cached_graph:
+                self._cached_graph[node_id].update(overlay)
+            else:
+                self._cached_graph[node_id] = dict(overlay)
+
     def flush_cache(self) -> None:
-        """Forces the graph to be reloaded on the next get_topology() call."""
+        """Forces the graph to be reloaded on the next get_topology() call.
+
+        Overlays are **retained** — they describe runtime configuration for the
+        current step, not cached disk state, so discarding them here would drop a
+        node's config the moment anything asked for a fresh read. Use
+        :meth:`clear_config_overlays` to drop them deliberately.
+        """
         self._cached_graph = {}
         self._last_pull_time = 0.0
+
+    def clear_config_overlays(self) -> None:
+        """Forget all runtime config overlays."""
+        self._overlays.clear()
 
     def patch_node(self, node_id: str, field: str, value: str) -> None:
         """Rewrite a single cell in topology.csv and hot-reload."""
@@ -209,6 +235,10 @@ class TopologyEngine(TopologyProvider):
                         "next_node_success": str(row_upper.get('NEXT_NODE', 'DONE')).strip(),
                         "next_node_failure": str(row_upper.get('FAILURE_TARGET', 'FAILED')).strip(),
                         "wait_for": str(row_upper.get('WAIT_FOR', 'none')).strip() or 'none',
+                        # Scatter scope. Without this the worker's tether-scoped
+                        # fan-in can never fire, because it is gated on a non-empty
+                        # tether and node_config never carried one.
+                        "tether_id": str(row_upper.get('TETHER_ID', '')).strip(),
                         "temperature": temp,
                         "tools_allowed": final_tools,
                         "model": final_model,
@@ -259,23 +289,69 @@ class TopologyEngine(TopologyProvider):
         return topology[node_id]
 
     def merge_config_overlay(self, node_id: str, overlay: Dict[str, Any]) -> None:
-        """Merge a config overlay dict into the cached topology graph for a node.
+        """Merge a config overlay dict into this engine's topology for a node.
 
-        This allows FlowStep.config fields (e.g. scatter_targets, tether_id,
-        gate predicates) to be injected at runtime without modifying topology.csv.
-        The overlay is merged into the cached graph — subsequent ``get_node_config``
-        calls will return the merged result.
+        Lets ``FlowStep.config`` fields (scatter targets, tether id, gate
+        predicates, ``auto_resume_after``, ...) reach the runtime without
+        modifying topology.csv.
+
+        The overlay is **recorded**, not just merged. Previously it was written
+        straight into ``_cached_graph``, which meant it was discarded the first
+        time ``get_topology()`` reloaded from disk — i.e. after
+        ``_cache_ttl_seconds`` (5 s). A node that took longer than five seconds to
+        reach silently lost its configuration, with nothing logged. Recording the
+        overlay and re-applying it after each reload closes that.
+
+        Note this is still **per engine instance**. Every
+        :class:`~maccre_core.orchestration.swarm_worker.UniversalSwarmWorker`
+        builds its own ``TopologyEngine``, so applying an overlay to one worker's
+        engine does not reach another's — which is why
+        :class:`~maccre_core.orchestration.swarm_pool.DynamicSwarmPool` takes a
+        ``topology_overlays`` mapping and applies it to every worker it builds.
+
+        Blank values are not overrides
+        ------------------------------
+        Keys whose value is an empty string are dropped before merging. The
+        authoring UI builds config with ``cfg[key] = <widget>.value.strip()``, so
+        every field the operator left empty arrives here as ``""``. An overlay is
+        an *override*; "the operator typed nothing" means "do not override", not
+        "override with nothing".
+
+        Without this the overlay silently destroys topology.csv values. Observed
+        live: a ``CTRL_SCATTER`` saved with a blank Tether ID field carried
+        ``tether_id: ""`` in its step config, which overwrote the real tether the
+        auto-wrap had written into the CSV — but only on the *control* nodes, since
+        only they receive overlays. The scatter therefore stamped its lanes with a
+        different scope than the merge was gathering on, and the merge's gather
+        gate could never open: its tether-scoped predecessor query matched zero
+        rows, so it waited for eight completions that, in its scope, did not exist.
+        The pool spawned and retired workers against that unclaimable row until the
+        wall-clock timeout.
 
         Args:
             node_id: The node to overlay.
-            overlay: Dict of config fields to merge.
+            overlay: Dict of config fields to merge. Empty-string values are
+                ignored; pass a non-empty sentinel if a field must be cleared.
         """
+        if not overlay:
+            return
+        effective = {
+            key: value
+            for key, value in overlay.items()
+            if not (isinstance(value, str) and not value.strip())
+        }
+        if not effective:
+            return
+
+        recorded = self._overlays.setdefault(node_id, {})
+        recorded.update(effective)
+
         topology = self.get_topology()
         if node_id in topology:
-            topology[node_id].update(overlay)
+            topology[node_id].update(effective)
         else:
             # Node might not exist yet (e.g. CTRL_ nodes added via TUI)
-            topology[node_id] = dict(overlay)
+            topology[node_id] = dict(effective)
         self._cached_graph = topology
 
     def validate(self) -> "ValidationReport":
@@ -302,8 +378,28 @@ class TopologyEngine(TopologyProvider):
         issues: list[dict[str, str]] = []
 
         for node_id, cfg in topology.items():
+            # Deterministic control nodes are exempt from the agent-shaped checks
+            # below. A CTRL_/DET_ node has Agent_Name=SYSTEM, no persona prompt and
+            # Model_Override=none *by design* — it never reaches an LLM, it runs a
+            # handler in deterministic_nodes.py. Demanding a directive and a model
+            # of it reports two ERRORs for a correctly configured node.
+            #
+            # This was masked for review nodes, which preflight used to skip
+            # outright. Phase 6.12 Task A8 removed that bypass so review steps are
+            # validated like anything else — which surfaced the rule as a hard
+            # block on any flow containing CTRL_REVIEW, since
+            # nexus_plex gates launch on `report.is_ok`. CTRL_ANCHOR, CTRL_GATE and
+            # every other control node had the same latent problem all along.
+            # Scoped to the agent-shaped checks only: temperature and DAG
+            # integrity still apply, and DAG integrity matters more than ever now
+            # that a control node's next_node is configurable.
+            from maccre_core.orchestration.deterministic_nodes import (  # noqa: PLC0415
+                is_deterministic_node,
+            )
+            is_control_node = is_deterministic_node(node_id)
+
             # 1. Instruction check — must have at least one source of system prompt
-            if not str(cfg.get("prompt", "")).strip():
+            if not is_control_node and not str(cfg.get("prompt", "")).strip():
                 issues.append({
                     "node": node_id,
                     "field": "prompt/Instruction_Override",
@@ -312,7 +408,7 @@ class TopologyEngine(TopologyProvider):
                 })
 
             # 2. Model check
-            if not str(cfg.get("model", "")).strip():
+            if not is_control_node and not str(cfg.get("model", "")).strip():
                 issues.append({
                     "node": node_id,
                     "field": "model",

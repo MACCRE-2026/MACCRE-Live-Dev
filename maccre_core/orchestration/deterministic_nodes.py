@@ -81,6 +81,46 @@ class DeterministicNodeType(Enum):
     PAYLOAD_INJECT = "CTRL_PAYLOAD_INJECT"
 
 
+#: Authoring-level control node names that are *aliases* for a runtime primitive.
+#:
+#: ``CTRL_REVIEW`` is a Human-in-the-Loop affordance in the node catalogue, but at
+#: runtime its behaviour **is** ``CTRL_PAUSE``: halt the task, wait for the
+#: operator, resume. It is deliberately not a separate
+#: :class:`DeterministicNodeType`, because a second pause implementation would be
+#: a second thing to keep correct.
+#:
+#: The alias target matters and is load-bearing. ``_resolve_node_type`` classifies
+#: by **prefix**, so ``CTRL_PAUSE_MANUAL`` matches ``PAUSE`` and gets
+#: :func:`_handle_pause`. A node left named ``CTRL_REVIEW`` resolves to ``None``
+#: and :func:`execute_deterministic_node` falls back to :func:`_handle_anchor` — a
+#: silent passthrough that deletes the review checkpoint without raising.
+#:
+#: ``_MANUAL`` distinguishes an operator-gated pause from a timed
+#: ``auto_resume_after`` pause, and preserves the exact node id in the verified
+#: Aug 29 baseline (see ``.oracle_artifacts/2026-08-29_phase_6_12_ctrl_review_baseline.md``).
+NODE_ALIASES: dict[str, str] = {
+    "CTRL_REVIEW": "CTRL_PAUSE_MANUAL",
+    "DET_REVIEW": "CTRL_PAUSE_MANUAL",
+}
+
+
+def resolve_primitive_node_id(name: str) -> str:
+    """Map an authoring-level control node name to its runtime primitive node id.
+
+    Non-aliased names pass through unchanged, so this is safe to apply to every
+    control node rather than only the ones that need it — which is the point:
+    callers stop needing to know *which* names are special.
+
+    Args:
+        name: Control node name as authored (e.g. ``"CTRL_REVIEW"``).
+
+    Returns:
+        The node id to write into the topology.
+    """
+    stripped = name.strip()
+    return NODE_ALIASES.get(stripped.upper(), stripped)
+
+
 def is_deterministic_node(node_id: str) -> bool:
     """Return True if a node_id uses the CTRL_ or legacy DET_ prefix convention."""
     upper = node_id.strip().upper()

@@ -57,12 +57,19 @@ from maccre_core._net.gemini_client import (
 )
 from maccre_core._net.model_registry import get_registry, ModelRegistry
 
+from maccre_core.orchestration.concurrency import get_provider_rate_limiter
 from maccre_core.orchestration.universal_vault import get_provider_credential
 from maccre_core.tools.tool_registry import get_tools_from_sheet, generate_universal_json_schema
 from maccre_core.orchestration.cache_manager import CacheManager
 
-
 from dataclasses import dataclass, field
+
+#: How long a worker will wait for a provider rate-limit slot before failing the
+#: node. Generous: at the default 1000 req/min a slot frees within a second under
+#: any realistic scatter width, so hitting this ceiling means something is wrong
+#: (a misconfigured MACCRE_PROVIDER_RPM, or far more concurrency than the pool
+#: should permit) and failing loudly beats stalling a flow indefinitely.
+_RATE_LIMIT_WAIT_SECONDS: float = 120.0
 
 # ── Sovereign Schema enforced across both pipelines ─────────────────────────────
 
@@ -226,7 +233,26 @@ class UniversalRouter:
             RuntimeError: On 404/epoch-drift errors from the Gemini API.
         """
         model_lower = model_name.lower()
-        
+
+        # ── Provider Rate Limit Guard (Phase 6.12B) ───────────────────────────
+        # Every inference request in the system funnels through this method, so
+        # this is the one place a provider budget can actually be enforced.
+        #
+        # The limiter is process-wide, not per-router: each UniversalSwarmWorker
+        # builds its own UniversalRouter, so a router-owned limiter would count
+        # one thread's requests and miss the other seven. Sequential execution
+        # never needed a guard — one worker cannot out-pace a provider on its own.
+        # Eight can, and a 429 partway through a paid scatter is expensive,
+        # because the lanes that already finished have been paid for.
+        _rate_limiter = get_provider_rate_limiter()
+        if not _rate_limiter.acquire(timeout=_RATE_LIMIT_WAIT_SECONDS):
+            raise RuntimeError(
+                f"Provider rate limit not satisfied within {_RATE_LIMIT_WAIT_SECONDS:.0f}s "
+                f"({_rate_limiter.max_per_minute} req/min, "
+                f"{_rate_limiter.in_window} in window). Reduce scatter width or raise "
+                "MACCRE_PROVIDER_RPM."
+            )
+
         # ── Anchor Temporal Awareness ──
         import datetime
         _now_str = datetime.datetime.now().strftime("%B %d, %Y")

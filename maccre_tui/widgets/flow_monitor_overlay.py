@@ -127,6 +127,10 @@ class FlowMonitorOverlay(Vertical):
         super().__init__(**kwargs)
         self._completed: int = 0
         self._total: int = 0
+        #: Nodes currently executing, and the concurrency ceiling. Drives the
+        #: ``N/8 active`` readout — see update_concurrency.
+        self._active_nodes: list[str] = []
+        self._concurrency_cap: int = 1
 
     # ── Compose ──────────────────────────────────────────────────────────────
 
@@ -187,7 +191,14 @@ class FlowMonitorOverlay(Vertical):
             pass
 
     def set_current_node(self, node_id: str, agent_name: str, model: str) -> None:
-        """Display the currently executing node metadata."""
+        """Display a single executing node's metadata.
+
+        The per-**step** readout. Under a scatter several nodes are live at once,
+        which :meth:`update_concurrency` displays instead — and because that is
+        called on every node start and finish, it naturally takes over the label
+        for the duration of the burst.
+        """
+        self._active_nodes = []
         try:
             node_label = self.query_one("#monitor-node-info", Label)
             node_label.update(
@@ -197,6 +208,55 @@ class FlowMonitorOverlay(Vertical):
             )
         except Exception:  # noqa: BLE001
             pass
+
+    def update_concurrency(self, active_nodes: list[str], cap: int) -> None:
+        """Show how many nodes are executing right now, as ``N/cap active``.
+
+        The visible half of Phase 6.12. The monitor previously had one
+        "current node" line, which cannot describe eight agents running at once —
+        an operator watching an 8-lane scatter would see a single name and no
+        indication that anything was parallel.
+
+        Args:
+            active_nodes: Node ids currently executing.
+            cap: Concurrency ceiling for this step, so the reading is
+                ``3/8`` rather than a bare count.
+        """
+        self._active_nodes = list(active_nodes)
+        self._concurrency_cap = max(1, cap)
+        count = len(self._active_nodes)
+
+        # Amber while ramping, green at full width, dim when nothing is running.
+        if count == 0:
+            colour = "dim"
+        elif count >= self._concurrency_cap:
+            colour = "bold green"
+        else:
+            colour = "bold #ffa657"
+
+        if count == 0:
+            detail = "—"
+        elif count == 1:
+            detail = self._active_nodes[0]
+        else:
+            # Keep the line bounded; a 12-wide scatter would otherwise wrap badly.
+            shown = ", ".join(self._active_nodes[:3])
+            if count > 3:
+                shown += f", +{count - 3} more"
+            detail = shown
+
+        try:
+            node_label = self.query_one("#monitor-node-info", Label)
+            node_label.update(
+                f"[{colour}]{count}/{self._concurrency_cap} active[/{colour}]  │  {detail}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    @property
+    def active_node_count(self) -> int:
+        """Nodes currently shown as executing."""
+        return len(self._active_nodes)
 
     def request_expand(self) -> None:
         """Programmatic trigger: tell the parent to show the overlay."""

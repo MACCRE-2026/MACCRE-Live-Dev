@@ -307,15 +307,70 @@ class TopologyVisualizer(Vertical):
             self._topo_nodes[node_id].state = state
             self._update_node_label(node_id)
 
+    def mark_node_active(self, node_id: str) -> None:
+        """Light one node up **without** demoting any other.
+
+        The multi-active primitive. Phase 6.12 runs up to
+        ``MAX_SCATTER_AGENTS`` nodes at once, so "a node started" and "the
+        previous node finished" are separate events that no longer coincide.
+        :meth:`set_active_node` conflated them — see its note.
+
+        Safe to call for a node that is not in the current topology (a step's
+        DAG may not be rendered yet); unknown ids are ignored.
+        """
+        if node_id not in self._topo_nodes:
+            return
+        self._topo_nodes[node_id].state = NodeState.ACTIVE
+        self._update_node_label(node_id)
+        # Self-managing animation: with several nodes starting and finishing
+        # independently there is no single caller that knows when the pulse
+        # should begin.
+        if not self._is_animating:
+            try:
+                self.start_animation()
+            except Exception:  # noqa: BLE001
+                # Not mounted yet — the pulse is cosmetic, never fail a callback.
+                pass
+
+    def mark_node_finished(
+        self,
+        node_id: str,
+        state: NodeState = NodeState.COMPLETED,
+    ) -> None:
+        """Retire one node, leaving every other active node untouched.
+
+        Args:
+            node_id: Node that finished. Unknown ids are ignored.
+            state: Terminal state to show — ``COMPLETED`` normally,
+                ``FAILED`` for a node that errored, ``PAUSED`` for a HITL gate.
+
+        Stops the pulse only once **no** node is still active, so finishing lane 3
+        of an 8-lane scatter does not freeze the other seven.
+        """
+        if node_id not in self._topo_nodes:
+            return
+        self._topo_nodes[node_id].state = state
+        self._update_node_label(node_id)
+        if self.active_node_count == 0:
+            self.stop_animation()
+
     def set_active_node(self, node_id: str) -> None:
-        """Set a node as active, marking previous as completed."""
-        for nid, ndata in self._topo_nodes.items():
-            if ndata.state == NodeState.ACTIVE:
-                ndata.state = NodeState.COMPLETED
-                self._update_node_label(nid)
-        if node_id in self._topo_nodes:
-            self._topo_nodes[node_id].state = NodeState.ACTIVE
-            self._update_node_label(node_id)
+        """Set a node active, marking any previously active node completed.
+
+        .. note::
+           Retained for compatibility with the per-**step** highlighting path
+           (``node_started_callback``), where exactly one node is live at a time.
+
+           Do not use it for per-**node** updates under concurrency: demoting
+           whatever was active is precisely wrong when eight lanes are running,
+           because lane 2 starting would mark lane 1 completed while lane 1 is
+           still mid-inference. Use :meth:`mark_node_active` and
+           :meth:`mark_node_finished` instead.
+        """
+        for nid in self.active_nodes:
+            self._topo_nodes[nid].state = NodeState.COMPLETED
+            self._update_node_label(nid)
+        self.mark_node_active(node_id)
 
     def mark_all_completed(self) -> None:
         """Mark all nodes as completed (post-flow)."""
@@ -575,12 +630,38 @@ class TopologyVisualizer(Vertical):
         return len(self._topo_nodes)
 
     @property
+    def active_nodes(self) -> list[str]:
+        """Every node currently executing, in topology order.
+
+        Derived from node state rather than kept in a parallel set. A second
+        container would be a second thing to keep correct, and ``_tick_animation``
+        and :meth:`mark_all_completed` already read state directly — a set that
+        drifted from it would show a node pulsing forever, or none at all.
+        Topologies are small, so the scan is cheaper than the divergence risk.
+        """
+        return [
+            nid
+            for nid, ndata in self._topo_nodes.items()
+            if ndata.state == NodeState.ACTIVE
+        ]
+
+    @property
+    def active_node_count(self) -> int:
+        """How many nodes are executing right now. Drives the ``N/8`` readout."""
+        return sum(
+            1 for ndata in self._topo_nodes.values() if ndata.state == NodeState.ACTIVE
+        )
+
+    @property
     def active_node(self) -> str | None:
-        """Return the currently active node ID, if any."""
-        for nid, ndata in self._topo_nodes.items():
-            if ndata.state == NodeState.ACTIVE:
-                return nid
-        return None
+        """Return the first currently active node ID, if any.
+
+        Kept for existing single-node callers. Under a scatter this is one
+        arbitrary lane of several — use :attr:`active_nodes` when the full set
+        matters.
+        """
+        active = self.active_nodes
+        return active[0] if active else None
 
     # ── Keyboard Actions (Task 39) ───────────────────────────────────────
 
