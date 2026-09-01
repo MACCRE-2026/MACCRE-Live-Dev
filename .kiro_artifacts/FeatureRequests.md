@@ -1620,3 +1620,197 @@ artifact*, *Harden the Synaptic Bridge breaker*, *System-wide provenance doctrin
 *Nexus Copilot Sovereign Sandbox Enhancement* (whose sandbox-execution half was deferred —
 this harness is the bounding mechanism that would make it safe, and supersedes the
 ungoverned version of it).
+
+***
+
+# ENTRIES ADDED 2026-09-01 — the two payload-lineage defects
+
+**Why these are being added after being fixed.** Both defects were diagnosed in the
+2026-08-31 Phase 4.99 handover and worked from there, and **neither ever had a register
+entry.** That is precisely risk **R4/R3** in the Eisenhower map: the register is the
+authoritative record, and work that lives only in a handover is invisible to any process
+that reads the register. Recorded now, in completed form, so the reasoning survives and
+nobody rediscovers either defect. Both entries were created and closed on the same day;
+the `Date/Time Entered` reflects when the defect was *observed*, not when the entry was
+typed.
+
+***
+
+### Feature Name: Fan-in gathers the shared session ledger instead of each lane's own output (E1)
+**Abstract:** Under `Payload_Mode = "Unified Ledger"` every scatter lane's queue row recorded the shared session ledger as its output, so `CTRL_MERGE` gathered one file N times and reported `Merged 8 sources` over eight identical sections.
+**Date/Time Entered:** 2026-08-31T04:14:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-01T07:05:00-04:00
+**Verified:** Reproduced. Observed live on run `job_20260831-041428-6goe`, then reproduced
+in code and pinned by a test that **fails when the fix is reverted** — reverting
+`get_completed_payload_paths` to read `payload_path` makes three tests fail with all eight
+lanes reporting `unified_session_ledger.md`, the exact live signature.
+**Completion Metric:** `omni qa` PASS (whole project, per `pyrightconfig.json`); pytest
+**703 collected / 703 passed** (665 baseline + 38 new in `tests/test_payload_lineage.py`);
+`omni smoke` ALL CHECKS PASSED. Before/after, asserted by test: an 8-lane gather returned
+**8 paths / 1 distinct** and now returns **8 paths / 8 distinct**, with the shared session
+ledger absent from the result set. `_handle_merge`'s reported count is now the number of
+**distinct** sections written, and a collapse emits a WARNING naming the shortfall.
+Artifact: `.oracle_artifacts/2026-09-01_e1_e2_payload_lineage.md`. Branch
+`phase/6.13-track-a-d-and-payload-lineage`.
+
+**Description:**
+The chain was five links long and **only the second was the root cause**:
+
+1. a lane finishes; the worker sets `routing_payload_path` to that lane's own ledger,
+   `<node>_<row_id>.md`
+2. the Unified Ledger branch in `swarm_worker.execute_cycle` **replaces** it with
+   `unified_session_ledger.md`, because that is what the *successor* should read. Correct
+   for routing — and it discarded the only reference to what the lane produced
+3. `route_task` wrote the routing payload onto the row it was closing, so the row stopped
+   recording the lane's output
+4. `get_completed_payload_paths` asked "what did each predecessor produce", read
+   `payload_path`, and got one path eight times
+5. `_handle_merge` built a section per path and logged `Merged 8 sources` — literally
+   true, semantically empty, eight identical `## Source: unified_session_ledger` headings
+
+**Correction to the handover, recorded because it matters for the next reader.** The
+handover attributed this to link 3 and suggested "a smarter query may not be enough; an
+`output_path` column may be needed." Directionally right, mechanically wrong: the lane's
+own path is already gone before `route_task` is called, so a column alone would have
+faithfully stored the shared ledger. Both had to change.
+
+**What was done.** `task_queue` gained an `output_path` column (CREATE TABLE body plus an
+`ALTER TABLE` migration line, following Task A1's `locked_at` idiom). `route_task` takes
+and records it at both UPDATE sites, using
+`output_path = CASE WHEN ? = '' THEN output_path ELSE ? END` so an empty argument can
+never blank a record another caller earned. `get_completed_payload_paths` reads
+`COALESCE(NULLIF(output_path,''), payload_path)`. The worker now captures
+`node_output_path` **before** the Unified Ledger swap. `_handle_merge` and `_handle_concat`
+de-duplicate their inputs and report a collapse loudly.
+
+The fallback to `payload_path` is **load-bearing, not a legacy shim**: `macro_factory`'s
+ephemeral spawn and FAILED routes, and the `CTRL_PAUSE` resolver, legitimately never supply
+an output because for them the routing payload *is* the passthrough output. It also keeps a
+session resumed across this change readable.
+
+**Two things deliberately not changed.** The Unified Ledger branch reads the *successor's*
+`payload_mode` rather than the completing node's — that is correct, since payload mode is a
+property of what a node wants to *receive*, and it is recorded here only because it reads
+like a bug. And `Payload_Mode` remains a bare string literal duplicated across
+`topology_engine`, `swarm_worker`, `flow_engine`, `macro_factory`, `admin_tools` and
+`nexus_plex`; there is no enum. Introducing one touches all six and was out of scope.
+
+**Doctrine.** This is principle 3 (`Merged 8 sources` was true and meaningless) sitting on
+top of principle 5: the query's docstring *stated* the assumption that turned out to be
+false — "the completed row is the authoritative record of what that node produced" — with
+no test that would fail when it went false. The docstring now records what that reasoning
+cost.
+
+**Related:** *Interactive Node Configuration Modal* — per-node Payload Mode is the lever
+behind this defect, and making it authorable turns an invisible engine default into a
+visible choice. *System-wide provenance doctrine* — this is a lineage break, not adjacent
+work.
+
+***
+
+### Feature Name: A step's output does not cross the step boundary (E2)
+**Abstract:** `_find_final_ledger_path` globbed the job's ledger directory and returned the newest `.md` by mtime, so the next step received `CTRL_MERGE_S0`'s 59-byte ledger stub instead of the 426 KB merged document it had just produced.
+**Date/Time Entered:** 2026-08-31T04:14:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-01T07:05:00-04:00
+**Verified:** Reproduced. Observed live on run `job_20260831-041428-6goe` (the following
+step consumed 59 bytes at a billed $0.000046), then reproduced in a test that **fails when
+the fix is reverted** — reinstating the mtime glob makes
+`test_a_newer_stub_on_disk_does_not_win` select `CTRL_MERGE_S0_93.md` over
+`CTRL_MERGE_S0_merged.md`, the same two filenames as the live run.
+**Completion Metric:** `omni qa` PASS (whole project); pytest **703 collected / 703
+passed**; `omni smoke` ALL CHECKS PASSED. The defective helper is **deleted**, not merely
+bypassed, and a test asserts `FlowRunner` no longer has it and that neither step loop
+globs. Artifact: `.oracle_artifacts/2026-09-01_e1_e2_payload_lineage.md`.
+
+**Description:**
+`_find_final_ledger_path` promised, in its own docstring, "the final expected artifact path
+for the DAG". It delivered the newest file by mtime. Four faults, only the first of which
+was in the handover's diagnosis:
+
+1. **It was not a race it sometimes lost — it is one it always lost.** `_handle_merge`
+   writes the artifact, then the worker writes the node's ledger stub *after* the handler
+   returns. The stub therefore always has the newer mtime.
+2. **It accepted `topology_rows` and never read them.** The "final node of the DAG" was
+   never consulted; the parameter was dead.
+3. **Its scope was the job, not the step.** A step-2 lookup could return a file step 1
+   wrote.
+4. **`*.md` matched non-payloads** — `thoughts_and_tools_*`, scatter chunk files, and the
+   `_merged.md` artifact all live in one directory.
+
+Meanwhile `topology_graph.terminal_nodes()` already existed, with a test asserting
+`terminal_nodes(scatter_rows(8)) == ["CTRL_MERGE"]`. The engine had the answer available
+and was guessing anyway.
+
+**What was done.** The helper was deleted and replaced by `_find_terminal_nodes` — the
+mirror of `_find_starting_nodes`, reading `terminal_nodes()` and hydrating through the same
+`f"{node}_S{idx}"` expression the engine uses everywhere — plus `_capture_step_output`,
+which asks the queue what that node recorded. All three call sites (both resume paths and
+`execute_flow`) now use it.
+
+**Decision recorded: no silent fallback.** When nothing is found, `_capture_step_output`
+returns `None`, the caller leaves `current_payload` unchanged and logs at ERROR. Keeping the
+glob as a fallback was rejected — a silent retreat to the defective path means the defect
+can return with the suite green. Failing the flow outright was *also* rejected, because
+that is the same shape as the open *A timed-out step does not stop the flow* decision and
+belongs to the operator, not the agent. Carrying the previous payload forward is wrong but
+**visible**, which is the distinction principle 2 draws. If the operator prefers a hard
+failure here, it is a one-line change plus a terminal-status decision, and it should
+probably be made at the same time as the timeout one.
+
+**Decision recorded: divergent terminals resolve by declared topology order.**
+`terminal_nodes()` can return more than one node. Ordering by completion time or mtime
+would hand the next step a different document on each run. The log states plainly that this
+is a choice rather than a fact and suggests authoring a `CTRL_MERGE` if the next step needs
+all of them.
+
+**Doctrine.** Principle 4 — the deletion is the point. Two ways to answer "what did this
+step produce" is how the TUI and the engine came to disagree about node ids, so the glob
+was removed rather than left available to a future call site. Principle 6 — no test
+anywhere referenced `_find_final_ledger_path`; the step boundary had zero unit coverage,
+which is why a 665-test suite was green over it.
+
+**Related:** *System-wide provenance doctrine* — the planning map names this as the
+doctrine's first concrete increment, and it is: the merge's lineage broke. *A timed-out
+step does not stop the flow* — shares the terminal-state question above.
+
+***
+
+## Residual work these two entries do NOT close
+
+Recorded explicitly so a `COMPLETED` status is not read as more than it is.
+
+**Neither defect has been reproduced as fixed on a live 8-lane scatter.** Both lived in the
+seam between the authoring UI and the engine, and `omni smoke` exercises a single node.
+`omni qa` plus 703 unit tests plus a one-node smoke is exactly the combination that was
+green while six real defects sat in this code path. The Completion Metrics above are
+gate evidence, not live-run evidence, and they say so.
+
+The outstanding proof obligations are unchanged:
+
+- **UT-0 runs 2 and 3.** Run 1 is not a valid baseline — it was measured while every agent
+  ran twice and the merge combined one source.
+- **UT-1, all six tests**, especially test 6 (kill a worker mid-node).
+- **The E1/E2 acceptance shape specifically:** an 8-lane scatter whose merged document
+  contains **eight distinct** `## Source:` sections naming eight different lanes, and whose
+  following step receives that document rather than the 59-byte stub.
+
+**A baseline correction, recorded because it contradicts the handover.** On the untouched
+tree on 2026-09-01, pytest was **665 collected / 664 passed / 1 failed** —
+`tests/test_scatter_concurrency.py::TestScatterReachesRealConcurrency::test_eight_lane_scatter_beats_sequential_wall_clock`,
+at 1.70 s against a bound of 1.20 s. It passes in isolation and 32/32 within its own file,
+and the companion barrier test pinning `peak == 8` passes in the full run, so scatter width
+is intact and this is a **load-sensitive threshold, not a concurrency regression**. It
+passed in both post-change full runs. Left untouched: loosening the bound, marking it, or
+accepting the flake is an operator decision. The handover's "665 tests passing" holds only
+on an unloaded machine.
+
+**A version-control finding, outside the scope of both defects but larger than either.**
+`tests/`, `Analysis/`, `scripts/` and `.oracle_artifacts/` are excluded from git by
+`.git/info/exclude` as a deliberate public/private split. The consequence is that the
+**test suite has no version control at all** — so the 2026-09-01 checkpoint commit
+(`762f614`) closes risk **R8** for tracked source only. This was deliberately **not**
+changed: reversing it would publish private internals to a public remote, which is not an
+agent's call. It wants its own entry and an operator decision — most plausibly a second
+private remote rather than a change to the exclude file.

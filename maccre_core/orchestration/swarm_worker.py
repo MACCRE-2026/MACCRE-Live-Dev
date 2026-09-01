@@ -881,6 +881,7 @@ class UniversalSwarmWorker:
                             flow_line_id=flow_line_id,
                             flow_vector=flow_vector,
                             tether_id=tether_id,
+                            output_path=det_result.output_payload_path,
                         )
                     logger.info(
                         "[%s] DET fan-out: %d targets on tether=%s",
@@ -899,6 +900,7 @@ class UniversalSwarmWorker:
                         flow_line_id=str(task.get("flow_line_id", "")),
                         flow_vector=flow_vector,
                         tether_id=tether_id,
+                        output_path=det_result.output_payload_path,
                     )
                 else:
                     # Default topology routing
@@ -914,6 +916,7 @@ class UniversalSwarmWorker:
                         flow_line_id=str(task.get("flow_line_id", "")),
                         flow_vector=flow_vector,
                         tether_id=tether_id,
+                        output_path=det_result.output_payload_path,
                     )
                 return CycleOutcome.WORKED
             
@@ -1839,6 +1842,20 @@ All file paths must strictly resolve to these five silos:
             else:
                 routing_payload_path = ledger_path
 
+            # ── What THIS node produced, before routing rewrites it ───────────────
+            # Defect E1. The Unified Ledger branch below replaces
+            # routing_payload_path with the shared session ledger, because that is
+            # what the *successor* should read. That is correct for routing and
+            # catastrophic as a record: route_task writes the routing payload onto
+            # the row it closes, so every scatter lane's row ended up claiming it
+            # had produced unified_session_ledger.md. The fan-in then gathered
+            # "what each predecessor produced" and got the same file eight times.
+            #
+            # This is the last point at which the node's own output is still known,
+            # so it is captured here and carried to route_task separately. It is
+            # never overwritten downstream.
+            node_output_path = routing_payload_path
+
             # ── Unified Session Ledger Live-Update & Payload Mode Routing ─────────
             try:
                 from maccre_core.orchestration.flow_engine import generate_unified_ledger
@@ -1871,6 +1888,7 @@ All file paths must strictly resolve to these five silos:
                 flow_line_id=str(task.get("flow_line_id", "")),
                 flow_vector=flow_vector,
                 tether_id=_tether_id,
+                output_path=node_output_path,
             )
             
             # Update the session with the live ledger
@@ -1920,6 +1938,13 @@ All file paths must strictly resolve to these five silos:
                     status="failed",
                     flow_line_id=str(task.get("flow_line_id", "")),
                     flow_vector=flow_vector,
+                    # Deliberately empty. This node blew up, so there is no
+                    # authoritative output to record, and node_output_path may not
+                    # even be bound this far down the failure path. An absent value
+                    # makes a downstream fan-in gather nothing for this predecessor
+                    # and say so; a plausible-but-wrong one would be merged as
+                    # though the lane had succeeded.
+                    output_path="",
                 )
             except Exception as route_err:  # noqa: BLE001
                 logger.critical(

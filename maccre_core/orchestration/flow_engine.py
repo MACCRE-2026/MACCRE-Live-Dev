@@ -42,6 +42,7 @@ from maccre_core.orchestration.topology_graph import (
     entry_nodes,
     is_terminal_target,
     parse_targets,
+    terminal_nodes,
 )
 from maccre_core.tools.admin_tools import build_topology, ensure_project_workbook
 from maccre_core.utils.path_resolver import get_datacenter_path
@@ -608,17 +609,98 @@ class FlowRunner:
         )
         return [f"{node_id}_S{step_index}"]
 
-    def _find_final_ledger_path(self, job_id: str, topology_rows: list[dict[str, Any]]) -> str | None:
-        """Find the final expected artifact path for the DAG to pass it sequentially to the next step."""
-        # For simplicity, if we don't have a deterministic way to find the final output, 
-        # we can just return the most recently written ledger in the job_id directory.
-        ledger_dir = get_datacenter_path("03_Agent_Ledgers", job_id)
-        if not ledger_dir.exists():
+    def _find_terminal_nodes(
+        self, topology_rows: list[dict[str, Any]], step_index: int = 0
+    ) -> list[str]:
+        """Sink Node_IDs of a MacroNode DAG, hydrated with the step suffix.
+
+        The mirror of :meth:`_find_starting_nodes`, and deliberately built the same
+        way: the structural question goes to
+        :mod:`maccre_core.orchestration.topology_graph`, and hydration happens here
+        through the one ``f"{node_id}_S{step_index}"`` expression the engine uses
+        everywhere. A second derivation of either half is how the TUI and the
+        engine came to disagree about node ids.
+        """
+        if not topology_rows:
+            return []
+        return [
+            f"{node_id}_S{step_index}" for node_id in terminal_nodes(topology_rows)
+        ]
+
+    def _capture_step_output(
+        self,
+        job_id: str,
+        topology_rows: list[dict[str, Any]],
+        step_index: int,
+        broker: LocalMessageBroker,
+    ) -> str | None:
+        """The artifact this step's terminal node recorded, for the next step to read.
+
+        Returns ``None`` when no terminal node has a recorded output. The caller
+        must **not** substitute a guess: leaving the previous payload in place is
+        wrong but visible, whereas any fabricated path is wrong and acted upon.
+
+        .. note::
+           **What this replaces, and why (defect E2).**
+
+           This used to be ``_find_final_ledger_path``, which globbed
+           ``03_Agent_Ledgers/<job_id>/*.md`` and returned the newest by mtime. It
+           took ``topology_rows`` and never read them, so the "final node of the
+           DAG" in its docstring was never consulted.
+
+           On the D-GATE run the merge wrote ``CTRL_MERGE_S0_merged.md`` (426 KB)
+           and the worker then wrote the node's 59-byte ledger stub
+           ``CTRL_MERGE_S0_93.md`` *after* the handler returned. The stub is
+           therefore always the newer file — this was not a race the glob
+           occasionally lost, it was one it always lost. The next step received 59
+           bytes describing the merge instead of the merged document, and the flow
+           reported success.
+
+           Three further hazards the glob carried, all removed by asking the queue
+           instead: the directory is scoped to the *job*, not the step, so step 2
+           could inherit a step 1 file; ``*.md`` also matches
+           ``thoughts_and_tools_*``, ``*_agent.log`` siblings' companions and
+           scatter chunk files; and mtime resolution on Windows is coarse enough
+           that two files written in the same handler are not reliably ordered.
+
+           The queue row is the authoritative record because ``route_task`` writes
+           the completing node's ``output_path``, and
+           :meth:`~LocalMessageBroker.get_completed_payload_paths` filters on
+           ``lock_status = 'completed'`` — so a node that failed, stalled or was
+           cancelled contributes nothing rather than a stale path.
+        """
+        terminals = self._find_terminal_nodes(topology_rows, step_index)
+        if not terminals:
+            logger.warning(
+                "[FLOW_ENGINE] Step %d topology declares no terminal node; cannot "
+                "identify this step's output.",
+                step_index + 1,
+            )
             return None
-        md_files = sorted(ledger_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if md_files:
-            return str(md_files[0])
-        return None
+
+        found = broker.get_completed_payload_paths(job_id, terminals)
+        if not found:
+            logger.error(
+                "[FLOW_ENGINE] Step %d produced no recorded output: none of its "
+                "terminal node(s) %s has a completed row with an output. The next "
+                "step will NOT be handed a substitute — a guessed payload is worse "
+                "than a visibly missing one.",
+                step_index + 1, terminals,
+            )
+            return None
+
+        # Order by the topology's own declaration, never by completion time or
+        # mtime, so a divergent-lane DAG resolves to the same artifact on every run.
+        ordered = [node for node in terminals if node in found]
+        if len(ordered) > 1:
+            logger.warning(
+                "[FLOW_ENGINE] Step %d has %d terminal nodes with output (%s). "
+                "Handing the next step the first in declared order (%s). A DAG with "
+                "divergent endpoints has no single output, so this is a choice, not "
+                "a fact — author a CTRL_MERGE if the next step needs all of them.",
+                step_index + 1, len(ordered), ordered, ordered[0],
+            )
+        return found[ordered[0]]
 
 
     # ── Phase 6.12B: shared worker-pool driver ─────────────────────────────────
@@ -974,9 +1056,20 @@ class FlowRunner:
                 if total_tasks > 0 and completed_tasks == total_tasks:
                     # All tasks for this step already finished — skip it
                     logger.info(f"[FLOW_ENGINE] Step {idx+1} ('{step.macronode_name}') already completed ({completed_tasks} task(s)). Skipping.")
-                    latest_ledger = self._find_final_ledger_path(job_id, topo_rows)
-                    if latest_ledger:
-                        current_payload = latest_ledger
+                    step_output = self._capture_step_output(job_id, topo_rows, idx, broker)
+                    if step_output:
+                        current_payload = step_output
+                    else:
+                        # This path is the glob's worst case and the reason it had
+                        # to go: nothing was written during this invocation, so
+                        # "newest .md in the job directory" could easily belong to
+                        # another step entirely. The queue still knows.
+                        logger.warning(
+                            "[FLOW_ENGINE] Step %d was already complete but records "
+                            "no terminal output; carrying the previous payload "
+                            "forward unchanged: %s",
+                            idx + 1, current_payload,
+                        )
                     if step_callback is not None:
                         try:
                             step_callback(idx, current_payload)
@@ -1014,10 +1107,20 @@ class FlowRunner:
                     is_stalled = True
                     break
 
-                latest_ledger = self._find_final_ledger_path(job_id, topo_rows)
-                if latest_ledger:
-                    current_payload = latest_ledger
-                    
+                step_output = self._capture_step_output(job_id, topo_rows, idx, broker)
+                if step_output:
+                    current_payload = step_output
+                else:
+                    # _capture_step_output has already logged why. Say what the
+                    # consequence is, because a resumed flow silently reusing the
+                    # previous step's payload is exactly the kind of quiet wrongness
+                    # that took three live runs to find last time.
+                    logger.warning(
+                        "[FLOW_ENGINE] Step %d output not captured on resume; the "
+                        "next step will read the unchanged payload %s",
+                        idx + 1, current_payload,
+                    )
+
                 if step_callback is not None:
                     try:
                         step_callback(idx, current_payload)
@@ -1196,13 +1299,20 @@ class FlowRunner:
 
                 logger.info(f"[FLOW_ENGINE] MacroNode '{step.macronode_name}' completed execution.")
             
-                # 6. Capture output to pass to next step
-                latest_ledger = self._find_final_ledger_path(job_id, topo_rows)
-                if latest_ledger:
-                    current_payload = latest_ledger
+                # 6. Capture output to pass to next step.
+                # Read from the step's terminal node in the queue, not from whichever
+                # file in the job directory happens to have the newest mtime. See
+                # _capture_step_output for what that cost (defect E2).
+                step_output = self._capture_step_output(job_id, topo_rows, idx, broker)
+                if step_output:
+                    current_payload = step_output
                     logger.info(f"[FLOW_ENGINE] Output captured: {current_payload}")
                 else:
-                    logger.warning(f"[FLOW_ENGINE] Warning: No output ledger found for {step.macronode_name}.")
+                    logger.warning(
+                        "[FLOW_ENGINE] Step %d ('%s') recorded no terminal output; "
+                        "the next step will read the unchanged payload %s",
+                        idx + 1, step.macronode_name, current_payload,
+                    )
 
                 # 7. Notify step callback (for TUI payload tracking)
                 if step_callback is not None:

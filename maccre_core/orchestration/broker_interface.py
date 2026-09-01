@@ -85,6 +85,7 @@ class MessageBroker(abc.ABC):
         flow_line_id: str = "",
         flow_vector: str = "",
         tether_id: str = "",
+        output_path: str = "",
     ) -> None:
         """Mark a task completed and enqueue successor node(s).
 
@@ -92,7 +93,8 @@ class MessageBroker(abc.ABC):
             row_id: Primary key of the completed task.
             job_id: Job identifier for provenance tracking.
             next_node_str: Pipe-separated successor node IDs (e.g. ``"NODE_A|NODE_B"``).
-            new_payload_path: Path to the artifact produced by the completed node.
+            new_payload_path: Path the **successor** should read. Not necessarily
+                what the completed node produced — see ``output_path``.
             actual_cost: API cost incurred for this node execution.
             source_payload_path: Original user payload path (propagated unchanged).
             max_recursion: Maximum allowed visits to the same node before FAILED routing.
@@ -101,6 +103,14 @@ class MessageBroker(abc.ABC):
             flow_vector: Colon-delimited history of nodes traversed (telemetry lineage).
             tether_id: Scatter scope identifier. Isolates fan-in artifact gathering
                 so lanes of one scatter do not gather across lanes of another.
+            output_path: What the completed node itself **produced**, recorded
+                separately from ``new_payload_path`` because the two diverge.
+                Under ``Payload_Mode = "Unified Ledger"`` the successor reads the
+                shared session ledger, so a single column serving both roles left
+                every scatter lane claiming to have produced that one file — and a
+                fan-in gathering "what each predecessor produced" got the same path
+                N times. Implementations **must not** blank an existing value when
+                this is empty: absent is honest, overwritten is lost.
         """
 
     @abc.abstractmethod

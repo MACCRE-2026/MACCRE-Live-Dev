@@ -651,8 +651,37 @@ def _handle_merge(
     job_dir.mkdir(parents=True, exist_ok=True)
     output_file = job_dir / f"{node_id}_merged.md"
 
-    sections: list[str] = []
+    # ── Distinct sources, and an honest count of them ─────────────────────────
+    # Defect E1. Every predecessor path arrived as unified_session_ledger.md, so
+    # this built eight sections from one file and logged "Merged 8 sources" —
+    # literally true, semantically empty, and the eight identical
+    # "## Source: unified_session_ledger" headings were what told the downstream
+    # agent something was wrong.
+    #
+    # The root cause is fixed upstream (the broker now records each node's own
+    # output). This guard stays because the failure was silent: a merge that
+    # collapses to one source must say so rather than inflate its count. Order is
+    # preserved, since the gather orders by the wait_for declaration precisely so
+    # the merged document is reproducible.
+    distinct_payloads: list[str] = []
+    _seen: set[str] = set()
     for pp in predecessor_payloads:
+        if pp and pp not in _seen:
+            _seen.add(pp)
+            distinct_payloads.append(pp)
+
+    dropped = len(predecessor_payloads) - len(distinct_payloads)
+    if dropped > 0:
+        logger.warning(
+            "[CTRL_MERGE] %s: %d predecessor payload(s) resolved to %d distinct "
+            "source(s); %d duplicate reference(s) dropped. A fan-in whose inputs "
+            "collapse like this is gathering a shared file rather than each "
+            "predecessor's own output.",
+            node_id, len(predecessor_payloads), len(distinct_payloads), dropped,
+        )
+
+    sections: list[str] = []
+    for pp in distinct_payloads:
         content = _read_payload(pp)
         if merge_mode == "structured":
             source_name = Path(pp).stem if pp else "unknown"
@@ -661,7 +690,7 @@ def _handle_merge(
             sections.append(content)
 
     # Also include the primary payload if not already in predecessors
-    if payload_path and payload_path not in predecessor_payloads:
+    if payload_path and payload_path not in distinct_payloads:
         primary = _read_payload(payload_path)
         if primary:
             if merge_mode == "structured":
@@ -672,6 +701,8 @@ def _handle_merge(
     merged = delimiter.join(sections) if merge_mode == "concat" else "\n\n".join(sections)
     output_file.write_text(merged, encoding="utf-8")
 
+    # The count is of sections actually written from distinct sources, which is
+    # the only number that means anything to a reader of the merged document.
     logger.info(f"[CTRL_MERGE] {node_id}: Merged {len(sections)} sources → {output_file}")
     return DeterministicNodeResult(
         output_payload_path=str(output_file),
@@ -701,11 +732,26 @@ def _handle_concat(
     primary = _read_payload(payload_path)
     if primary:
         parts.append(primary)
-    # Append predecessors
+    # Append predecessors, each at most once. Same reasoning as _handle_merge:
+    # this handler has the identical input dependency, so E1 would have produced
+    # eight copies here too had a flow used CTRL_CONCAT instead of CTRL_MERGE.
+    _seen_concat: set[str] = set()
+    _dupes = 0
     for pp in predecessor_payloads:
+        if not pp or pp in _seen_concat:
+            _dupes += 1 if pp else 0
+            continue
+        _seen_concat.add(pp)
         content = _read_payload(pp)
         if content:
             parts.append(content)
+    if _dupes:
+        logger.warning(
+            "[CTRL_CONCAT] %s: dropped %d duplicate predecessor reference(s); "
+            "the fan-in is gathering a shared file rather than each predecessor's "
+            "own output.",
+            node_id, _dupes,
+        )
 
     concatenated = delimiter.join(parts)
     output_file.write_text(concatenated, encoding="utf-8")

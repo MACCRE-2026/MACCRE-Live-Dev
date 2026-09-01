@@ -184,6 +184,7 @@ class LocalMessageBroker(MessageBroker):
                 job_id               TEXT NOT NULL,
                 payload_path         TEXT NOT NULL,
                 source_payload_path  TEXT DEFAULT '',
+                output_path          TEXT DEFAULT '',
                 current_node         TEXT NOT NULL,
                 lock_status          TEXT DEFAULT 'open',
                 locked_by            TEXT,
@@ -217,6 +218,15 @@ class LocalMessageBroker(MessageBroker):
             # Phase 6.13 A1: lock-acquisition timestamp. Distinct from created_at,
             # which measures time in the queue, not time holding the lock.
             "ALTER TABLE task_queue ADD COLUMN locked_at TIMESTAMP",
+            # Phase 6.13 E1: what this node actually produced, as distinct from
+            # what it handed the next node. Those are the same value most of the
+            # time, which is why one column served for both until it didn't:
+            # under Payload_Mode = "Unified Ledger" the routing payload is the
+            # shared session ledger, so overwriting payload_path with it erased
+            # every lane's own output and an 8-lane merge gathered one file eight
+            # times. payload_path stays the routing record; output_path is the
+            # production record, and nothing overwrites it.
+            "ALTER TABLE task_queue ADD COLUMN output_path TEXT DEFAULT ''",
         ):
             try:
                 conn.execute(_col_sql)
@@ -633,6 +643,7 @@ class LocalMessageBroker(MessageBroker):
         flow_line_id: str = "",
         flow_vector: str = "",
         tether_id: str = "",
+        output_path: str = "",
     ) -> None:
         """
         Mark the current task completed and enqueue successor nodes.
@@ -640,6 +651,16 @@ class LocalMessageBroker(MessageBroker):
         ``source_payload_path`` is the *original* job payload — the user's input
         document.  It is propagated unchanged through every node hop so downstream
         agents always have access to the raw source alongside the previous ledger.
+
+        ``output_path`` is what this node *produced*. ``new_payload_path`` is what
+        the successor should *read*. Keeping them apart is the E1 fix: under
+        ``Payload_Mode = "Unified Ledger"`` the successor reads the shared session
+        ledger, so writing that value over the completing row's ``payload_path``
+        destroyed the only record of what the node itself wrote. Eight scatter
+        lanes then all reported ``unified_session_ledger.md`` and the merge
+        combined one file eight times. An empty ``output_path`` is honest — it
+        means the caller had nothing authoritative to record — and readers fall
+        back to ``payload_path``, which preserves behaviour for older rows.
 
         ``flow_line_id`` tracks scatter fan-out lineage so downstream nodes can
         identify which branch of a parallel scatter they belong to.
@@ -661,9 +682,10 @@ class LocalMessageBroker(MessageBroker):
             conn.execute(
                 "UPDATE task_queue "
                 "SET lock_status = 'awaiting_orders', payload_path = ?, actual_cost = ?, "
-                "locked_at = NULL "
+                "locked_at = NULL, "
+                "output_path = CASE WHEN ? = '' THEN output_path ELSE ? END "
                 "WHERE id = ?",
-                (new_payload_path, actual_cost, row_id),
+                (new_payload_path, actual_cost, output_path, output_path, row_id),
             )
             conn.commit()
             return
@@ -675,12 +697,17 @@ class LocalMessageBroker(MessageBroker):
             if n.strip()
         ]
         conn = self._get_conn()
+        # An empty output_path leaves the existing value alone rather than blanking
+        # it. A node that already recorded its output must not lose that record to a
+        # later caller that simply did not supply one — and a *wrong* non-empty
+        # value would be worse than the absent one it replaced.
         conn.execute(
             "UPDATE task_queue "
             "SET lock_status = ?, payload_path = ?, actual_cost = ?, "
-            "completed_at = CURRENT_TIMESTAMP, locked_at = NULL "
+            "completed_at = CURRENT_TIMESTAMP, locked_at = NULL, "
+            "output_path = CASE WHEN ? = '' THEN output_path ELSE ? END "
             "WHERE id = ?",
-            (status, new_payload_path, actual_cost, row_id),
+            (status, new_payload_path, actual_cost, output_path, output_path, row_id),
         )
         for node in next_nodes:
                 if node.upper() not in ("DONE", "FAILED", "STOP", "TERMINATE", "END"):
@@ -1065,9 +1092,28 @@ class LocalMessageBroker(MessageBroker):
         ``predecessor_payloads`` list, and the worker had no way to build one — so
         it passed nothing and an 8-lane merge merged a single source.
 
-        A completing node's row carries its *output* in ``payload_path``, because
-        :meth:`route_task` writes ``new_payload_path`` onto the row it is closing.
-        So the completed row is the authoritative record of what that node produced.
+        Reads ``output_path``, falling back to ``payload_path`` when it is empty.
+
+        .. note::
+           This previously read ``payload_path`` alone, on the stated reasoning
+           that "``route_task`` writes ``new_payload_path`` onto the row it is
+           closing, so the completed row is the authoritative record of what that
+           node produced." That reasoning was wrong, and defect E1 is what it cost.
+           ``new_payload_path`` is what the *successor reads*, which under
+           ``Payload_Mode = "Unified Ledger"`` is the shared session ledger — the
+           same value for every lane. Eight lanes therefore returned eight copies
+           of one path, ``CTRL_MERGE`` reported ``Merged 8 sources``, and the
+           document held eight identical sections. The lanes' real outputs were on
+           disk the whole time and nothing recorded where.
+
+           The fallback is load-bearing, not merely a legacy shim. It keeps rows
+           written before the ``output_path`` column existed readable, and it is
+           also the correct answer for the passthrough callers — ``CTRL_PAUSE``
+           resolution here, and ``macro_factory``'s ephemeral spawn — where the
+           routing payload genuinely *is* the node's output. What must never
+           happen is a caller inventing a value: an absent ``output_path`` makes a
+           fan-in gather nothing for that predecessor and say so, while a
+           plausible-but-wrong one gets merged as though the lane had succeeded.
 
         Args:
             job_id: Job to search.
@@ -1085,7 +1131,8 @@ class LocalMessageBroker(MessageBroker):
 
         placeholders = ",".join(["?"] * len(nodes))
         sql = (
-            "SELECT current_node, payload_path FROM task_queue "
+            "SELECT current_node, COALESCE(NULLIF(output_path, ''), payload_path) "
+            "FROM task_queue "
             f"WHERE job_id = ? AND current_node IN ({placeholders}) "  # noqa: S608
             "AND lock_status = 'completed'"
         )
