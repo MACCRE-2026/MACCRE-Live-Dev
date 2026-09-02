@@ -42,6 +42,16 @@ retire threads by ``.set()``-ing a stop event — on an object whose identity di
 match what the worker closures had captured, so retirement never actually worked,
 and the pattern itself violates the observer rule below.
 
+**IDLE and PAUSED are different outcomes and must stay different (defect F2).**
+Both mean "this worker did no work", and folding them together cost a runaway.
+IDLE means nothing is claimable, so demand is zero and a retired slot stays
+retired — retirement is free. PAUSED means work exists and the *operator* is
+holding it, so demand stays high and a retired slot is refilled on the next tick,
+rebuilding a ``TopologyEngine`` and a ``LocalMessageBroker`` every time. Two
+rules keep them apart: the scaler refuses to spawn while paused, and a paused
+worker holds its slot for ``pause_hold_seconds`` rather than counting toward idle
+retirement. Observed live on run ``job_20260901-205047-40sp``.
+
 State contract
 --------------
 =================  ==========================  ==============================
@@ -118,6 +128,18 @@ class PoolResult:
     #: How many locks were still held when the stall was declared. Recorded for
     #: UT-0, which measures how often workers actually die.
     orphaned_locks: int = 0
+
+    #: The flow was held, and whatever is supposed to release it demonstrably
+    #: cannot any more (defect F3).
+    #:
+    #: ``pause_event`` is owned by the TUI; this pool and the flow engine only
+    #: observe it. When the Textual app dies with the event clear — which is
+    #: exactly what defect F1 caused — nothing will ever set it again, and every
+    #: layer below waits for a resume that cannot arrive. Reported separately from
+    #: ``timed_out`` because the responses differ: a timeout may only need a
+    #: larger budget, while this needs the operator told that their UI died under
+    #: a running flow.
+    pause_abandoned: bool = False
     #: Highest number of workers simultaneously executing nodes. The headline
     #: Phase 6.12 metric — with the old single-threaded loop this could only ever
     #: be 1, whatever the scatter width.
@@ -171,6 +193,8 @@ class DynamicSwarmPool:
         demand_recheck_seconds: float = 0.25,
         idle_retire_after: int = 2,
         max_worker_errors: int | None = None,
+        paused_poll_interval_seconds: float = 0.25,
+        pause_hold_seconds: float = 5.0,
     ) -> None:
         """
         Args:
@@ -213,12 +237,27 @@ class DynamicSwarmPool:
                 8-lane scatter measured 4.25 s of wall clock for 2.0 s of work,
                 i.e. slower than running it sequentially. Polling stays fast so
                 cancellation stays responsive; sizing is throttled.
-            idle_retire_after: Consecutive non-working cycles before a worker
-                exits. The supervisor re-spawns if demand returns, so retiring
-                eagerly is cheap.
+            idle_retire_after: Consecutive **idle** cycles before a worker exits.
+                Idle means the queue had nothing claimable, so demand is zero and
+                the supervisor will not immediately re-spawn — which is what makes
+                retiring eagerly cheap. Deliberately **not** applied to a paused
+                cycle, where demand stays high and eager retirement produced a
+                construction storm; see *pause_hold_seconds*.
             max_worker_errors: Abort the run after this many unhandled worker
                 exceptions. Defaults to ``3 * max_workers``. Prevents an
                 immediately-crashing worker from being respawned forever.
+            paused_poll_interval_seconds: Supervisor cadence while the flow is
+                held. The normal 0.05 s tick runs the drain check — a SQLite
+                ``COUNT`` — twenty times a second, which is the right price for
+                noticing a drain promptly and the wrong price for watching a
+                pause that may last minutes. Still fast enough that a cancel
+                issued while paused is noticed within a quarter second.
+            pause_hold_seconds: How long a worker keeps its slot while the flow is
+                held before retiring. A brief pause should not tear the pool down
+                and pay full ramp-up again on resume; a long one should not keep
+                threads parked forever. Retiring after this is safe precisely
+                because the scaler refuses to spawn while paused, so a retired
+                slot stays retired until the operator resumes.
         """
         self.job_id = job_id
         self.max_workers = resolve_scatter_cap(max_workers)
@@ -234,6 +273,10 @@ class DynamicSwarmPool:
         self.max_worker_errors = (
             max_worker_errors if max_worker_errors is not None else 3 * self.max_workers
         )
+        self.paused_poll_interval_seconds = max(
+            poll_interval_seconds, paused_poll_interval_seconds
+        )
+        self.pause_hold_seconds = max(0.0, pause_hold_seconds)
 
         #: Pool-owned. The pool created it, so the pool may set it — unlike the
         #: caller's pause/stop events, which it only reads.
@@ -251,6 +294,20 @@ class DynamicSwarmPool:
         self._demand_calls = 0
 
     # ── Introspection ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_paused(pause_event: Optional[Any]) -> bool:
+        """Whether the operator currently has the flow held.
+
+        One reading of the pause state, used by the supervisor, the scaler and the
+        poll backoff alike. The convention is the TUI's and it is inverted from
+        what the name suggests: **set means running**, clear means held. An absent
+        event means nothing can pause us, so we are never paused.
+
+        Read-only by contract. ``pause_event`` is owned by the TUI; this pool is an
+        observer and must never ``set()`` or ``clear()`` it.
+        """
+        return pause_event is not None and not pause_event.is_set()
 
     def active_worker_count(self) -> int:
         """Workers currently alive and cycling."""
@@ -315,6 +372,8 @@ class DynamicSwarmPool:
         parallel removes that from the critical path.
         """
         idle_streak = 0
+        #: When this worker first observed the flow held, or None if running.
+        paused_since: float | None = None
         try:
             try:
                 worker = self.worker_factory(slot)
@@ -342,12 +401,45 @@ class DynamicSwarmPool:
                     return
                 if outcome is CycleOutcome.WORKED:
                     idle_streak = 0
+                    paused_since = None
                     with self._lock:
                         self._cycles_worked += 1
                     continue
 
-                # IDLE or PAUSED — nothing to do right now. Retire rather than
-                # spin; the supervisor re-spawns when demand returns.
+                # ── PAUSED is not IDLE (defect F2) ────────────────────────────
+                # These were one branch, retiring on either. That reasoning holds
+                # for IDLE and inverts for PAUSED, because the two say opposite
+                # things about demand:
+                #
+                #   IDLE   — nothing is claimable. Demand is zero, so the
+                #            supervisor will not re-spawn. Retiring is free.
+                #   PAUSED — work exists and is being held. Demand stays high, so
+                #            the supervisor re-spawns instantly. Retiring is a
+                #            full worker rebuild, over and over.
+                #
+                # The scaler now refuses to spawn while paused, which is what
+                # actually stops the storm. This branch handles the other half: do
+                # not churn a worker that is merely waiting for the operator, and
+                # do not park it forever either.
+                if outcome is CycleOutcome.PAUSED:
+                    now = time.monotonic()
+                    if paused_since is None:
+                        paused_since = now
+                    elif now - paused_since >= self.pause_hold_seconds:
+                        logger.debug(
+                            "[SWARM_POOL] Worker slot %d retiring after %.1fs held "
+                            "(job=%s). The scaler will not replace it until the "
+                            "flow resumes.",
+                            slot, now - paused_since, self.job_id,
+                        )
+                        return
+                    # The worker's own execute_cycle already slept on the pause
+                    # poll, so this loop is not hot.
+                    continue
+
+                # IDLE — nothing claimable. Retire; the supervisor re-spawns when
+                # demand returns.
+                paused_since = None
                 idle_streak += 1
                 if idle_streak >= self.idle_retire_after:
                     return
@@ -487,6 +579,24 @@ class DynamicSwarmPool:
         case would ramp to the ceiling one thread per poll and open the full set
         of API connections for what may be a linear flow.
         """
+        # ── Never staff a pool the operator is holding (defect F2) ────────────
+        # This is the storm-stopper, and it is the supervisor's job rather than the
+        # worker's. A paused worker reports PAUSED and retires; demand, meanwhile,
+        # is measured from *open* rows, and a paused task is still open. So the
+        # estimate stayed high, this method spawned a replacement, that replacement
+        # reported PAUSED and retired, and the cycle repeated — at a
+        # ``poll_interval_seconds`` of 0.05 that is twenty full worker
+        # constructions a second, each building a TopologyEngine and a
+        # LocalMessageBroker that runs schema DDL against the very SQLite file a
+        # claim needs. Observed live on run job_20260901-205047-40sp: the operator
+        # pressed pause with one node still open and the pool rebuilt workers until
+        # the process was killed.
+        #
+        # Demand is not the question while paused. The answer is "none, by
+        # instruction", so return before paying for the estimate.
+        if self._is_paused(pause_event):
+            return
+
         # Already at the ceiling: nothing an estimate could tell us, so do not
         # pay for the query.
         if self.active_worker_count() >= self.max_workers:
@@ -521,6 +631,8 @@ class DynamicSwarmPool:
         timeout_seconds: float = 3600.0,
         locked_probe: Optional[Callable[[], int]] = None,
         stall_grace_seconds: float = 30.0,
+        pause_owner_alive: Optional[Callable[[], bool]] = None,
+        max_pause_seconds: Optional[float] = None,
     ) -> PoolResult:
         """Run workers until the queue drains, or stop/timeout intervenes.
 
@@ -566,6 +678,18 @@ class DynamicSwarmPool:
                 prudent: ``fetch_and_lock_task`` commits its claim before the
                 worker is counted as active, so "locked but nobody active" is a
                 legitimate transient every single time a task is picked up.
+            pause_owner_alive: ``() -> bool``, asked **only while the flow is
+                held**: can whatever owns ``pause_event`` still release it? The
+                pool does not guess at this — it cannot, since it is only an
+                observer of an event someone else owns — so the caller supplies
+                the answer. ``None`` means "unknowable", which preserves the
+                previous behaviour of waiting indefinitely.
+            max_pause_seconds: Hard ceiling on a continuous hold, as a backstop for
+                when *pause_owner_alive* is unavailable. ``None`` by default and
+                deliberately so: a deliberate long pause with a healthy UI is a
+                legitimate thing to do, and killing a flow because the operator
+                went to lunch would be worse than the defect this guards against.
+                Prefer *pause_owner_alive*, which distinguishes the two.
 
         Returns:
             A :class:`PoolResult`.
@@ -586,6 +710,8 @@ class DynamicSwarmPool:
         started_at = time.monotonic()
         #: When the "locks held, nobody active" condition was first seen, or None.
         orphan_since: float | None = None
+        #: When the flow was first observed held, or None while it is running.
+        held_since: float | None = None
 
         try:
             while True:
@@ -656,9 +782,48 @@ class DynamicSwarmPool:
                         orphan_since = None
                 else:
                     orphan_since = None
+
+                    # ── Is this hold still releasable? (defect F3) ─────────────
+                    if self._is_paused(pause_event):
+                        if held_since is None:
+                            held_since = time.monotonic()
+                        if pause_owner_alive is not None and not pause_owner_alive():
+                            logger.critical(
+                                "[SWARM_POOL] job=%s ABANDONED: the flow is held and "
+                                "whatever owns the pause can no longer release it. "
+                                "Held for %.0fs. Work remains and it will NOT be "
+                                "reported as finished.",
+                                self.job_id, time.monotonic() - held_since,
+                            )
+                            result.pause_abandoned = True
+                            break
+                        if (
+                            max_pause_seconds is not None
+                            and time.monotonic() - held_since > max_pause_seconds
+                        ):
+                            logger.critical(
+                                "[SWARM_POOL] job=%s ABANDONED: held for %.0fs, past "
+                                "the %.0fs ceiling, with nobody resuming it.",
+                                self.job_id, time.monotonic() - held_since,
+                                max_pause_seconds,
+                            )
+                            result.pause_abandoned = True
+                            break
+                    else:
+                        held_since = None
+
                     self._scale_to_demand(pause_event, stop_event)
 
-                time.sleep(self.poll_interval_seconds)
+                # Back off while held. The fast tick exists so a drain or a cancel
+                # is noticed promptly; neither can happen while the operator has
+                # the flow paused, and the drain check is a SQLite COUNT that
+                # contends with the claims workers issue. A quarter second still
+                # notices a cancel immediately by human standards.
+                time.sleep(
+                    self.paused_poll_interval_seconds
+                    if self._is_paused(pause_event)
+                    else self.poll_interval_seconds
+                )
         finally:
             # Retire every worker before returning, so the caller never observes
             # a node still writing artifacts after run_until_drained() returns.
@@ -673,10 +838,11 @@ class DynamicSwarmPool:
 
         logger.info(
             "[SWARM_POOL] job=%s finished: drained=%s stopped=%s timed_out=%s "
-            "stalled=%s peak_concurrency=%d cycles=%d spawned=%d errors=%d",
+            "stalled=%s pause_abandoned=%s peak_concurrency=%d cycles=%d "
+            "spawned=%d errors=%d",
             self.job_id, result.drained, result.stopped, result.timed_out,
-            result.stalled, result.peak_concurrency, result.cycles_worked,
-            result.workers_spawned, len(result.errors),
+            result.stalled, result.pause_abandoned, result.peak_concurrency,
+            result.cycles_worked, result.workers_spawned, len(result.errors),
         )
         return result
 

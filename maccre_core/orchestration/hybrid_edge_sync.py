@@ -18,10 +18,19 @@ maccre_core/orchestration/hybrid_edge_sync.py
 ==============================================
 Phase 12+ — Sovereign Edge State Synchroniser.
 
-Formerly `datacenter_router.py`. The Drive-based hot-lock mechanism
+Supersedes `datacenter_router.py`. The Drive-based hot-lock mechanism
 (lock_task_for_agent / release_task_lock) has been permanently retired.
 Race-condition prevention is now handled exclusively at the SQLite WAL
 layer via the `BEGIN EXCLUSIVE` Gather Gate in local_broker.py.
+
+CORRECTION (2026-09-01): this said "Formerly `datacenter_router.py`", which
+implied a rename. There was no rename — that module is still present in the
+tree, still contains the retired Drive-locking code, and until 2026-09-01
+carried nothing marking it dead. A reader landing there found working Drive
+appProperties locking and reasonably concluded it was the live mechanism.
+It now carries a SUPERSEDED header pointing here, and is retained on purpose
+as the reference implementation for the planned Drive *transport* layer.
+Transport over Drive is still the plan; locking over Drive is not.
 
 HybridEdgeSync mandate (Git-like):
   1. Enforce the 5-Tier physical datacenter tree on every init.

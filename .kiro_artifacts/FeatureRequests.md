@@ -1814,3 +1814,396 @@ on an unloaded machine.
 changed: reversing it would publish private internals to a public remote, which is not an
 agent's call. It wants its own entry and an operator decision — most plausibly a second
 private remote rather than a change to the exclude file.
+
+***
+
+# ENTRIES ADDED 2026-09-01 (evening) — the pause path, found by live testing
+
+**Provenance of this batch.** The operator ran two 8-agent scatters, deliberately
+different: `job_20260901-204957-ico6` was **cancelled** mid-run, and
+`job_20260901-205047-40sp` was **paused** mid-run. Cancel behaved correctly — 9
+completed, 1 cancelled, no orphans, which is UT-1 test 5 passing. Pause produced a
+crashed UI and a runaway process, and the three defects below are the anatomy of
+that one keypress. All three are **reproduced**, not reported.
+
+**One thing these runs also proved, recorded here because it is the first live
+evidence:** defect E1 is fixed. Both sessions show all eight lanes carrying a
+distinct `output_path` naming their own ledger (`OSINT_Analyst_S0_106.md`,
+`TopperBuddy_S0_107.md`, …) while `payload_path` is uniformly
+`unified_session_ledger.md`. Eight distinct documents on disk, 523 B to 22.7 KB.
+Before the fix that second column did not exist and the merge gathered one file
+eight times. **E2 remains unproven** — the merge never ran in either session, so
+there is still no `_merged.md` and no step boundary to observe.
+
+***
+
+### Feature Name: The VCR pause button crashes the entire TUI (F1)
+**Abstract:** Pressing pause restyles `#btn-vcr` to `.vcr-btn--paused`, whose box is 4 cells wide against 4 cells of border and padding, leaving a zero-width content area; rich divides by it and raises out of the render, killing the Textual app while the flow engine thread carries on without a UI.
+**Date/Time Entered:** 2026-09-01T20:50:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-01T21:40:00-04:00
+**Verified:** Reproduced. Observed live on `job_20260901-205047-40sp`; the crash was
+then reproduced at library level in isolation (`divide_line("▶", 0)` raises) and
+pinned by a test that fails on the pre-fix CSS with the identical stack frame
+(`rich/cells.py:338`) from the operator's traceback.
+**Completion Metric:** `omni qa` PASS (whole project); pytest **750 collected / 750
+passed** (703 before this batch); `omni smoke` ALL CHECKS PASSED. New file
+`tests/test_vcr_transport_render.py`, 10 tests, which read the **live**
+`MacroNodeWorkshop.DEFAULT_CSS` rather than a copy of the numbers — so re-narrowing
+the rule fails the suite instead of passing beside it. Reverting the width to 4
+fails 3 of them.
+
+**Description:**
+The arithmetic, which is the whole defect:
+
+```
+content_width = outer - border(2) - padding(2)
+outer 4  ->  content 0    <- crash
+outer 6  ->  content 2    <- fixed
+```
+
+`MacroNodeWorkshop.DEFAULT_CSS` pinned `min-width: 4; max-width: 4`. All three
+`.vcr-btn--{idle,running,paused}` rules in `nexus_plex.css` declare
+`border: solid`, and Textual's `Button` carries `padding: 0 1`. At content width
+zero, `rich._wrap.divide_line` calls `chop_cells(word, 0)`, which evaluates
+`range(0, len(text), 0)` and raises `ValueError: range() arg 3 must not be zero`
+out of the render path. Environment: textual 8.2.7, rich 15.0.0.
+
+`max-width` is the property that actually bit. `min-width: 4` alone would have been
+harmless, because Textual would have grown the button to fit; the hard cap is what
+forced the box below its own chrome.
+
+**Two wrong hypotheses, recorded so they are not re-tried.**
+
+1. *"The play glyph is too wide."* No. Both `⏸` (U+23F8) and `▶` (U+25B6) measure
+   1 cell under `rich.cells.cell_len`. Changing the label would have left the crash
+   in place.
+2. *"`pyrightconfig.json` excludes `maccre_tui`, which is why this escaped."*
+   Stated in this session and **withdrawn**. A content width of zero is a perfectly
+   well-typed `int`; no type checker catches a value a third-party library divides
+   by. De-excluding `maccre_tui` is worth doing — see the separate entry below —
+   but it would not have found this.
+
+What *would* have caught it is a test that renders the button in each of its three
+states, which did not exist. The suite's other TUI tests deliberately drive state
+models with the DOM stubbed out, because that is where the previous defects were.
+Geometry is invisible to that approach.
+
+**Related:** F2 and F3 below are both downstream of this crash. Also the
+*FlowExecutionPanel dead duplicate* entry — the same `#btn-vcr` id exists twice.
+
+***
+
+### Feature Name: Pausing mid-run rebuilds a worker twenty times a second (F2)
+**Abstract:** `_worker_loop` folded `PAUSED` into `IDLE`'s retire branch, but the two say opposite things about demand; a held flow therefore retired and respawned a full worker — TopologyEngine, broker and schema DDL — on every supervisor tick, indefinitely.
+**Date/Time Entered:** 2026-09-01T20:50:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-01T21:10:00-04:00
+**Verified:** Reproduced. Observed live as PID 12268 at 257 s of CPU and climbing,
+with the log cycling `loaned worker slot=N` → `Initializing Universal Swarm Node` →
+`ModelSentinel wired` → `worker slot N retired` without end. Reproduced in the
+suite and **measured** by reverting each half of the fix independently.
+**Completion Metric:** `omni qa` PASS; pytest **750 collected / 750 passed**;
+`omni smoke` ALL CHECKS PASSED. `tests/test_swarm_pool.py` 52 → 71 tests.
+Measured construction counts over a 2 s hold at a 0.01 s tick: **both halves
+broken → 40 and unbounded** (scales with hold duration; production ticks at 0.05 s
+and ran for minutes); **worker-hold only → 8**, i.e. exactly `max_workers`, then
+bounded by the ceiling check; **fixed → ≤ 2**.
+
+**Description:**
+The retire branch carried this reasoning: *"Retire rather than spin; the supervisor
+re-spawns when demand returns."* Correct for `IDLE`, inverted for `PAUSED`:
+
+- **IDLE** — nothing is claimable. Demand is zero, so a retired slot stays retired.
+  Retiring is free.
+- **PAUSED** — work exists and the operator is holding it. Demand is measured from
+  *open* rows and a paused task is still open, so demand stays high and the
+  supervisor refills the slot on the next tick. Retiring is a full rebuild.
+
+Each rebuild constructs a `TopologyEngine` and a `LocalMessageBroker`, and the
+broker runs schema DDL against the same SQLite file a task claim needs — so the
+storm was also contending with the queue an edge node would claim through.
+
+Three changes, in `maccre_core/orchestration/swarm_pool.py`:
+
+1. `_scale_to_demand` returns immediately while held, before paying for the demand
+   query. **This is the storm-stopper.**
+2. `_worker_loop` splits `PAUSED` out of the idle branch and holds the slot for
+   `pause_hold_seconds` (5 s) so a brief pause does not force full ramp-up again on
+   resume. Retiring after that is safe *because* of (1).
+3. The supervisor poll backs off from 0.05 s to `paused_poll_interval_seconds`
+   (0.25 s) while held, since the drain check is a SQLite `COUNT` and nothing it
+   watches for can happen while the flow is paused.
+
+A single `_is_paused()` helper is the one reading of the convention, which is
+inverted and easy to get backwards: **set means running.**
+
+**Worth recording for its own sake.** `test_a_cleared_pause_event_holds_execution`
+already covered this exact path and passed throughout, because it asserted that no
+*work* executed. Nothing asserted what the pause **cost**. A correct assertion
+about the wrong axis is indistinguishable from coverage.
+
+***
+
+### Feature Name: A held flow whose UI has died waits out its full budget, then reports success (F3)
+**Abstract:** `pause_event` is owned by the TUI; when F1 killed the app with the event clear, nothing could ever set it again, the pool waited out its 3600 s budget, returned `timeout` — and neither step loop acted on `timeout`, so the session would have been recorded `completed` over an unexecuted `CTRL_MERGE`.
+**Date/Time Entered:** 2026-09-01T20:50:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-01T21:55:00-04:00
+**Verified:** Reproduced. Traced in code from the live run: `40sp` sat with
+`CTRL_MERGE_S0` still `open` and a dead UI, inside a 3600 s budget, when the
+process was killed. The `completed`-over-unrun-work path is asserted structurally
+in `tests/test_flow_pool_integration.py`.
+**Completion Metric:** `omni qa` PASS; pytest **750 collected / 750 passed**;
+`omni smoke` ALL CHECKS PASSED. `tests/test_flow_pool_integration.py` 46 → 64
+tests; `tests/test_swarm_pool.py` gains 7 abandoned-pause tests.
+
+**Description:**
+Two separate holes, both closed.
+
+**(a) The engine could not tell a long pause from an impossible one.** It still
+cannot guess — it is only an observer of an event the TUI owns — so it now *asks*.
+`run_until_drained` takes an optional `pause_owner_alive` predicate, consulted
+**only while held**, and `nexus_plex` supplies `lambda: self.is_running` at both
+the launch and resume call sites. The app is the only party that can honestly
+answer. A new `PoolResult.pause_abandoned` and a new `"abandoned"` step status keep
+this distinct from a timeout, because "your UI died" and "this node is slow" need
+different responses.
+
+A `max_pause_seconds` ceiling exists as a backstop for callers with no liveness
+signal, and is **off by default on purpose**: killing a flow because the operator
+went to lunch would be worse than the defect it guards against.
+
+**(b) `timeout` did not stop the flow.** This closes the register entry *A timed-out
+step does not stop the flow*, which had been `Deferred (needs decision)`. Both step
+loops now break on `("stalled", "timeout", "abandoned")` and record the session
+`failed`.
+
+> **Operator authorisation.** The recommendation in that entry was to stop the flow
+> and mark it `failed`, matching the stall path, and it was deliberately not done
+> unilaterally because **it will fail flows that currently report success**. The
+> operator authorised it in session on 2026-09-01 ("F3 and the timeout decision
+> together — the step loop needs to stop on timeout"). Recorded here rather than
+> silently flipped.
+
+Two smaller corrections rode along:
+
+- `is_stalled = True` was being set for a timeout. An approximately-correct label:
+  a future reader would have believed a timed-out session had stalled. The variable
+  now holds the pool's own word for what happened, and the `finally` logs it.
+- `_wait_for_hitl_resume` returned a bool that meant *cancelled* or *timed out* or
+  *there was no pause channel at all*, with the caller re-deriving which. It now
+  returns the same status vocabulary as `_run_worker_pool`. A HITL gate with
+  `pause_event=None` is now `abandoned` rather than a timeout, because nothing can
+  ever release it.
+
+**Consequence for the Sovereign Importer contract, and for anything enumerating by
+status.** `failed` now covers **four** conditions: an exception, a stall, a
+timeout, and an abandoned pause. `job_sessions` has no reason column, so the
+distinction lives only in the log. Giving it one is a schema *and* contract change
+and belongs with the File Cabinet read API rather than being smuggled in here. An
+SOP amendment is owed to the SI team, who were told on 2026-08-31 that `failed`
+covered two.
+
+***
+
+### Feature Name: The Drive-vs-SQLite concurrency cut was never recorded
+**Abstract:** `hybrid_edge_sync.py` states that Drive-based hot-locking is "permanently retired" in favour of SQLite `BEGIN EXCLUSIVE`, and calls itself "formerly `datacenter_router.py`" — but that module still exists, still contains the working Drive `appProperties` locking code, and is imported by nothing. The architectural decision existed only as a comment in the file that replaced it.
+**Date/Time Entered:** 2026-09-01T22:05:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-01T22:15:00-04:00
+**Verified:** Reproduced by inspection while investigating whether the F2 runaway
+was in fact an intentional edge-node listener. `datacenter_router.py` exists,
+contains `lock_task_for_agent` / `release_task_lock` writing `lock_status` and
+`locked_by` into Drive `appProperties`, and a repo-wide search finds **no importer**.
+**Completion Metric:** `omni qa` PASS; pytest **750 / 750**. `datacenter_router.py`
+now carries a `SUPERSEDED — 2026-09-01` module docstring naming its replacement,
+stating what was cut and why, and stating why the file is retained.
+`hybrid_edge_sync.py`'s "Formerly" claim is corrected to "Supersedes" with a dated
+note explaining that no rename occurred.
+
+**Description:**
+The decision itself is sound and stands: **one authority for "who owns this task",
+and it is `LocalMessageBroker.fetch_and_lock_task`'s `BEGIN EXCLUSIVE` claim.** Two
+arbiters — Drive conflict handling and SQLite — would be the two-representations
+failure in its most dangerous form.
+
+What was wrong was the record. A reader arriving at `datacenter_router.py` found
+working Drive-locking code with nothing marking it dead and reasonably concluded it
+was live. That happened in this session.
+
+**The file is retained deliberately**, not resurrected: it is the reference
+implementation for the planned Drive **transport** layer, where Drive carries
+payloads and provenance between laptop and edge device. Transport over Drive is
+still the plan; locking over Drive is not. Deleting it is the operator's call.
+
+**A related clarification, recorded because it cost this session real time.** The
+F2 runaway was initially described as semi-intentional — a loop holding a socket
+open so an edge node could join a swarm unexpectedly. It was not, and it could not
+be: the loop constructed and destroyed *local* in-process workers, and there is no
+listener, port, or registration table anywhere in the pool. **The join mechanism is
+the queue row itself.** A `task_queue` row with `lock_status = 'open'` is claimable
+by anything that can reach that database and issue `BEGIN EXCLUSIVE` — which is
+exactly what the retirement note above says won. During the entire runaway,
+`CTRL_MERGE_S0` sat open and claimable; the spinning added nothing to that
+availability and actively contended with it.
+
+**Related:** *Sovereign local model cluster*, *Android assistant client*, and the
+un-headed *Local Edge LLM Sync Node (S25 Ultra Integration)* proposal. The
+`edge-` model prefix in `maccre_router.py`, which POSTs to `MACCRE_EDGE_URL`
+(OpenAI-compatible, default `127.0.0.1:8080`), is live and is a separate mechanism
+from either of the above — it dispatches *inference* to an edge device rather than
+carrying *state* between devices, and the register is right that those are
+different problems.
+
+***
+
+### Feature Name: `FlowExecutionPanel` is a dead duplicate with a colliding widget id
+**Abstract:** `nexus_plex.py:2743` defines `FlowExecutionPanel`, which is never instantiated; `MacroNodeWorkshop` describes itself as its "drop-in replacement" and deliberately reuses its widget IDs, so two classes each compose a `Button(id="btn-vcr")`.
+**Date/Time Entered:** 2026-09-01T21:45:00-04:00
+**Status:** Unfulfilled
+**Verified:** Reproduced by inspection. A repo-wide search finds `FlowExecutionPanel`
+referenced only by its own `class` statement and by docstrings in
+`macronode_workshop.py` and `node_catalog.py` describing it as legacy. Never
+constructed, never mounted.
+
+**Description:**
+Harmless today, because only `MacroNodeWorkshop` is mounted (`nexus_plex.py:2896`).
+The hazard is that `query_one("#btn-vcr", Button)` — called from five places in
+`nexus_plex.py` — would raise `TooManyMatches` the moment both were ever in one
+screen. It is the same shape as the `datacenter_router.py` entry above: an
+extracted replacement landed and the original was left behind looking live.
+
+Deliberately not deleted while fixing F1: it is roughly eighty lines in a file not
+yet read in full, and removing it is a separate, reversible decision. Note that
+F1's crash was in the *workshop's* button; the dead panel's copy has a different
+width rule (`min-width: 8` from `nexus_plex.css`, which is safe), which is part of
+why the two behaved differently and why finding the live one mattered.
+
+**Sequence when this is picked up:** confirm nothing dynamically constructs it by
+name, then delete the class rather than "fixing" it, and add a guard test asserting
+that exactly one widget in a composed tree declares `id="btn-vcr"`.
+
+***
+
+### Feature Name: Agent overrides modal does not load the selected agent's profile
+**Abstract:** Opening the overrides editor for an agent shows neither the selected agent's profile nor its instructions, so the operator cannot tell whether an override was applied or what it would replace.
+**Date/Time Entered:** 2026-09-01T20:45:00-04:00
+**Status:** Unfulfilled
+**Verified:** **User-reported. NOT reproduced.** The cause below is a lead.
+
+**Description:**
+Reported by the operator while setting up the 8-agent scatter: they went in to
+override each agent's model onto `gemini-3.7-flash`, found the overrides editor
+modal empty of the selected agent's profile, and could not confirm whether the
+override had taken. Instructions were also missing from the modal. They proceeded
+without overrides, so the two runs of 2026-09-01 used each agent's normal model.
+
+Consequence beyond the immediate annoyance: **an override surface that does not
+display current state cannot be trusted to have applied one.** That makes it
+impossible to run a controlled comparison — which is precisely what UT-0 needs,
+since its whole purpose is three *instrumented and comparable* runs.
+
+Leads to check, in this order:
+
+- Does the modal receive the agent name at all, or is it opened without a
+  selection? `nexus_plex.py:4026` reads `result.get("agent_overrides", {})` and
+  pushes into the workshop, so the write path exists; the question is the read.
+- Is this the dynamic-mount defect already scheduled as Phase 6.13 Task B4, where
+  `NodeConfigModal` needed `container.refresh(layout=True)` after mounting widgets
+  or the controls never appeared? Two other modals in this register are suspected
+  of the same thing, which starts to look like one defect with three symptoms.
+- Are the fields *absent from the compose tree* or *present but unpopulated*? Those
+  are different bugs with the same appearance, and the register already records
+  that distinction mattering once.
+
+**Reproduce before sizing.** Three consecutive engine defects this phase had
+plausible-but-wrong first hypotheses, and this entry's own leads span a wiring fix
+and a modal-lifecycle fix.
+
+**Related:** *Interactive Node Configuration Modal*, *Standardized Modal Catalog*
+(the shared `mount_and_refresh()` helper the planning map recommends), and
+*Session Manager — "Name MacroNode" modal is a dead end*.
+
+***
+
+### Feature Name: `pyrightconfig.json` excludes `maccre_tui` entirely
+**Abstract:** The gate has never type-checked the TUI. 112 real diagnostics are waiting, ~90 of them in `nexus_plex.py`, and most are three repeated Textual idioms rather than distinct bugs.
+**Date/Time Entered:** 2026-09-01T21:30:00-04:00
+**Status:** Unfulfilled
+**Verified:** Reproduced and **measured**. `pyright --outputjson` against a
+throwaway config that includes `maccre_tui`: 15 files, 216 errors — of which 104
+are `reportMissingImports` caused by the probe config's own rooting, not by the
+tree. The honest figure is **112 errors**: 68 `reportAttributeAccessIssue`, 26
+`reportArgumentType`, 11 `reportOptionalMemberAccess`, 6 `reportCallIssue`, 1
+`reportRedeclaration`. Probe kept at `scratch/_pyright_tui_probe.json` and
+`scratch/_summarise_tui_probe.py`.
+
+**Description:**
+Not 112 separate problems. Three idioms account for most of them:
+
+- `Cannot access attribute "active_project" for class "App[Unknown]"` — app state
+  stashed on the `App` subclass and read via `self.app.active_project`. One typed
+  property or cast helper clears dozens at once.
+- `Cannot assign to attribute "text" for class "Widget"` — `query_one(...)` without
+  the type argument. Mechanical: `query_one("#x", Input)`.
+- `"replace" is not a known attribute of "None"` — genuine missing Optional guards.
+  These are the ones worth reading; some may be real latent bugs.
+
+**Sequence:** fix the idioms with the exclusion still in place, *then* flip the
+config, so the gate is never red. One line to de-exclude; roughly a day to make it
+green.
+
+**Explicitly not a fix for F1**, despite being discovered while investigating it.
+See F1's second withdrawn hypothesis: a zero content width is a well-typed `int`
+and no type checker would have caught that crash. This entry stands on its own
+merits.
+
+**Related:** the *`omni qa` Pyright blind spot* entry, `COMPLETED` 2026-08-31 — the
+same class of gap (the gate's real coverage differing from its documented
+coverage), one layer out. That entry's residual work, a test asserting the gate's
+effective file set matches the config's include list, would also make this
+exclusion visible rather than merely present.
+
+***
+
+## Terminal restatement — the timeout decision is closed
+
+### Feature Name: A timed-out step does not stop the flow
+**Status:** COMPLETED
+**Completed:** 2026-09-01T21:55:00-04:00
+**Completion Metric:** Both `FlowRunner.execute_flow` and `FlowRunner.resume_flow`
+now break on `pool_status in ("stalled", "timeout", "abandoned")` and record the
+session `failed`. Asserted in `tests/test_flow_pool_integration.py` by
+`TestEveryTerminalStatusStopsTheFlow`, parametrized over both loops and all three
+statuses, plus a test that the reason is carried rather than flattened into a
+boolean. Gate at completion: `omni qa` PASS (whole project), pytest **750 collected
+/ 750 passed**, `omni smoke` ALL CHECKS PASSED.
+
+**Decision, and who made it.** The entry's own recommendation — stop the flow and
+mark the session `failed`, matching the stall path — is what was implemented. It was
+held at `Deferred (needs decision)` because **it will fail flows that currently
+report success**, and that is a behaviour change on a shared path. The operator
+authorised it in session on 2026-09-01, alongside defect F3, on the grounds that
+the two are the same conversation. Recorded rather than assumed.
+
+**What made it concrete rather than principled.** Live run
+`job_20260901-205047-40sp` was held with `CTRL_MERGE_S0` still `open` and a dead UI,
+inside a 3600 s pool budget. Left alone for an hour it would have returned
+`timeout`, fallen through the step loop, and been written `completed` with the merge
+never having executed. The register had been arguing this from doctrine since
+2026-08-30; the run turned it into an observation.
+
+**Known consequence, carried forward deliberately.** `failed` now covers four
+conditions — an exception, a stall, a timeout, and an abandoned pause — and
+`job_sessions` has no reason column, so the distinction lives only in the log. That
+is a real weakening of `failed` as an enumerable status, accepted because the
+alternative was a weakened `completed`, which is worse: a wrong `failed` is
+conservative, a wrong `completed` propagates. Giving the session row a reason column
+is a schema *and* contract change and belongs with *Session Manager / File Cabinet
+alignment for Sovereign Importer*, not here. An SOP amendment is owed to the SI
+team, who were told on 2026-08-31 that `failed` covered two conditions.
+
+*(This entry originally appears above with status `Deferred (needs decision)`. It is
+restated here in completed form rather than edited in place, following the
+precedent set by the `omni qa` Pyright entry, so the register reads as a history.)*

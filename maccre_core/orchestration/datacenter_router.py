@@ -13,6 +13,47 @@
 # │  VII. TEARDOWN    try/finally on all handles (omni clean compliance).      │
 # │  VIII.TELEMETRY   No bare print(). logger only. JSON → 03_Agent_Ledgers.  │
 # └─────────────────────────────────────────────────────────────────────────────┘
+"""
+maccre_core/orchestration/datacenter_router.py
+===============================================
+
+**SUPERSEDED — 2026-09-01. Imported by nothing. Do not build on this.**
+
+Replaced by :mod:`maccre_core.orchestration.hybrid_edge_sync`
+(``HybridEdgeSync``), which carries the same 5-Tier enforcement and drops the
+Drive-based hot-lock entirely.
+
+What was cut, and why
+---------------------
+``lock_task_for_agent`` / ``release_task_lock`` below arbitrate task ownership by
+writing ``lock_status`` and ``locked_by`` into a Google Drive file's
+``appProperties`` and letting Drive's own conflict handling decide the winner.
+
+That mechanism is **retired**. Concurrency control now lives exclusively at the
+SQLite WAL layer, in ``LocalMessageBroker.fetch_and_lock_task``'s
+``BEGIN EXCLUSIVE`` claim. One authority for "who owns this task", not two.
+
+Why this file is still here
+---------------------------
+It is retained deliberately as the **reference implementation** for the planned
+Drive transport layer, where Drive carries payloads and provenance between a
+laptop and an edge device rather than arbitrating locks. The distinction matters:
+*transport* over Drive is still the plan; *locking* over Drive is not.
+
+How this note came to be written
+--------------------------------
+``hybrid_edge_sync`` describes itself as "formerly ``datacenter_router.py``".
+That is not what happened — this file was never renamed or removed, so a reader
+arriving here finds working Drive-locking code with nothing marking it dead, and
+reasonably concludes it is live. The architectural decision existed only as a
+comment in the file that replaced it. Recorded properly in
+``FeatureRequests.md`` on 2026-09-01.
+
+**If you are looking for the edge-node join mechanism:** it is not here and it is
+not a socket. A ``task_queue`` row with ``lock_status = 'open'`` is claimable by
+anything that can reach that database and issue ``BEGIN EXCLUSIVE``. The open row
+*is* the join point.
+"""
 # pyright: reportMissingTypeStubs=false
 # pyright: reportUnknownMemberType=false
 # pyright: reportUnknownVariableType=false
@@ -29,7 +70,11 @@ logger = logging.getLogger(__name__)
 # The Google API client builds objects at runtime via discovery documents.
 # Strict type-checking is suppressed for all dynamic calls in this file.
 class DatacenterRouter:
-    """Phase 4: Sovereign Datacenter & Headless State Machine"""
+    """Phase 4: Sovereign Datacenter & Headless State Machine.
+
+    .. deprecated:: 2026-09-01
+       Superseded by ``HybridEdgeSync``. See this module's docstring.
+    """
     
     # The 5-Tier Deterministic Tree
     TIERS =[

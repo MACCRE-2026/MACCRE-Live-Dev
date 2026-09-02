@@ -145,9 +145,31 @@ class MacroNodeWorkshop(Vertical):
         width: 30;
         margin-left: 1;
     }
+    /* Defect F1 — do not narrow this below 6.
+     *
+     * These were min-width/max-width 4, and pressing pause crashed the whole
+     * TUI. The three .vcr-btn--* state rules in nexus_plex.css each declare
+     * `border: solid`, and Textual's Button carries `padding: 0 1`, so the box
+     * arithmetic is:
+     *
+     *     content_width = outer - border(2) - padding(2)
+     *     outer 4  ->  content 0   <- crash
+     *     outer 5  ->  content 1
+     *     outer 6  ->  content 2   <- chosen
+     *
+     * At content 0, rich's divide_line() calls chop_cells() with a step of
+     * zero and raises `ValueError: range() arg 3 must not be zero` out of the
+     * render, killing the app. Observed live on run
+     * job_20260901-205047-40sp: the operator pressed pause, the button
+     * restyled to .vcr-btn--paused, the render raised, and the Textual app
+     * died while the flow engine thread carried on without it.
+     *
+     * 6 rather than 5 so a label glyph that a terminal treats as double-width
+     * still fits. tests/test_vcr_transport_render.py pins this.
+     */
     MacroNodeWorkshop .vcr-btn {
-        min-width: 4;
-        max-width: 4;
+        min-width: 6;
+        max-width: 6;
     }
     MacroNodeWorkshop .input-row {
         height: 3;

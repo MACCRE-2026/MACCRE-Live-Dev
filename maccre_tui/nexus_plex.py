@@ -4962,6 +4962,14 @@ class NexusPlex(App[None]):
                 node_started_callback=_on_node_started,
                 node_active_callback=_on_node_active,
                 node_finished_callback=_on_node_finished,
+                # Defect F3. This app owns _flow_pause_event, so this app is the
+                # only party that can honestly answer "can the hold still be
+                # released?". If Textual has stopped, the answer is no — and the
+                # engine runs on its own thread, so without being told it waits out
+                # the full budget for a resume that cannot arrive. Observed live on
+                # run job_20260901-205047-40sp, where the VCR button crashed the
+                # app mid-flow and the engine kept going without a UI.
+                pause_owner_alive=lambda: self.is_running,
             )
             if self._flow_cancel_event and self._flow_cancel_event.is_set():
                 self.write_agent_log("\n[yellow]Flow was cancelled by user.[/yellow]")
@@ -5037,6 +5045,8 @@ class NexusPlex(App[None]):
                 node_started_callback=_on_node_started,
                 node_active_callback=_on_node_active,
                 node_finished_callback=_on_node_finished,
+                # See the matching call in the launch path — defect F3.
+                pause_owner_alive=lambda: self.is_running,
             )
             if self._flow_cancel_event.is_set():
                 self.write_agent_log("[yellow]Flow execution was cancelled by user.[/yellow]")

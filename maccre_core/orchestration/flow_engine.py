@@ -761,6 +761,7 @@ class FlowRunner:
         node_finished_callback: Callable[[int | None, str, int | None], None] | None = None,
         max_workers: int | None = None,
         timeout_seconds: float = 3600.0,
+        pause_owner_alive: Callable[[], bool] | None = None,
     ) -> str:
         """Execute one flow step's DAG on a :class:`DynamicSwarmPool`.
 
@@ -774,12 +775,23 @@ class FlowRunner:
         keeps the HITL pause gate exactly where it was.
 
         Returns:
-            ``"completed"``, ``"cancelled"``, ``"timeout"`` or ``"stalled"``.
+            ``"completed"``, ``"cancelled"``, ``"timeout"``, ``"stalled"`` or
+            ``"abandoned"``.
 
             ``"stalled"`` means tasks were left ``locked`` with no worker alive to
             finish them — a claimed node that never ran. It is reported separately
             from ``"timeout"`` because the two need different responses: a timeout
             may just need a longer budget, while a stall is a worker that died.
+
+            ``"abandoned"`` means the flow was held and whatever owns
+            ``pause_event`` can no longer release it (defect F3). Distinct again,
+            because the operator's UI having died under a running flow is a
+            different conversation from either a slow node or a dead worker.
+
+            **Every one of these five is now acted on by both step loops.**
+            ``"timeout"`` used not to be: it fell through to the payload capture,
+            the step was logged as finished, the flow proceeded, and the session
+            was recorded ``completed``. See the callers.
         """
         overlays = self._build_topology_overlays(topo_rows, step_config, step_index)
         if overlays:
@@ -850,6 +862,10 @@ class FlowRunner:
                     # "a worker died still holding its task". Both look like an
                     # empty queue, because a locked row is not an open one.
                     locked_probe=lambda: count_by_status("locked"),
+                    # Lets a held flow conclude that nobody is coming back for it,
+                    # rather than waiting out the whole budget for a resume that
+                    # cannot arrive. Absent, the behaviour is unchanged.
+                    pause_owner_alive=pause_owner_alive,
                 )
                 logger.info(
                     "[FLOW_ENGINE] Step %d pool: drained=%s peak_concurrency=%d "
@@ -862,6 +878,11 @@ class FlowRunner:
 
                 if result.stopped:
                     return "cancelled"
+                if result.pause_abandoned:
+                    # Checked before timeout: both end the step, but this one names
+                    # the actual cause. Reporting "timeout" here would send the
+                    # operator looking for a slow node when their UI had died.
+                    return "abandoned"
                 if result.timed_out:
                     return "timeout"
                 if result.stalled:
@@ -887,10 +908,11 @@ class FlowRunner:
                             hitl_callback(step_index, job_id, current_payload)
                         except Exception:  # noqa: BLE001
                             pass
-                    if not self._wait_for_hitl_resume(pause_event, cancel_event, deadline):
-                        if cancel_event is not None and cancel_event.is_set():
-                            return "cancelled"
-                        return "timeout"
+                    resume = self._wait_for_hitl_resume(
+                        pause_event, cancel_event, deadline, pause_owner_alive
+                    )
+                    if resume != "resumed":
+                        return resume
                     # The paused task should now be 'open' again — go round.
                     continue
 
@@ -908,7 +930,8 @@ class FlowRunner:
         pause_event: threading.Event | None,
         cancel_event: threading.Event | None,
         deadline: float,
-    ) -> bool:
+        pause_owner_alive: Callable[[], bool] | None = None,
+    ) -> str:
         """Block until the TUI signals that HITL input has been injected.
 
         .. note::
@@ -931,21 +954,48 @@ class FlowRunner:
            ``hitl_callback``. That is a TUI change, tracked for Phase 6.12C, and
            deliberately not bundled into this refactor.
 
+        Args:
+            pause_event: The TUI's run/hold flag. See the ownership note above.
+            cancel_event: Observed only.
+            deadline: Wall-clock budget shared with the enclosing step.
+            pause_owner_alive: ``() -> bool``, whether the party that must set
+                ``pause_event`` can still do so. ``None`` means unknowable, which
+                preserves the previous behaviour of waiting out the deadline.
+
         Returns:
-            True when resumed, False if cancelled or the deadline passed.
+            One of ``"resumed"``, ``"cancelled"``, ``"abandoned"`` or
+            ``"timeout"`` — matching :meth:`_run_worker_pool`'s vocabulary so the
+            caller can return it unchanged.
+
+            This used to return a bare ``bool``, and the caller inferred the reason
+            by re-checking ``cancel_event`` and treating anything else as a
+            timeout. That collapsed three outcomes into one, so a HITL gate whose
+            operator had vanished was indistinguishable from a slow one — and
+            ``"timeout"`` was then not acted on at all by either step loop.
         """
         if pause_event is None:
             # No pause channel: nothing can resume us, so do not spin.
-            return False
+            logger.error(
+                "[FLOW_ENGINE] A HITL gate was reached with no pause channel, so "
+                "nothing can release it. Refusing to wait."
+            )
+            return "abandoned"
         pause_event.clear()
         while True:
             if cancel_event is not None and cancel_event.is_set():
-                return False
+                return "cancelled"
+            if pause_owner_alive is not None and not pause_owner_alive():
+                logger.critical(
+                    "[FLOW_ENGINE] HITL gate ABANDONED: whatever must inject the "
+                    "operator's input can no longer do so. Not waiting out the "
+                    "budget for input that cannot arrive."
+                )
+                return "abandoned"
             if time.time() > deadline:
-                return False
+                return "timeout"
             # Bounded wait so cancellation and the deadline stay observable.
             if pause_event.wait(timeout=0.25):
-                return True
+                return "resumed"
 
     def resume_flow(
         self,
@@ -958,6 +1008,7 @@ class FlowRunner:
         node_started_callback: Callable[[int, str], None] | None = None,
         node_active_callback: Callable[[int | None, str, int | None], None] | None = None,
         node_finished_callback: Callable[[int | None, str, int | None], None] | None = None,
+        pause_owner_alive: Callable[[], bool] | None = None,
     ) -> str:
         """Resume a failed or paused flow from its last known step.
 
@@ -997,7 +1048,7 @@ class FlowRunner:
         
         current_payload = current_ledger_path
         is_cancelled = False
-        is_stalled = False
+        unfinished_as = ""
         
         # When resuming, the tasks for start_idx might already be in task_queue, or the step might have failed before injection.
         # We'll just run the worker. It will pick up 'open' tasks. If there are none, it will exit immediately.
@@ -1099,12 +1150,20 @@ class FlowRunner:
                     hitl_callback=hitl_callback,
                     node_active_callback=node_active_callback,
                     node_finished_callback=node_finished_callback,
+                    pause_owner_alive=pause_owner_alive,
                 )
                 if pool_status == "cancelled":
                     is_cancelled = True
                     break
-                if pool_status == "stalled":
-                    is_stalled = True
+                if pool_status in ("stalled", "timeout", "abandoned"):
+                    # See execute_flow for why 'timeout' and 'abandoned' now stop
+                    # the flow. Both loops must agree; they have drifted before.
+                    logger.critical(
+                        "[FLOW_ENGINE] Step %d ended '%s' on resume. Stopping rather "
+                        "than carrying on over work that did not happen.",
+                        idx + 1, pool_status,
+                    )
+                    unfinished_as = pool_status
                     break
 
                 step_output = self._capture_step_output(job_id, topo_rows, idx, broker)
@@ -1134,7 +1193,11 @@ class FlowRunner:
         finally:
             if is_cancelled:
                 broker.update_session_status(job_id, "cancelled")
-            elif is_stalled:
+            elif unfinished_as:
+                logger.critical(
+                    "[FLOW_ENGINE] Resumed session %s recorded FAILED (reason: %s).",
+                    job_id, unfinished_as,
+                )
                 broker.update_session_status(job_id, "failed")
             else:
                 broker.update_session_status(job_id, "completed")
@@ -1176,6 +1239,7 @@ class FlowRunner:
         node_started_callback: Callable[[int, str], None] | None = None,
         node_active_callback: Callable[[int | None, str, int | None], None] | None = None,
         node_finished_callback: Callable[[int | None, str, int | None], None] | None = None,
+        pause_owner_alive: Callable[[], bool] | None = None,
     ) -> str:
         """
         Execute a sequential linear flow of MacroNodes.
@@ -1223,7 +1287,7 @@ class FlowRunner:
         broker.create_session(job_id, topology_csv_str)
         
         is_cancelled = False
-        is_stalled = False
+        unfinished_as = ""
         try:
             for idx, step in enumerate(steps):
                 broker.update_session_step_index(job_id, idx)
@@ -1285,16 +1349,37 @@ class FlowRunner:
                     hitl_callback=hitl_callback,
                     node_active_callback=node_active_callback,
                     node_finished_callback=node_finished_callback,
+                    pause_owner_alive=pause_owner_alive,
                 )
                 if pool_status == "cancelled":
                     is_cancelled = True
                     break
-                if pool_status == "stalled":
+                if pool_status in ("stalled", "timeout", "abandoned"):
                     # A node was claimed and never ran, so this step produced no
                     # artifact for the next one. Stop rather than feed the rest of
                     # the flow a hole — and record the session as failed, which is
                     # what the old code could not do because it never found out.
-                    is_stalled = True
+                    #
+                    # ``timeout`` was added here by operator decision on
+                    # 2026-09-01, closing the register entry "A timed-out step does
+                    # not stop the flow". Previously it fell straight through to the
+                    # payload capture below: the step was logged as complete, the
+                    # flow proceeded, and the session was recorded ``completed``.
+                    # Live run job_20260901-205047-40sp was one hour of budget away
+                    # from doing exactly that over an unexecuted CTRL_MERGE.
+                    #
+                    # ``abandoned`` is defect F3: the flow is held and nothing can
+                    # release it, because the UI that owns the pause has died.
+                    #
+                    # **This will fail flows that used to report success.** That is
+                    # the intent — those flows were already failing, silently.
+                    logger.critical(
+                        "[FLOW_ENGINE] Step %d ('%s') ended '%s'. Stopping the flow "
+                        "and recording the session failed: at least one node did not "
+                        "run, so nothing downstream can be trusted.",
+                        idx + 1, step.macronode_name, pool_status,
+                    )
+                    unfinished_as = pool_status
                     break
 
                 logger.info(f"[FLOW_ENGINE] MacroNode '{step.macronode_name}' completed execution.")
@@ -1328,7 +1413,19 @@ class FlowRunner:
         finally:
             if is_cancelled:
                 broker.update_session_status(job_id, "cancelled")
-            elif is_stalled:
+            elif unfinished_as:
+                # 'failed' now covers four distinct conditions: an exception, a
+                # stall, a timeout and an abandoned pause. Consumers that
+                # enumerate by status cannot tell them apart, so the reason is
+                # logged here rather than only inferred from an earlier line.
+                # job_sessions has no reason column; giving it one is a schema
+                # change and a contract change, and belongs with the File Cabinet
+                # read API rather than smuggled in here.
+                logger.critical(
+                    "[FLOW_ENGINE] Session %s recorded FAILED (reason: %s). "
+                    "At least one step did not finish its work.",
+                    job_id, unfinished_as,
+                )
                 broker.update_session_status(job_id, "failed")
             else:
                 # If we got here and it is not cancelled and did not exception, it completed successfully
