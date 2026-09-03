@@ -404,7 +404,7 @@ class FlowRunner:
         pricing: dict[str, dict[str, float]] = get_pricing_table()
         all_models: list[str] = []
 
-        for step in steps:
+        for step_idx, step in enumerate(steps):
             macro_name = step.macronode_name
 
             # ── (a) MacroNode existence ───────────────────────────────────────
@@ -440,7 +440,22 @@ class FlowRunner:
             # ── (c) Topology schema validation ────────────────────────────────
             topo_rows: list[dict[str, Any]] = macro_def.get('topology_rows', [])
             if topo_rows:
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
+                # Hydrated with the step's real payload_mode, instructions and index
+                # rather than the defaults. This is preflight — it validates shape,
+                # not behaviour — but it calls build_topology() below, which *writes*
+                # topology.csv. Hydrating every step at the default step_index=0 wrote
+                # colliding node ids into that file, and dropping payload_mode and
+                # custom_instructions meant the rows validated were not the rows that
+                # would run. Self-correcting, because execution rewrites per step, and
+                # still wrong: a validator must inspect what will actually execute.
+                hydrated_lists = self._hydrate_topology(
+                    topo_rows,
+                    step.agent_mapping,
+                    getattr(step, "payload_mode", "Unified Ledger"),
+                    getattr(step, "custom_instructions", ""),
+                    step_index=step_idx,
+                    agent_tools_overrides=getattr(step, "agent_tools_overrides", {}),
+                )
                 try:
                     build_topology(hydrated_lists)
                     topo_engine = TopologyEngine()
@@ -1086,7 +1101,19 @@ class FlowRunner:
                     return current_payload
                         
                 topo_rows = macro_def.get("topology_rows", [])
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, step.payload_mode, step_index=idx, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
+                # custom_instructions was missing here. `_hydrate_topology` folds it
+                # into each row's Instruction_Override, so a resumed flow ran its
+                # nodes with the operator's per-node Context Injection silently
+                # discarded — the same drift that once let only execute_flow apply
+                # the step config overlay. All three call sites now pass the full set.
+                hydrated_lists = self._hydrate_topology(
+                    topo_rows,
+                    step.agent_mapping,
+                    getattr(step, "payload_mode", "Unified Ledger"),
+                    getattr(step, "custom_instructions", ""),
+                    step_index=idx,
+                    agent_tools_overrides=getattr(step, "agent_tools_overrides", {}),
+                )
                 build_topology(hydrated_lists)
                 
                 # Check task status for this step's topology nodes.

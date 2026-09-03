@@ -689,24 +689,60 @@ def _handle_merge(
         else:
             sections.append(content)
 
-    # Also include the primary payload if not already in predecessors
+    # ── The primary payload, unless it already contains every predecessor ──────
+    # A fan-in's own payload_path is normally worth including: under
+    # "Preceding Node" routing it is the upstream document the lanes worked from,
+    # and losing it would lose context.
+    #
+    # Under "Unified Ledger" routing it is the *session ledger*, which is an
+    # aggregate of every node's output — including all of these predecessors. Adding
+    # it as a section therefore restates every lane a second time. Measured on run
+    # job_20260902-132101-tjrd: eight lanes totalled ~32 KB and the merged document
+    # came to 68 KB, so more than half of it was a verbatim second copy, and every
+    # byte of that is paid for again by whatever agent reads it next.
+    #
+    # The count stayed honest either way — nine genuinely distinct files — which is
+    # why this needed measuring rather than trusting the log line.
+    _primary_is_session_ledger = (
+        Path(payload_path).name == "unified_session_ledger.md" if payload_path else False
+    )
     if payload_path and payload_path not in distinct_payloads:
-        primary = _read_payload(payload_path)
-        if primary:
-            if merge_mode == "structured":
-                sections.insert(0, f"## Source: {Path(payload_path).stem}\n\n{primary}")
-            else:
-                sections.insert(0, primary)
+        if _primary_is_session_ledger and distinct_payloads:
+            logger.info(
+                "[CTRL_MERGE] %s: primary payload is the unified session ledger, "
+                "which already contains all %d gathered source(s); omitting it "
+                "rather than restating them.",
+                node_id, len(distinct_payloads),
+            )
+        else:
+            primary = _read_payload(payload_path)
+            if primary:
+                if merge_mode == "structured":
+                    sections.insert(0, f"## Source: {Path(payload_path).stem}\n\n{primary}")
+                else:
+                    sections.insert(0, primary)
 
     merged = delimiter.join(sections) if merge_mode == "concat" else "\n\n".join(sections)
     output_file.write_text(merged, encoding="utf-8")
 
     # The count is of sections actually written from distinct sources, which is
     # the only number that means anything to a reader of the merged document.
-    logger.info(f"[CTRL_MERGE] {node_id}: Merged {len(sections)} sources → {output_file}")
+    #
+    # The message names the destination file, not just a count. "Merged 8 sources"
+    # told the operator nothing about *where*, and the whole of defect E2 was the
+    # next step reading a different file in the same directory — so the artifact's
+    # name is the load-bearing part of this line.
+    logger.info(
+        "[CTRL_MERGE] %s: merged %d distinct source(s) into %s (%d bytes) — "
+        "this file is the node's output and what the next step receives.",
+        node_id, len(sections), output_file.name,
+        len(merged.encode("utf-8")),
+    )
     return DeterministicNodeResult(
         output_payload_path=str(output_file),
-        log_message=f"MERGE {node_id}: {len(sections)} sources merged.",
+        log_message=(
+            f"MERGE {node_id}: {len(sections)} distinct source(s) -> {output_file.name}"
+        ),
     )
 
 
