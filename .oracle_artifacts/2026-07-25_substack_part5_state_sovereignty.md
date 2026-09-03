@@ -19,7 +19,7 @@ Seven months ago, when I began using AI models to build **MACCREv2** (Google Ant
 
 > **AI agents running at high temperatures (1.0+) are brilliant creative minds, but left to themselves, they are utter clutterbugs.**
 
-If you give an autonomous agent free rein over your computer without strict boundaries, it will dump temporary files across your desktop, overwrite critical scripts, delete past work to "clean up," and hardcode file paths like `C:\Users\wilke\Desktop\...` that immediately break the moment you move the project to a USB drive or a Linux server.
+If you give an autonomous agent free rein over your computer without strict boundaries, it will dump temporary files across your desktop, overwrite critical scripts, delete past work to "clean up," and hardcode file paths like `C:\Users\<you>\Desktop\...` that immediately break the moment you move the project to a USB drive or a Linux server.
 
 To transform non-deterministic AI swarms into a rock-solid, production-grade engine, I didn't need to learn C++ syntax. I needed to act like a **General Contractor**. I had to build **The Fortress**—a physical architecture of state, security, and data sovereignty that governs how AI agents interact with the machine. 
 

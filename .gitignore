@@ -44,3 +44,18 @@ ENV/
 # OS Metadata Defaults
 .DS_Store
 Thumbs.db
+
+# Kiro Session Archives — never published
+# ==============================================================================
+# A kiro-session-*.zip is a complete conversation transcript. The one audited on
+# 2026-09-02 held 32 username instances, 28 C:\Users paths and 15 base64-embedded
+# SCREENSHOTS. Screenshots are not reviewable by any text scan, so whatever else
+# was on screen ships with them. No credentials were found, but the point is that
+# a grep cannot establish that for the image half.
+#
+# This lives in .gitignore rather than .git/info/exclude deliberately: the rule
+# should travel to every clone and every future machine, and "we do not publish
+# session archives" is not itself sensitive.
+# See .kiro_artifacts/2026-09-02_public_repository_exposure_audit.md
+.kiro_artifacts/*.zip
+kiro-session-*.zip
