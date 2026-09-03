@@ -2207,3 +2207,102 @@ team, who were told on 2026-08-31 that `failed` covered two conditions.
 *(This entry originally appears above with status `Deferred (needs decision)`. It is
 restated here in completed form rather than edited in place, following the
 precedent set by the `omni qa` Pyright entry, so the register reads as a history.)*
+
+***
+
+# ENTRIES ADDED 2026-09-02 — the payload contract
+
+**Why these two are together.** Three defects were found inside one contract — *which payload
+does a node receive* — in 48 hours: E1, E2, and then these. They are the unspecified half of
+that contract, and the operator's intended `CTRL_REVIEW` behaviour depends on **both**, which
+is why neither can be settled alone. Full context in
+`.kiro_artifacts/2026-09-02_phase_4_99_state_and_pause_rationale.md` §5.
+
+***
+
+### Feature Name: `Payload_Mode` has never been honoured at a step boundary
+**Abstract:** The unified session ledger lives in `04_Code_Artifacts/` while step boundaries read the terminal node's output from `03_Agent_Ledgers/`, so a step authored as "Unified Ledger" never receives the session ledger; `Payload_Mode` is consulted only for agent→agent hops inside a step, and there it reads the *successor's* mode.
+**Date/Time Entered:** 2026-09-02T17:00:00-04:00
+**Status:** Deferred (needs decision)
+**Verified:** Reproduced. Observed on live run `job_20260902-132101-tjrd`, where a single
+downstream agent authored as Unified Ledger received the preceding step's terminal output and
+reported having no source material to work from. Confirmed in code: `unified_ledger_path()`
+writes to `04_Code_Artifacts/<job_id>/unified_session_ledger.md`, while
+`_capture_step_output` reads the terminal node's recorded output and the pre-E2 mtime glob
+searched `03_Agent_Ledgers/<job_id>/` only. Neither path could ever return the session ledger.
+
+**Description:**
+`Payload_Mode` is authored per node in the config modal, and is honoured in exactly one place:
+`swarm_worker`'s routing override for agent→agent hops within a step. Two consequences follow,
+and the second is the surprising one.
+
+**(a) Step boundaries ignore it entirely.** A new step's entrypoint is injected with whatever
+`_capture_step_output` returned for the previous step. That is correct as *lineage* — it is the
+E2 fix working — and it means the authored mode has no effect across a boundary. Before E2 the
+same was true for a different reason: the glob only searched the wrong directory.
+
+**(b) Where it *is* honoured, it reads the successor's mode, not the completing node's.** That
+is defensible — payload mode is arguably a property of what a node wants to *receive* — but it
+is undocumented, and it is what made E1's blast radius so wide: all eight lanes resolved
+`CTRL_MERGE`'s mode, so all eight swapped in the shared ledger.
+
+**The decision.** Should a step's entrypoint receive the session ledger when the step is
+authored "Unified Ledger"? Arguments both ways, recorded so the decision is not re-derived:
+
+- **For.** It is what the operator authored and what the UI implies. It is also the only reading
+  under which the mode means one thing everywhere rather than two.
+- **Against.** It weakens lineage. E2 exists because a step received something other than the
+  previous step's actual output; routing the aggregate ledger instead re-introduces "the payload
+  is not the upstream artifact", which is the same shape by a different route. It would also
+  change the payload of **every existing multi-step flow**.
+
+**A middle option worth considering:** honour the mode at the boundary, but have the session
+ledger *accompany* the terminal output rather than replace it — the same "accompany, not
+replace" principle the operator specified for HITL injection. That would make one rule cover
+both cases instead of two rules that can disagree.
+
+**Blocks:** the `Preceding Node Only` entry below; the `CTRL_REVIEW` HITL accompany-not-replace
+change; and 4.99 Orchestration Actions 1, 5 and 8, all of which certify payload and lineage
+behaviour.
+
+***
+
+### Feature Name: `Preceding Node Only` is offered in the UI and implemented nowhere
+**Abstract:** The node config modal's Ledger Routing Mode select offers `Unified Ledger` and `Preceding Node Only`; no branch anywhere reads the second value. It appears to work because it falls through to the default routing path, which happens to retain the completing node's own ledger.
+**Date/Time Entered:** 2026-09-02T17:00:00-04:00
+**Status:** Unfulfilled
+**Verified:** Reproduced by inspection. `nexus_plex.py:2071` offers both values. A repo-wide
+search finds `"Preceding Node Only"` in that Select and in `undo_manager.py`'s config
+round-trip, and **in no conditional anywhere**. `swarm_worker` branches on `"Unified Ledger"`
+and on `"Targeted Filter"` — the latter not offered in the UI at all, arriving only from
+`macro_factory` templates.
+
+**Description:**
+Accidentally correct, which is the dangerous kind of correct. When `payload_mode` is anything
+other than `"Unified Ledger"`, the routing override simply does not fire, so
+`routing_payload_path` keeps the value it already had — the completing node's own artifact or
+ledger. For an intra-step agent→agent hop that *is* "preceding node only", so the feature
+appears to work.
+
+It is nonetheless unimplemented, and that matters in three ways:
+
+1. **It is undocumented behaviour by omission.** Nothing states the intent, so any future change
+   to the default path silently changes this mode. E1 was exactly that: a change to the default
+   path with unexamined consequences for a mode nobody had written down.
+2. **It does nothing at a step boundary**, per the entry above.
+3. **It blocks the operator's stated `CTRL_REVIEW` design**, which is conditioned on it: *"if
+   Unified Ledger is selected the downstream agents just see an entry on the ledger from the
+   user; if Preceding Node were selected then the node ledger that precedes `CTRL_REVIEW` and
+   the HITL injection will be passed downstream."* A design cannot branch on a mode that exists
+   only as a fall-through.
+
+**Also worth resolving while here:** there is no enum or shared constant for payload modes. The
+literals `"Unified Ledger"`, `"Preceding Node Only"` and `"Targeted Filter"` are duplicated
+across `topology_engine`, `swarm_worker`, `flow_engine`, `macro_factory`, `admin_tools`,
+`nexus_plex` and `undo_manager`. Three spellings of one concept across seven files is the
+condition under which a fourth appears. Introducing the enum touches all seven, which is why it
+was left out of the E1 fix rather than bundled into it.
+
+**Related:** *Interactive Node Configuration Modal* — that entry's whole subject is making
+per-node Payload Mode authorable and visible, and this is the reason it currently cannot be
+trusted once authored.
