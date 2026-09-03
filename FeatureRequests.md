@@ -2306,3 +2306,205 @@ was left out of the E1 fix rather than bundled into it.
 **Related:** *Interactive Node Configuration Modal* — that entry's whole subject is making
 per-node Payload Mode authorable and visible, and this is the reason it currently cannot be
 trusted once authored.
+
+***
+
+# ENTRIES ADDED 2026-09-02 (evening) — public exposure and schema doctrine
+
+***
+
+### Feature Name: Public remote exposure — `.oracle_artifacts/` is half-tracked and `.kiro_artifacts/` was staged wholesale
+**Abstract:** The GitHub remote is public, and privacy rests entirely on a local unshared `.git/info/exclude` that only stops *untracked* files — so `.oracle_artifacts/` is simultaneously tracked-and-public for older files and ignored for newer ones, and a wholesale `git add .kiro_artifacts/` brought conversation transcripts containing a home-directory path under version control unscanned.
+**Date/Time Entered:** 2026-09-02T22:00:00-04:00
+**Status:** Unfulfilled — audit complete, remediation open
+**Verified:** Reproduced. Full audit in
+`.kiro_artifacts/2026-09-02_public_repository_exposure_audit.md`: unauthenticated GitHub API
+probe confirms `private: False, visibility: public`; `git grep` across six credential
+patterns and seven PII patterns against both `origin/main` and local `HEAD`.
+
+**Description:**
+**The reassuring half, established first because it bounds the problem.** No credentials of
+any kind are exposed — all six patterns clean on both the public tree and the local tree.
+No databases were ever pushed: the last pushed commit, titled *"add real MACCRE sample
+databases"*, added a **51-line README only**, and a full tree scan finds zero `.db`,
+`.db-wal`, `.db-shm`, `.sqlite` files. No machine names, no IP addresses. The four email
+addresses found are openpyxl and PIL library-maintainer addresses from vendored metadata —
+false positives, recorded so they are not re-investigated.
+
+**What is exposed** (window 2026-08-09 to 2026-08-23, remote at `7961750`):
+- The operator's real name, in `sovereign_agentic_evolution_report.md:4`, as a deliberate
+  authorship credit. A choice, not a leak — recorded so it stays a conscious one.
+- The Windows username, via four dead `file:///C:/Users/<user>/.gemini/antigravity/brain/…`
+  transcript links in two `DETplanning-TUI Refactor-*.md` files, plus one real path used
+  as an illustration in a published Substack draft. Low value: the links resolve to
+  nothing for any other reader, and the session UUIDs are meaningless without the local
+  files. They are also simply broken references, so removing them improves the documents.
+- `B:\EXO_GANS` across 126 places in 34 files — directory structure, not a secret.
+
+**Severity: LOW.** Nothing exploitable. Recorded anyway, because an unaudited public
+surface is a different thing from an audited one, and the audit is what makes the
+difference statable.
+
+**The structural finding, which matters more than any individual hit.**
+`.git/info/exclude` only prevents *untracked* files from being added. Files already tracked
+stay tracked, forever, and keep being committed regardless of the rule. `.oracle_artifacts/`
+is therefore **MIXED** — `MACCRE_Master_Agent_Library.md` (37.5 KB) and the 2026-07-25
+Substack drafts are tracked and public, while anything created after the exclude was added
+is ignored. A directory that is half in and half out will surprise whoever next assumes
+either, and this has now been rediscovered twice.
+
+**A correction to a claim made in session on 2026-09-01,** recorded because it was acted
+on: it was stated that `.oracle_artifacts/` has no version control. That was wrong for
+exactly the reason above, and it understated the exposure while overstating the backup risk.
+
+**Preventable, still unpushed** — three files carrying the username:
+`.kiro_artifacts/2026-08-28_phase_6.12_full_conversation.md:22`,
+`.kiro_artifacts/2026-08-28_phase_6.12_user_requirements.md:14`, and
+`ROLLBACK_2026-08-29_PHASE_6.12_FAILURE.md:226`. All three arrived via commit `762f614`'s
+`git add .kiro_artifacts/` — a wholesale directory add with no content scan, performed by
+the agent. That single command is the entire preventable set, and it is why the
+`git-manager` agent's first hard rule is a refusal to add a directory.
+
+**Time-critical action.** GitHub → Insights → Traffic answers "was anything pulled" over a
+**14-day rolling window**. Last push 2026-08-23; the window closes around **2026-09-06**.
+After that the question is permanently unanswerable. 0 forks, 0 stars, 0 watchers is the
+only engagement signal obtainable without authenticated access. Record the numbers whatever
+they say — a recorded zero is evidence, an unrecorded zero is not.
+
+**Recommended remediation, in order:** read and record Traffic; scrub the three unpushed
+files; resolve `.oracle_artifacts/`'s mixed state deliberately in one direction or the
+other; remove the four dead `file:///` links; then decide on `git push`. **Do not rewrite
+public history** — the exposed items do not justify it, and a rewrite does not un-publish
+anything that was already cloned.
+
+**Explicitly not covered by the audit, and honest about it:** history was not scanned, only
+the `origin/main` *tree* — a secret committed and later deleted would not appear. Binary
+files were skipped, including the tracked-but-unpushed
+`.kiro_artifacts/kiro-session-*.zip` (2.67 MB), which is a session archive and the single
+most likely remaining place for transcript PII. Closing that gap needs `gitleaks` or
+`trufflehog` across all refs, and has not been run.
+
+**Related:** the `git-manager` entry below; risk R8 (nothing pushed, six commits on one
+disk); *Session Manager / File Cabinet alignment* (the same public/private question
+recurs the moment an importer enumerates artifacts).
+
+***
+
+### Feature Name: `git-manager` sub-agent — public-remote git steward
+**Abstract:** A workspace sub-agent that scans staged content and unpushed commits for credentials and PII, refuses wholesale directory adds, surfaces mixed tracked/ignored directories, and reports push state and evidence gaps before anything reaches a public remote.
+**Date/Time Entered:** 2026-09-02T22:00:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-02T22:30:00-04:00
+**Verified:** Created at `.kiro/agents/git-manager.md` (14,250 bytes, workspace-scoped,
+markdown with YAML frontmatter) and exercised on a read-only repository-state task.
+**Completion Metric:** Agent definition present and discoverable from `.kiro/agents/`.
+Encodes six requirements derived from the exposure audit above: credential and PII pattern
+sets with environment-resolved identifiers rather than hardcoded guesses; a hard refusal of
+`git add <dir>` / `.` / `-A` / `-u`; mixed tracked/ignored detection reported unprompted;
+push-state and evidence-gap reporting; public-versus-private destination statement before
+any push; and history-scan awareness that forbids the phrase "the repository is clean"
+without an attached scope. No gate ran: the change is two markdown files, neither under
+`ruff.toml` or `pyrightconfig.json`.
+
+**Description:**
+Operator-proposed. It exists because privacy in this workspace is not a property of the
+repository — it is a property of *this machine's* `.git/info/exclude`, which no clone
+inherits and which nothing in the committed tree records.
+
+**Three doctrine bindings, each traceable to a named incident:**
+- *Never report success over unperformed work* — a scan whose output did not render is not
+  a clean scan. `SKIPPED`, `NOT-SCANNED` and `INCOMPLETE` are distinct statuses from
+  `CLEAN`, and every result carries its scope in the same sentence. This rule was earned
+  during the audit itself, when a PowerShell block swallowed its output and the honest
+  response was to re-run rather than infer.
+- *An approximately-correct identifier is worse than an absent one* — findings cite
+  `path:line` or state the location is unknown. The username is resolved from the
+  environment at scan time, never remembered.
+- *Records are append-only* — audits are written to `.kiro_artifacts/` with dated
+  filenames, never overwritten, and an `ACCEPT`ed finding remains a finding with its
+  rationale recorded.
+
+**Two limitations recorded rather than glossed, both flagged by the agent's author:**
+1. **Write access was granted beyond the original specification.** Needed for two things
+   only: creating dated audit artifacts, and applying an operator-approved scrub at a cited
+   line. Everything else is proposed as a diff. Removing `"write"` from the tools array
+   degrades it to inline reporting and leaves the rest intact.
+2. **Shell access cannot be restricted per git subcommand.** The tool layer sees one shell
+   tool and cannot permit `git status` while denying `git push --force`. So "cannot push
+   autonomously" is enforced by the system prompt — a **probabilistic control, not a hard
+   one**. A hard guarantee needs a `pre-push` hook or a wrapper ahead of `git` on `PATH`.
+   Recorded because a governance control that is believed to be hard and is actually soft
+   is worse than one known to be soft.
+
+**Next, if wanted:** the `pre-push` hook that makes (2) deterministic, in the same spirit as
+omni living outside the repository it governs.
+
+***
+
+### Feature Name: Master MACCRE Schema Doctrine, with deterministic enforcement in `omni`
+**Abstract:** Establish one canonical, versioned definition of MACCRE's load-bearing data shapes; enforce conformance deterministically in `omni` rather than in the context window; and reduce steering to a short rule that points at the enforced doctrine instead of restating it.
+**Date/Time Entered:** 2026-09-02T22:00:00-04:00
+**Status:** Unfulfilled
+**Verified:** N/A — new capability. Motivated by a reproduced defect (below).
+
+**Description:**
+**The incident that earned this.** From `_hydrate_topology`:
+
+> *"Tether_ID is last and was previously absent. The scatter auto-wrap computed a tether and
+> wrote it into every row dict, but this flatten step had no slot for it, so it was dropped
+> before reaching the CSV — and with it the whole tether-scoped fan-in path."*
+
+A 16-column ordering mismatch between two readers of one shape cost three live runs. That is
+the class of defect a pinned canonical shape prevents, and no amount of careful reading
+prevents it reliably.
+
+**The architecture, which is the operator's refinement and is better than putting the
+doctrine in steering alone.** Three parts with distinct jobs:
+
+1. **The doctrine** — one versioned document defining the load-bearing shapes: the
+   `task_queue` schema, `route_task`'s signature, the topology CSV column order,
+   `DeterministicNodeResult`, `PayloadMode`, `ValidationReport` / `PreflightReport` issue
+   shapes, and the TBR/TFR/SOP report header.
+2. **Deterministic enforcement in `omni`** — a schema conformance stage that fails the gate
+   when code and doctrine diverge. This is the load-bearing part: it moves enforcement out
+   of the context window entirely, so correctness does not depend on an agent having read
+   and retained a long document. It also mirrors why `omni` lives outside the repository —
+   governance tooling should not depend on the thing it governs.
+3. **Minimal steering** — a short rule stating that the schema doctrine is authoritative
+   and that `omni` enforces it. Steering is injected on *every* turn, so an exhaustive
+   catalogue there is paid for permanently; a pointer costs almost nothing.
+
+**Why enforcement is not optional.** A schema doctrine in steering that drifts from the
+code becomes a confident lie injected into every turn — actively worse than no doctrine,
+because an agent will match the document instead of reality. This is principle 5 applied to
+the governance artifact itself: *every claim a document makes about behaviour needs a test
+that fails when the claim goes false.*
+
+**Scoped work, in order:**
+- **(a) Survey.** Catalogue every schema in use, where each is defined, where each is
+  read, and how they compose. Known starting points: two terminal-sentinel sets, four
+  `Next_Node`/`Wait_For` parsers, three node-id derivations (`NAME_{i}` vs `NAME_S{i}` vs
+  `CTRL_MERGE_{i}`), and payload-mode string literals duplicated across seven files.
+- **(b) Congruence analysis.** For each shape used by more than one reader, state whether
+  the readers agree and by what margin they diverge. Divergence margin is the useful
+  metric: a parser that disagrees only on a delimiter is a different risk from one that
+  disagrees on column count.
+- **(c) Doctrine.** Write the canonical definitions, versioned.
+- **(d) Correction candidate list.** Every existing schema needing alignment, with the
+  blast radius of aligning it. Append-only, so a deferred correction keeps its reasoning.
+- **(e) Enforcement.** Build the conformance check into `omni` as a gate stage.
+- **(f) Steering.** Reduce to the pointer rule, with path-scoped conditional inclusion
+  following `orchestration_oracle_principles.md`'s precedent.
+
+**Constraint worth flagging before (e) starts:** `omni` lives at `C:\OmniBuilder\`, outside
+this repository and outside its version control. A conformance check added there is not
+backed up by anything in `B:\EXO_GANS`, and the doctrine it enforces would live inside the
+repo while the enforcer lives outside it. That separation is deliberate and correct for
+governance independence, and it means the two can drift in the other direction — an
+enforcer checking a doctrine version that no longer exists. Version the doctrine explicitly
+and have `omni` assert the version it is checking against.
+
+**Related:** the `PayloadMode` enum task in the payload-contract plan is the first concrete
+instance of (c) and (d). *Interactive Node Configuration Modal* and *Standardized Modal
+Catalog* both depend on stable shapes. The `omni telemetry logger` entry is the nearest
+precedent for extending `omni` with a new stage.
