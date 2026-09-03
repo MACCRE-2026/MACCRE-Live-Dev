@@ -233,9 +233,10 @@ commits         5 ahead of origin/main — NOTHING PUSHED
                 c9b29a5  E1/E2
                 762f614  Track A + D checkpoint
                 f7b326f  (was already unpushed)
-omni qa         PASS, whole project
-pytest          754 collected / 754 passed, 22 test files
-omni smoke      ALL CHECKS PASSED
+omni qa         PASS, whole project                          (observed 2026-09-02)
+pytest          754 collected / 754 passed, 22 test files    (observed 2026-09-02, TWICE)
+                753 passed / 1 FAILED                        (observed 2026-09-03 00:11)
+omni smoke      ALL CHECKS PASSED                            (observed 2026-09-02)
 register        51 entries
 C: free         2.26 GB   (was 0.11 GB — see below)
 pip cache       F:\pip_cache   (%APPDATA%\pip\pip.ini)
@@ -304,3 +305,45 @@ stable payload contract → the 16+ enumerated 4.99 actions, Orchestration's eig
 
 **The single fastest confidence check on resume** is to press pause once in a live TUI. It
 covers F1, F2 and F3 at once, and F3's wiring currently has no automated coverage whatsoever.
+
+---
+
+## 11. Correction — the suite is not deterministic, and §8's gate line was stale within a day
+
+Added 2026-09-03. The gate line in §8 read `pytest 754 collected / 754 passed` with no date
+attached. That was true as observed — **twice** on 2026-09-02 — and false when re-run on
+2026-09-03, which is worse than being simply wrong, because the number carried no way to
+tell which.
+
+```
+FAILED tests/test_integration_mandatory.py::TestMandatoryMultiStepFlow::
+       test_linear_flow_stays_single_threaded
+AssertionError: linear flow used slots {0, 1}
+753 passed, 1 failed
+```
+
+Identified by the independent analysis in
+`.kiro_artifacts/2026-09-03_MACCRE_competitive_and_strategic_position.md`, which ran the
+gates itself rather than inheriting §8's numbers. That is the correct discipline and it is the
+reason the staleness surfaced in a day rather than a month.
+
+**This is a second load-sensitive test, and it is not the same class as the first.** §9's
+wall-clock flake asserts a timing bound — a bound that loosens under load is a measurement
+artifact. This one asserts that a linear flow never opens a second worker slot. An assertion
+about *concurrency* that changes answer under load is a statement about the pool, not about
+the clock. Full detail and the candidate mechanism in the register entry *A linear flow opened
+two worker slots*.
+
+**Three consequences for this document specifically:**
+
+1. **§2's UT-1 status is unaffected** — tests 1, 3, 4 and 5 remain as recorded, and the live
+   evidence for E1 and E2 in §4 stands independently of the suite.
+2. **§3's UT-0 obligation is now blocked, not merely unstarted.** The demand estimator is the
+   component UT-0 exists to measure, and there is an unexplained non-determinism in it. A
+   baseline taken now would not be a baseline.
+3. **Every gate line in every artifact in this project now needs a date.** Principle 5 has
+   been applied rigorously to code and loosely to prose. §8 is the proof: a claim about
+   behaviour with no test and no timestamp behind it.
+
+**Standard adopted:** gate results carry the date they were observed. A result without a date
+is to be treated as unverified regardless of how recently the document was written.

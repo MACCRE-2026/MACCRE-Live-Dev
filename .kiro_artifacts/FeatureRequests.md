@@ -2508,3 +2508,194 @@ and have `omni` assert the version it is checking against.
 instance of (c) and (d). *Interactive Node Configuration Modal* and *Standardized Modal
 Catalog* both depend on stable shapes. The `omni telemetry logger` entry is the nearest
 precedent for extending `omni` with a new stage.
+
+***
+
+# ENTRIES ADDED 2026-09-03 — findings from the competitive analysis
+
+**Source.** `.kiro_artifacts/2026-09-03_MACCRE_competitive_and_strategic_position.md`, an
+independent analysis run in a parallel session against commit `c39b9fb`. It ran the gates
+itself rather than inheriting them, and produced three findings that are defects or
+prerequisites rather than opinions. Those three are recorded here. Its recommendations to
+withdraw or reduce eleven planned items are **not** actioned in this batch — each needs its
+own `WITHDRAWN` entry with rationale under the Second Amendment, and that is a separate,
+deliberate pass.
+
+***
+
+### Feature Name: No event-sourced execution history — the missing floor under every provenance ambition
+**Abstract:** `task_queue.lock_status` is mutated in place, so the queue records what a task *is* and never what *happened*; there is no `task_events` table anywhere. MACCRE cannot reconstruct a run, which makes append-only provenance, CrumbRunner and the session archive all rest on a substrate that overwrites itself.
+**Date/Time Entered:** 2026-09-03T02:00:00-04:00
+**Status:** Unfulfilled — **recommended as the Epoch 4 gate**
+**Verified:** Reproduced by code read. `CREATE TABLE` search across the tree finds no
+`task_events` or equivalent. `route_task`, `fetch_and_lock_task`, `pause_task`,
+`release_task` and `reclaim_zombie_locks` all `UPDATE` `lock_status` in place. The prior
+values are not retained anywhere.
+
+**Description:**
+**The mechanism.** A row's `lock_status` goes `open` → `locked` → `completed`. Each
+transition overwrites the last. When the column reads `completed`, the facts that the row
+was ever open, ever locked, by which worker, and when, are gone. The table answers *what is*
+and cannot answer *what happened*.
+
+An event log appends instead — one row per transition, nothing overwritten, with actor,
+timestamp and content digest.
+
+**Two costs already paid, both recorded elsewhere in this register as separate mysteries:**
+
+1. `job_20260901-205047-40sp` is stuck at session status `active` because its process was
+   killed and the `finally` never ran. With an event history that session's true terminal
+   state is reconstructable; without one it is permanently ambiguous.
+2. The `studio_session__job_20260820-020251-xj6z` row that has been `locked` for twelve days
+   is the same shape — a state with no history explaining how it got there.
+
+**Why this is a prerequisite and not a feature.** Four register entries presuppose it
+without naming it:
+
+- *System-wide provenance doctrine* — an **append-only** provenance record cannot be built
+  on a substrate that mutates in place. The doctrine's own append-only corollary is violated
+  by the table it would run on.
+- *Containerized session archive* — "the immutable record of the session" **is** the event
+  log. There is currently nothing immutable to archive.
+- *CrumbRunner* — has nothing to attest over. Attestation over a history that cannot be
+  replayed is, precisely, a signature on a summary.
+- Run reconstruction after a crash, which is what both incidents above are.
+
+**And it is the missing half of the pattern MACCRE already converged on.** The analysis
+established that deterministic-control-over-probabilistic-execution is the standard
+durable-execution pattern (Temporal, Azure Durable Functions, Restate, Obelisk), not a
+MACCRE invention — and that in every mature implementation the split is **load-bearing on
+replay**. Temporal re-runs workflow code against recorded history and errors if the path
+diverges. MACCRE took the split and left the history, so its determinism is a **convention
+about which node types call an LLM** rather than a property anything verifies.
+
+The `CTRL_RECURSION` incident — a node literally named `FAILED` that was claimed, ran real
+inference, and fed its output to the next step — is exactly the class of defect replay
+verification catches and convention does not.
+
+**Shape of the work, for sizing later:** an append-only `task_events` table beside the
+existing mutable `task_queue`, one row per transition. The queue stays as the fast
+current-state index; the log becomes the truth. This is additive and does not require
+rewriting the claim path, which is the strongest part of the codebase and should not be
+touched.
+
+**Recommended handling:** treat it as the Epoch 4 gate the way the credential vault is the
+Epoch 5 gate. Both have the same failure shape — the hardest prerequisite on a critical
+path, named only inside the descriptions of the things it blocks, and therefore never
+scheduled.
+
+**Consequence for sequencing, stated plainly:** building CrumbRunner or any private
+provenance implementation *before* this exists is, per the analysis, **the single most likely
+large mistake available right now** — and the most attractive item in Epoch 4.
+
+**Related:** *System-wide provenance doctrine*, *Containerized session archive*, *CrumbRunner*,
+*A timed-out step does not stop the flow* (COMPLETED — its `unfinished_as` reason currently
+survives only in a log line, which an event log would persist properly), and the
+`git-manager` entry's evidence-gap rule.
+
+***
+
+### Feature Name: `task_queue` has three divergent CREATE TABLE statements
+**Abstract:** `CREATE TABLE IF NOT EXISTS task_queue` appears in three files with three different column sets; because the statement is a no-op against an existing table, whichever code path creates the database first decides the schema for everything else.
+**Date/Time Entered:** 2026-09-03T02:00:00-04:00
+**Status:** Unfulfilled
+**Verified:** Reproduced by code read across all three sites. **The two consequences below
+are NOT reproduced at runtime** — whether either path is live in normal operation or
+vestigial is an open ten-minute question that decides whether this entry is two defects or
+two dead branches.
+
+| Site | Columns | `output_path` | `locked_at` | tether / `flow_vector` | `UNIQUE(job_id,current_node)` |
+|---|---|---|---|---|---|
+| `maccre_core/orchestration/local_broker.py` | 14 + 8 `ALTER` upgrades | yes | yes | yes | yes |
+| `maccre_core/patterns/pattern_executor.py` | 10 | **no** | **no** | **no** | yes |
+| `maccre_tui/nexus_plex.py` | 11 | **no** | **no** | **no** | **no** |
+
+**Description:**
+This is principle 4 — two representations of one thing will drift — with **three** copies,
+in the single most load-bearing table in the system. It is the same shape as the node-ID
+divergence already in this register, and more consequential, because writes are already at
+stake rather than prospective.
+
+The broker partially self-heals: its `ALTER TABLE` loop adds missing columns on open, and it
+re-asserts `idx_job_node` as a recovery index for databases predating the constraint. That
+mitigation is why this has not yet been felt, and it is also why it is easy to miss.
+
+**Exposure 1 — `nexus_plex.py` creates the table without the uniqueness constraint, then
+issues `INSERT OR REPLACE INTO task_queue`.** With no constraint there is nothing for
+`OR REPLACE` to conflict against, so it degenerates to an append. The broker's recovery index
+would fix this *if the broker opens the database afterwards*; if the TUI path creates it and
+inserts first, duplicate `(job_id, current_node)` rows are possible — and
+`topology_graph.node_ids` already warns that `task_queue` collapsing two rows into one means
+a node never runs as authored.
+
+**Exposure 2 — `pattern_executor.py` inserts rows without `output_path`, which holes the E1
+fix.** `get_completed_payload_paths` reads
+`COALESCE(NULLIF(output_path,''), payload_path)`. A flow driven through `pattern_executor`
+therefore falls back to **pre-E1 semantics** — the exact `Merged 8 sources` over one file
+eight times that commit `c9b29a5` was written to close. The fix is correct in the broker and
+bypassed by a second writer.
+
+**Recommended:** one owner for the DDL. The broker already has the migration idiom and the
+recovery index; the other two sites should call it rather than restate it. That is the same
+remedy as the terminal-sentinel and parser drift recorded elsewhere: one seam, everything
+reads through it.
+
+**Reproduce before sizing.** Determine first whether either path executes in normal
+operation.
+
+**Related:** *Node-ID convention divergence between TUI and engine*; the Master MACCRE Schema
+Doctrine entry, for which this is now the strongest single motivating example — a schema
+doctrine with deterministic `omni` enforcement would fail the gate on three divergent DDLs
+for one table.
+
+***
+
+### Feature Name: A linear flow opened two worker slots — the suite is not deterministic
+**Abstract:** `test_linear_flow_stays_single_threaded` failed with `linear flow used slots {0, 1}` on a full-suite run, while passing 5/5 in isolation and passing two full-suite runs on the same tree. Either the pool over-provisions on linear flows or the test's premise is wrong, and the candidate mechanism sits in the demand estimator that UT-0's baseline depends on.
+**Date/Time Entered:** 2026-09-03T02:00:00-04:00
+**Status:** Unfulfilled — **blocks UT-0**
+**Verified:** **Observed, NOT reproduced deterministically.** Failed once on a full-suite run
+at 2026-09-03 00:11 (`753 passed / 1 failed`). Passed 5/5 in isolation, 22–61 s each. Passed
+**two** full-suite runs on the same commit on 2026-09-02 (`754/754` twice). So it returns
+different answers on different runs of identical code.
+
+**Description:**
+**This is not the known flaky wall-clock test, and the distinction matters.**
+`test_eight_lane_scatter_beats_sequential_wall_clock` asserts a timing bound; a bound that
+loosens under load is a **measurement artifact**. This test asserts that a *linear* flow
+never opens a second worker slot; an assertion about concurrency that changes answer under
+load is a **statement about the pool**.
+
+**Candidate mechanism**, from `swarm_pool.py:619`:
+
+```python
+target = min(self.max_workers, max(1, self.active_worker_count() + ready))
+```
+
+With one worker active and one row visible as ready, `target` becomes 2. In a linear flow the
+next step's row can be queued while the current worker is still finishing, so a second worker
+is spawnable. Under that reading the test has been passing by timing luck rather than by
+design.
+
+**Not distinguished from the benign alternative:** slot ids are returned to `_free_slots` on
+retirement and reused, so `{0, 1}` may record two *sequential* workers rather than two
+concurrent ones. Those are different defects with different fixes and different sizes, and
+the tracker cannot currently tell them apart.
+
+**Why it blocks UT-0.** The demand estimator is the component UT-0 is meant to measure. A
+baseline taken while an unexplained non-determinism sits in it is not a baseline. Per
+principle 7 the size is unknown until reproduction completes.
+
+**Recommended first step:** make the tracker record whether the two slots were ever
+simultaneously inside node execution, which distinguishes over-provisioning from slot reuse
+in one run. Then either fix the pool or restate the assertion with a stated tolerance.
+
+**Second-order finding, recorded because it changes how every future gate result is read.**
+Two tests in this suite now give different answers depending on what else is running. Principle
+6's rule — *judge on the collected count, never the pass count alone* — is therefore no longer
+sufficient on its own. The suite needs either both tests deterministic, or an explicitly named
+and documented flake tolerance. Otherwise every gate result carries an unstated asterisk, and
+this register already contains one document that asserted `754/754` while `753/754` was true.
+
+**Related:** the wall-clock flake noted in the 4.99 status artifact §9; *UT-0*; and
+`omni qa` running no tests, which is why static analysis passing says nothing here.
