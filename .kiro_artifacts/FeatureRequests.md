@@ -2699,3 +2699,91 @@ this register already contains one document that asserted `754/754` while `753/7
 
 **Related:** the wall-clock flake noted in the 4.99 status artifact §9; *UT-0*; and
 `omni qa` running no tests, which is why static analysis passing says nothing here.
+
+***
+
+# ENTRY ADDED 2026-09-03 (second batch) — found by publishing the test suite
+
+***
+
+### Feature Name: Privacy exclusions silently shrank the quality gate — `omni qa` passed over 17 unseen errors
+**Abstract:** Ruff respects `.gitignore` and `.git/info/exclude` by default, so every directory excluded for privacy was also invisible to `omni qa`. `ruff.toml` names `tests/*` and `scripts/*` in `per-file-ignores`, asserting both were linted; neither was. Un-excluding `tests/` to back it up restored it to the gate, and it failed on first contact.
+**Date/Time Entered:** 2026-09-03T16:40:00-04:00
+**Status:** Partially fulfilled — `tests/` restored and clean; `scripts/`, `_legacy/`, `scratch/` still invisible
+**Verified:** **Reproduced.** `ruff check . --no-respect-gitignore --statistics` reports 17
+errors that plain `omni qa` does not see. The three `F821` results were traced to a specific
+partial rename, fixed, and re-verified to `All checks passed!` on `--select F821`.
+
+**Description:**
+**The mechanism.** Ruff's `respect-gitignore` defaults to true and honours
+`.git/info/exclude` as well as `.gitignore`. `.git/info/exclude` is where this project keeps
+its private-internals list. So a control whose purpose is *"do not publish this"* was also
+silently enforcing *"do not check this"*. The two intentions are unrelated and were never
+meant to be coupled.
+
+**The config asserted the opposite.** `ruff.toml` line 17:
+
+```toml
+per-file-ignores = { "tests/*" = ["F841"], "scripts/*" = ["E402", "E401"] }
+```
+
+Naming a per-file-ignore for a path is a statement that the path is linted — otherwise the
+entry is meaningless. Both directories were named, and the tool visited neither. This is
+principle 5 exactly, and it is the *same incident already in the doctrine* in a new costume:
+"a type-checker config named three targets while the tool was passed an explicit path that
+overrode them, so two files had never been checked and held six real errors." Same failure,
+different override mechanism — there a CLI argument, here a gitignore.
+
+**It is also a variant the omni mandate does not describe.** The mandate warns against
+*scoped invocations* — `ruff check maccre_core/...` instead of `omni qa`. This was a
+full-project `omni qa` whose scope had been reduced invisibly, from outside the invocation.
+The mandate's remedy ("always run the whole-project gate") was followed and did not help.
+
+**What was hiding — 17 errors, one group of which is a real defect:**
+
+| Location | Count | Kind |
+|---|---|---|
+| `scripts/maccre_micro_test.py` | **3** | **`F821` undefined-name** |
+| `scratch/` (5 files) | 9 | `F401` unused-import, `F541`, `F841` |
+| `_legacy/Gemini_Hoarder_Ecosystem/` (3 files) | 4 | `F541`, `F841` |
+| `tests/test_swarm_pool.py` | 1 | `F401` unused `pytest` (fixed, now gate-covered) |
+
+**The three `F821`s were a partial rename, and they mattered.** `maccre_micro_test.py`
+imports `get_provider_credential` from `windows_vault` at L515, then calls
+`get_native_credential("MACCRE_Sovereign")` at L531, L540 and L551. No such name exists
+anywhere in the tree; `windows_vault` defines only
+`get_provider_credential(target_name: str) -> str | None`, an identical signature. The first
+of four call sites (`load_registry`, L517) was updated during the rename and the other three
+were not.
+
+This is principle 4 — one thing, two names, drift — and its consequence is principle 3: the
+three affected probes are `_run(...)` checks in **the system's own micro-test harness**,
+covering model-registry surfaces and the sentinel health report. They could never execute.
+A harness whose credential checks raise `NameError` cannot verify what it claims to verify.
+Fixed by renaming the three call sites; `--select F821` now passes.
+
+**Recommended remedy, in order:**
+
+1. **Add `--no-respect-gitignore` to omni's ruff invocation.** This decouples "private" from
+   "unchecked", which is the actual bug. It belongs in `omni` at `C:\OmniBuilder\omni.py`
+   rather than in this repo — deterministic, outside the context window, the same argument
+   already accepted for schema enforcement. Anything genuinely not worth linting should be
+   named in `ruff.toml`'s `exclude`, where the decision is visible, rather than inherited
+   from a privacy file.
+2. **Reconcile the two exclusion lists.** `ruff.toml` excludes `_archive` and `user_scripts`
+   deliberately; `_legacy` and `scratch` are excluded only by accident of git. Either is
+   defensible, but it should be a decision rather than a side effect.
+3. **`tests/` is still not type-checked.** `pyrightconfig.json` includes only `maccre_core`,
+   `maccre_mcp.py` and `maccre.py`. The lint half of the gate now covers the suite; the type
+   half still does not — and now by explicit config rather than by accident, which is at
+   least honest but is a separate open question.
+
+**Wider implication for every past gate claim in this project.** Every "omni qa PASS" recorded
+in any artifact before 2026-09-03 was true only of the non-excluded tree, and no artifact says
+so, because nothing knew. This does not invalidate those results for `maccre_core`, which was
+always covered. It does mean the suite's own 11,505 lines carried no lint guarantee for their
+entire existence.
+
+**Related:** the *Master MACCRE Schema Doctrine* entry — this is a second instance of the
+same argument, that a claim about behaviour needs mechanical enforcement or it decays into a
+confident lie; *Node-ID convention divergence*; the three divergent `task_queue` DDLs.
