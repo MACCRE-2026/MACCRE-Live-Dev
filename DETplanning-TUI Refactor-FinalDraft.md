@@ -1,6 +1,6 @@
 # NexusPlex v2 — Final Planning Clarifications (Round 3)
 
-**Previous Plan:** [implementation_plan.md (Round 2)](file:///C:/Users/wilke/.gemini/antigravity/brain/aeb9a18e-bdef-4c99-b1d0-9887cd54aea8/implementation_plan.md)
+**Previous Plan:** [implementation_plan.md (Round 2)](file:///C:/Users/<username>/.gemini/antigravity/brain/aeb9a18e-bdef-4c99-b1d0-9887cd54aea8/implementation_plan.md)
 **Git Rollback:** `950996f`
 
 ---

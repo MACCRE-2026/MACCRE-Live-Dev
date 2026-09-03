@@ -449,7 +449,7 @@ Each research agent's full report is available in its conversation transcript:
 
 | Agent | Report | Conversation |
 |-------|--------|-------------|
-| Widget Surface Mapper | 31 classes, 100+ CSS IDs, 3 orphans, 3 bugs | [Transcript](file:///C:/Users/wilke/.gemini/antigravity/brain/11653d1b-cf3f-4d6a-af41-28239f699a86/.system_generated/logs/transcript.jsonl) |
-| Flow Registry Assessor | 15-item removal checklist, 3 files | [Transcript](file:///C:/Users/wilke/.gemini/antigravity/brain/ede2fdec-d9d1-4b16-aa3d-2c3bc9e44d20/.system_generated/logs/transcript.jsonl) |
+| Widget Surface Mapper | 31 classes, 100+ CSS IDs, 3 orphans, 3 bugs | [Transcript](file:///C:/Users/<username>/.gemini/antigravity/brain/11653d1b-cf3f-4d6a-af41-28239f699a86/.system_generated/logs/transcript.jsonl) |
+| Flow Registry Assessor | 15-item removal checklist, 3 files | [Transcript](file:///C:/Users/<username>/.gemini/antigravity/brain/ede2fdec-d9d1-4b16-aa3d-2c3bc9e44d20/.system_generated/logs/transcript.jsonl) |
 | DET_ Rename Impact | 10 files, ~80 lines, dual-prefix strategy | (Done by primary agent — data in this plan) |
-| Info Panel & Layout Mapper | Collapse patterns, Nexus CSS, detail panel logic | [Transcript](file:///C:/Users/wilke/.gemini/antigravity/brain/02ccbbc3-9ed0-4919-821c-6cff86ebdced/.system_generated/logs/transcript.jsonl) |
+| Info Panel & Layout Mapper | Collapse patterns, Nexus CSS, detail panel logic | [Transcript](file:///C:/Users/<username>/.gemini/antigravity/brain/02ccbbc3-9ed0-4919-821c-6cff86ebdced/.system_generated/logs/transcript.jsonl) |
