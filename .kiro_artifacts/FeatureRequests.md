@@ -3804,3 +3804,72 @@ it appear unannounced.
 **Related:** the three withdrawal entries; *Write the audit as the essay*, whose evidence base this
 is; *Master MACCRE Schema Doctrine*, which is the same argument — a claim needs mechanical
 enforcement or it decays.
+
+***
+
+### Feature Name: The control node registry's own counts were wrong — removed rather than corrected
+**Abstract:** The file whose job is to be the single source of truth for node types carried three hand-maintained numbers describing one list, and two were wrong: a header reading `Active (16)` above 17 active rows, and a seeder docstring claiming 23 against 25. Fixed by **deleting the numbers**, not re-synchronising them: headers are now descriptive, and `ACTIVE_NODE_COUNT` / `COMING_SOON_NODE_COUNT` / `BUILTIN_NODE_COUNT` are derived from the list.
+**Date/Time Entered:** 2026-09-04T18:30:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-04T18:30:00-04:00
+**Completion Metric:** Measured before: `len(_BUILTIN_NODES)`=25, 17 `active` + 8 `ComingSoon`,
+header said `Active (16)`, docstring said 23. Measured after: three sections of 8 / 9 / 8 rows whose
+statuses are uniformly `active` / `active` / `ComingSoon`, totalling 25, with zero literal counts in
+any header or docstring. `tests/test_controlnode_registry_counts.py` adds 9 tests; **three separate
+revert-to-red proofs performed and restored** (see below). Gate 2026-09-04: `omni qa` PASS whole
+project 18:22, pytest **821 collected / 821 passed** 211.75s, `omni smoke` ALL CHECKS PASSED.
+**Prior art:** deriving a count from its collection rather than restating it is ordinary
+single-source-of-truth practice — DRY, and the same instinct as a computed property. No novelty
+claimed and none searched for; this entry asserts nothing general.
+
+**Description:**
+**The measured diagnosis differs from the reported one, and the difference matters.** The
+independent analysis reported *"the section comment reads `Active (16)` above a block of 16 rows,
+but a seventeenth `active` row sits in the next block."* Measuring found something more specific:
+
+| Section header | Rows | Statuses |
+|---|---|---|
+| `Active (16)` | **8** | 8 × `active` |
+| `Active — Wave 3 data-flow / routing nodes` (no count) | 8 | 8 × `active` |
+| `Coming Soon (8)` | **9** | **1 × `active`** + 8 × `ComingSoon` |
+
+There were **two** active blocks, not one. `Active (16)` was a plausible total of both (8 + 8) sitting
+above only the first, and the seventeenth active row — `CTRL_CONDITIONAL_ROUTE` — sat **below the
+"Coming Soon" divider while carrying `"status": "active"`.** So the header and the row's own status
+contradicted each other, and every reading of `Active (16)` undercounted by one.
+
+**Why the numbers were deleted instead of corrected.** Correcting them would have produced three
+accurate-today numbers describing one list, which is Doctrine 4 — two representations of one thing
+will drift — with three copies, in the file whose entire purpose is to end hand-maintained node
+tables. `CTRL_WAIT` is scheduled to be added, and the next edit would have re-broken them.
+
+So: headers became descriptive, the seeder docstring states no count, and three derived constants
+became the single source of truth. **Drift is now structurally impossible rather than merely
+absent.**
+
+**Three revert-to-red proofs, because a guard that cannot fail is decoration:**
+
+| Injected fault | Test that went red |
+|---|---|
+| `Coming Soon (8)` restored to a header | `test_section_headers_carry_no_literal_count` |
+| `CTRL_CONDITIONAL_ROUTE` misfiled under Coming Soon again | `test_no_row_sits_under_a_section_that_contradicts_its_status` |
+| — *(unplanned)* the guard caught its own author | see below |
+
+**The third one is worth recording.** On its first run, `test_the_seeder_docstring_carries_no_literal_count`
+**failed against my own docstring** — the historical note I had written quoted the old defective
+string verbatim, so the guard read a description as a live claim. The note was reworded to describe
+rather than reproduce, and the guard left strict. A test that objects to a *description* of the
+defect is behaving correctly; loosening it to accommodate prose would have re-opened the hole.
+
+**Two guards added beyond the reported scope**, both of the same class:
+`test_every_active_node_declares_a_handler` — an `active` node resolving to no handler is how a
+recursion limiter once inserted a node named `FAILED` that was then claimed and ran real inference —
+and `test_every_row_falls_inside_a_labelled_section`, which guards the parser, because a row drifting
+above the first divider would escape the section checks silently and make the whole file decorative.
+
+**Not changed, deliberately:** the many historical documents quoting 16 or 17 control nodes.
+`.oracle_artifacts/` records and prior audits are append-only and were true when written. Only the
+code's live claims were corrected. Anything needing a current figure now reads the derived constants.
+
+**Related:** *Master MACCRE Schema Doctrine*, which is the same argument at larger scale; the
+`CTRL_WAIT` work, which this had to land before; Doctrine 4 and Doctrine 5.

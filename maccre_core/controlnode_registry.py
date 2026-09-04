@@ -105,7 +105,18 @@ CREATE TABLE IF NOT EXISTS controlnode_registry (
 _DEFAULT_HANDLER_MODULE = "maccre_core.orchestration.deterministic_nodes"
 
 _BUILTIN_NODES: list[dict[str, Any]] = [
-    # ── Active (16) ───────────────────────────────────────────────────────────
+    # ── Active — core control primitives ──────────────────────────────────────
+    #
+    # Section headers carry NO counts, deliberately. They used to: this block was
+    # headed "Active (16)" while the list held 17 active rows, and the seeder's
+    # docstring claimed 23 while the list held 25. Three hand-maintained numbers
+    # describing one list is Doctrine 4 — two representations of one thing will
+    # drift — in the very file whose job is to end hand-maintained node tables.
+    #
+    # Counts are now derived: see ACTIVE_NODE_COUNT and COMING_SOON_NODE_COUNT
+    # below, and `tests/test_controlnode_registry_counts.py`, which fails if a
+    # literal count reappears here or if a row's status disagrees with the section
+    # it sits in.
     {
         "name": "CTRL_ANCHOR",
         "category": "Flow Control",
@@ -274,8 +285,10 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
         "handler_func": "_handle_payload_inject",
         "status": "active",
     },
-    # ── Coming Soon (8) ───────────────────────────────────────────────────────
     {
+        # Moved 2026-09-04. This row is `active` and sat below the "Coming Soon"
+        # divider, so the section header and the row's own status disagreed. It is
+        # the reason "Active (16)" undercounted by one: there are 17.
         "name": "CTRL_CONDITIONAL_ROUTE",
         "category": "Routing",
         "description": "Replaces implicit ROUTE_TO regex — explicit conditional routing.",
@@ -283,6 +296,7 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
         "handler_func": "_handle_conditional_route",
         "status": "active",
     },
+    # ── Coming Soon — declared, not yet implemented ───────────────────────────
     {
         "name": "CTRL_DIALOG",
         "category": "Orchestration",
@@ -349,6 +363,28 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
     },
 ]
 
+# ── Derived counts — the single source of truth ───────────────────────────────
+# Anything that needs to state how many control nodes exist reads these rather
+# than carrying its own number. Documents, prompts and the TUI included: the
+# registry is meant to be the answer to "how many control nodes are there", and it
+# can only be that answer if the count is computed from the list.
+#
+# The stale-count defect these replace was cheap in itself and expensive in what
+# it implied — an external reviewer noted that a public artifact claiming "16
+# control nodes" against a registry holding 17 active of 25 is falsifiable in one
+# command, and it is the registry that gets doubted, not the artifact.
+
+#: Control nodes implemented and dispatchable today.
+ACTIVE_NODE_COUNT: int = sum(1 for _n in _BUILTIN_NODES if _n["status"] == "active")
+
+#: Control nodes declared in the registry but not yet implemented.
+COMING_SOON_NODE_COUNT: int = sum(
+    1 for _n in _BUILTIN_NODES if _n["status"] == "ComingSoon"
+)
+
+#: Every builtin control node, of any status.
+BUILTIN_NODE_COUNT: int = len(_BUILTIN_NODES)
+
 
 class SQLiteControlNodeStore(ControlNodeStore):
     """SQLite-backed ControlNode registry. Thread-safe via check_same_thread=False."""
@@ -368,7 +404,18 @@ class SQLiteControlNodeStore(ControlNodeStore):
             conn.close()
 
     def _seed_builtins(self, conn: sqlite3.Connection) -> None:
-        """Populate the registry with all 23 builtin control nodes if table is empty."""
+        """Populate the registry with every builtin control node if the table is empty.
+
+        No count in this docstring, deliberately. It used to hard-code one, and that
+        number had drifted from :data:`_BUILTIN_NODES` two lines away — it claimed 23
+        against 25 actual rows. The log line below reports ``len(_BUILTIN_NODES)``,
+        which cannot drift because it is derived.
+
+        ``tests/test_controlnode_registry_counts.py`` fails if a literal count
+        returns here. It caught this docstring on its first run, when the note above
+        quoted the old wording verbatim — the guard is deliberately strict enough to
+        object to a description that looks like a claim.
+        """
         row = conn.execute("SELECT COUNT(*) FROM controlnode_registry").fetchone()
         if row and row[0] > 0:
             return
