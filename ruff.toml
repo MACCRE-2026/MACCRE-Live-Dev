@@ -1,8 +1,24 @@
 # ruff.toml — MACCREv2 QA pipeline exclusions
 line-length = 120
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EXCLUSIONS ARE A DECISION, NOT AN INHERITANCE
+#
+# omni passes `--no-respect-gitignore` as of 2026-09-03. Before that, Ruff honoured
+# `.git/info/exclude` — MACCRE's private-internals list — so every directory kept
+# private was also invisible to the quality gate. `omni qa` reported "Quality gates
+# passed" over an unlinted subtree, while the `per-file-ignores` below named
+# `tests/*` and `scripts/*` as linted targets the tool had never visited. 17 errors
+# were hiding, three of them F821 undefined-name in a credential path.
+#
+# Consequence: privacy is enforced by `.git/info/exclude`, lint scope is enforced
+# HERE, and the two lists are independent. If a directory should not be linted, it
+# must be named below with a reason. Silence is no longer an exclusion.
+# ─────────────────────────────────────────────────────────────────────────────
 exclude = [
+    # ── Retired or vendored code: not maintained, not worth gating on ──────────
     "_archive",
+    "_legacy",            # Superseded generations (Gemini_Hoarder_Ecosystem etc). Retired, alongside _archive
     "__Deprecated",
     "*/__Deprecated",
     "Sovereign-Auth-Drop",
@@ -11,6 +27,21 @@ exclude = [
     "__TEST_SANDBOX",
     "maccre_core/_vendor",
     "user_scripts",       # Third-party ingestion utility scripts — not EXO_GANS source
+
+    # ── Throwaway tooling: one-off probes, deliberately not held to the gate ───
+    "scratch",            # Single-use inspection scripts. Excluded by intent, not by accident
+
+    # ── Data and notes directories: no source, and must not silently acquire it ─
+    "__DATACENTER",       # Session artifacts and ledgers
+    "Analysis",           # Working notes
+    "History",            # Archived transcripts
+    ".tmp.driveupload",   # Sync client staging
+    "secrets",            # Never linted, never read
+    ".vault",
+
+    # NOT excluded, deliberately, and each is load-bearing:
+    #   tests/    — 11,505 lines that carried no lint guarantee until 2026-09-03
+    #   scripts/  — 61 files of real operator tooling; the 3 F821s above lived here
 ]
 
 [lint]
