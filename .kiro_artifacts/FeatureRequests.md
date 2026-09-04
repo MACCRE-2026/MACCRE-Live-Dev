@@ -3563,3 +3563,124 @@ published argument exists against the control they implement. It asks nothing of
 
 **Related:** the sovereignty contract; the reframing in analysis §6.2 that the Importer's evidence
 is unexamined; B7 signing at the Importer seam, where WCA's WAL-0…WAL-3 ladder is now a candidate.
+
+***
+
+### Feature Name: The register format and evidence-gated completion are also prior art
+**Abstract:** Searched to the same standard as the trust ceiling, and both fell. Append-only records with `SUPERSEDED` and never-edit-in-place is **Architecture Decision Record** practice, stated near-verbatim in Microsoft's Well-Architected Framework. `COMPLETED` requiring evidence is **assurance-case** practice (GSN, OMG SACM, ISO 14971/62304) — and SACM is *stricter*, requiring the evidence to carry its own collection provenance. **All three candidates for MACCRE's novel contribution are now falsified.**
+**Date/Time Entered:** 2026-09-04T13:30:00-04:00
+**Status:** **WITHDRAWN** — as novelty claims. Both practices are retained, correctly attributed.
+**Rationale for withdrawal:** falsified by primary sources. These were the two items the
+2026-09-03 analysis called *"the least imitable thing here"* and *"the most transferable idea in
+the project"*, promoted to leading candidates once the trust ceiling fell. Leaving them
+unexamined after writing that withdrawal would have been the same error twice in one day.
+**Verified:** **Reproduced.** Primary and authoritative secondary sources read directly.
+**Prior art:** the substance of the entry.
+
+**Description:**
+**1. The register is an ADR log.** Michael Nygard introduced Architecture Decision Records in
+2011. Microsoft's Azure Well-Architected Framework states the discipline in substance identically
+to MACCRE's *Records are append-only*: the record is an append-only log, accepted records are not
+edited, a changed decision becomes a new record superseding the original with the two linked, and
+this preserves the history of the thinking. The standard ADR status lifecycle is
+Proposed / Accepted / Deprecated / Superseded, with reversals written as new records while the old
+one remains as the answer to why the earlier choice was made.
+
+| MACCRE | ADR practice |
+|---|---|
+| Records are append-only, never deleted | Append-only log; accepted records not edited |
+| `SUPERSEDED`, naming the replacement | `Superseded`, with the records linked |
+| `WITHDRAWN`, requiring a rationale | `Deprecated`, or a superseding record carrying the reasoning |
+| Second Amendment restatement pattern | A reversal is a new record; the old one stays |
+| *"A deleted entry takes its reasoning with it"* | *"the historical answer to why did we ever do that?"* |
+
+MACCRE's register is an ADR log with a different status vocabulary and feature-shaped rather than
+decision-shaped entries. **Convergence, not invention.**
+
+**2. Evidence-gated completion is assurance-case practice, and the gap runs the wrong way.**
+Goal Structuring Notation (Kelly & Weaver) defines an assurance case as a structured argument
+composing evidence to show goals are satisfied — a goal is discharged by evidence, not assertion,
+and the argument linking them is itself an artifact. OMG's **SACM** goes further in exactly the
+direction MACCRE cares about: its artifact metamodel interchanges packages of evidence that
+communicate *how the evidence was collected*. That is provenance **of the evidence for a claim** —
+strictly stronger than MACCRE's Completion Metric, and the same idea as MACCRE's own provenance
+doctrine applied to its register rather than to its data. ISO 14971 / IEC 62304 acceptance
+criteria formalise the same discipline for medical device software.
+
+**3. Incident-named principles: components exist, packaging unnamed, and the negative is weak.**
+Blameless postmortem culture documents an incident with its root causes and the follow-up actions
+preventing recurrence; the rule and the incident simply live in separate artifacts linked by
+action items. MISRA C attaches a rationale to every rule. ADR `Context` sections routinely carry
+the incident that forced a decision.
+
+**The sharpest comparison cuts against MACCRE.** JPL's *Power of 10* observes that in existing
+rule sets some rules reflect preference while others exist to prevent very specific errors seen in
+earlier work at the same organisation — Holzmann **names the incident-derived-rule phenomenon
+explicitly**, and then deliberately writes ten rules that do *not* cite incidents, on the grounds
+that a short rule set gets followed and a long one does not. The practice was not merely known; a
+leading authority weighed it and chose against it.
+
+What was **not** found is a named practice of a short standing doctrine, injected into every
+session, where each principle inlines its originating failure so the rule is arguable at the point
+of use. **That is worth very little as evidence.** Process and documentation practices are
+systematically under-published relative to technical ones, so absence of a name is not absence of
+the practice. Recorded as *searched, not found*, explicitly **not** as novelty.
+
+**What this does not damage.** Every one of these practices is *good* and all three are retained.
+Being second to a good idea costs nothing except the right to claim it. The register still works,
+still prevents the failures it was built for, and now has a literature to borrow from — ADR
+tooling, SACM's evidence-provenance model, and GSN's argument structure are all available where
+MACCRE was about to keep improvising.
+
+**Related:** the withdrawn trust-ceiling claim; the attributions log, which grows from five
+convergences to eight; the essay entry below.
+
+***
+
+### Feature Name: Write the audit as the essay — three withdrawn claims, self-caught
+**Abstract:** Supersedes *Publish the fan-in laundering case study* and, before it, the restrictive-default write-up. With all three novelty candidates falsified, the publishable subject is no longer any claim about MACCRE — it is **the audit itself**: walking up to a false indicator of significance and auditing the premise instead of banking it. Requires no novelty claim, which is precisely what makes it safe to publish.
+**Date/Time Entered:** 2026-09-04T13:30:00-04:00
+**Status:** Unfulfilled — blocked on `ASSISTANT_NAME` indirection
+**Supersedes:** *Publish the fan-in laundering case study instead of a novelty claim* (same day) —
+that framing survives as a closing technical note rather than the subject.
+**Verified:** N/A — a writing task. Its evidence is the three withdrawal entries, which are
+reproduced and sourced.
+
+**Description:**
+**The operator's framing, which is the correct one:** better attention comes from having walked
+right up to a false indicator of greatness and having the humility to adversarially audit the
+premise. The subject is self-control when working with AI above one's formal weight class, and the
+rigour to dig rather than to reason motivatedly.
+
+**Why this is the strongest available artifact.** Three withdrawn claims in two days — the trust
+ceiling to an IETF draft's formally verified property, the register format to ADRs, evidence-gated
+completion to assurance cases — each killed by the author's own search rather than by a reviewer.
+Motivated reasoning at scale is the dominant failure mode of non-professional builders working
+with AI assistance, and demonstrated resistance to it is rarer and more transferable than any of
+the three claims would have been.
+
+**It also removes the risk that worried the analysis.** Persona 2's ninety-second dismissal was
+never about MACCRE's engineering — the `BEGIN EXCLUSIVE` ownership model and the barrier proof are
+genuinely strong and were confirmed. It was about the *claims*. Removing the claims removes the
+risk, and what remains is verifiable.
+
+**What the essay must contain, or it becomes the fourth unexamined premise:**
+
+1. **The three withdrawals, with their falsifying sources cited.** Not summarised — cited, so a
+   reader can check.
+2. **The search-scope error, named.** The first analysis searched nine standards bodies and
+   concluded the idea was unclaimed. The work was in the agent-security research literature. That
+   is the most useful transferable lesson in the whole sequence: *a true statement about where you
+   looked is not a statement about what exists.*
+3. **What was confirmed rather than withdrawn**, or the piece is false modesty: the ownership
+   model, the barrier proof that deadlocks rather than degrading, and the defect list with its
+   measured costs.
+4. **The implementation state, plainly.** The trust ceiling is enforced nowhere — 646 files, no
+   trust field, no ceiling computation, no test.
+5. **No novelty claim of any kind.**
+
+**Do not write it before:** `ASSISTANT_NAME` indirection lands, and the attributions log exists —
+the log is the essay's evidence base, so it comes first.
+
+**Related:** all three withdrawal entries; the attributions log; *Rename Nexus Copilot before any
+public artifact*; `.kiro_artifacts/2026-09-04_restrictive_trust_default_prior_art_search.md`.
