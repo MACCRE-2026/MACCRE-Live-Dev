@@ -2787,3 +2787,249 @@ entire existence.
 **Related:** the *Master MACCRE Schema Doctrine* entry — this is a second instance of the
 same argument, that a claim about behaviour needs mechanical enforcement or it decays into a
 confident lie; *Node-ID convention divergence*; the three divergent `task_queue` DDLs.
+
+***
+
+# ENTRIES ADDED 2026-09-03 (third batch) — the DDL reachability measurement, and what it turned up
+
+**Method.** All 102 `.db` files in the tree were opened **read-only** (`mode=ro`, so the
+operator's running TUI could not be disturbed) and every `task_queue` was described:
+column set, index uniqueness, row provenance by writer signature, duplicate
+`(job_id, current_node)` groups, `output_path` population by date, and stranded `locked`
+rows. 18 databases hold a `task_queue`.
+
+This closes the *"reproduce before sizing"* condition on the DDL divergence entry, and it
+answers the analysis's §7 open question **"whether `pattern_executor` and the `nexus_plex`
+DDL path are live in normal operation."** Both are live. Neither exposure has manifested.
+Two unrelated defects surfaced that nothing was tracking.
+
+***
+
+### AMENDMENT to *`task_queue` has three divergent CREATE TABLE statements*
+**Amended:** 2026-09-03T21:00:00-04:00
+**Status:** Unfulfilled — **now reproduced. Both writers confirmed live. Both exposures confirmed latent.**
+
+**The count was wrong: there are not three schemas, there are six, all present on disk.**
+
+| # | Columns | Inline `UNIQUE` | `idx_job_node` | Written by | Databases |
+|---|---|---|---|---|---|
+| 1 | 16 | no | **yes, UNIQUE** | broker, fully `ALTER`-upgraded | `499_TEST` (the live 4.99 project) |
+| 2 | 14 (2 orderings) | yes | yes | older broker, pre-`output_path`/`locked_at` | `MICRO_TEST…`, `POST_TEST` |
+| 3 | 11 | **yes** | yes | older broker still | `AAA_Test`, `BBB_TEST`, `BICYCLE_TEST`, `CAT_TEST`, `CCC_TEST`, `GLOBAL`, `UNNAMED`, `test_recursion_queue.db` |
+| 4 | 11 | **no** | yes (added later) | **`nexus_plex.py`** | `APPLE_TEST`, `DDD_TEST` |
+| 5 | 10 | yes | **no** | **`pattern_executor.py`** | `PATTERN_session_brief_def02cce` |
+| 6 | **6** — `target_node`, `status` | no | no | a retired writer, name unknown | the nested twin dirs, below |
+
+A fourth DDL site also exists that the analysis did not name: `maccre_core/tests/smoke_test.py`.
+
+**Exposure 1 — the missing `UNIQUE` — is real and currently MITIGATED, by luck of ordering.**
+`nexus_plex` creates the table with no uniqueness constraint and then issues
+`INSERT OR REPLACE`. Verified in the live project:
+
+```
+idx_job_node: CREATE UNIQUE INDEX idx_job_node ON task_queue (job_id, current_node)
+PRAGMA index_list: name=idx_job_node unique=1 origin=c
+```
+
+The broker's recovery index **is a UNIQUE index**, so it supplies exactly the constraint the
+TUI's DDL omits, and `OR REPLACE` has something to conflict against after the broker has
+opened the database once. Empirically confirmed: **zero duplicate `(job_id, current_node)`
+groups across all 18 databases.**
+
+So the mitigation holds — *wherever the broker has run*. It did not run on schema 5. The
+defect is therefore a genuine latent hazard with a load-bearing dependency on which process
+touches a database first, which is exactly what `CREATE TABLE IF NOT EXISTS` being a no-op
+means. **Recording it as mitigated-not-fixed.**
+
+**Exposure 2 — `pattern_executor` bypassing `output_path` — is real, latent, and would
+self-heal.** The silo database `PATTERN_session_brief_def02cce/swarm_queue.db` is schema 5:
+10 columns, **no `output_path`**, inline `UNIQUE` only, and **no `idx_job_node`** — proving
+the broker has never opened it. If a pattern flow ever reached a fan-in,
+`get_completed_payload_paths`' `COALESCE(NULLIF(output_path,''), payload_path)` would hit
+`no such column`. In practice the worker connects through the broker, whose `ALTER` loop
+would add the column first. **So the E1 fix is not holed on this path in the way the
+analysis inferred** — it is protected by a self-heal nobody designed for this purpose, which
+is a fragile reason to be safe.
+
+**And the reason it has never been felt is worse than the defect** — see the stalled-silo
+entry below.
+
+**4.99 EVIDENCE IS INTACT, and this is the finding that matters most here.**
+`output_path` population in the live project, by completion date:
+
+| Date | Completed rows | `output_path` set |
+|---|---|---|
+| 2026-08-20 → 08-31 | 90 | 0 — pre-fix, expected |
+| **2026-09-01** | 18 | **18** |
+| **2026-09-02** | 13 | **12** |
+
+Every post-fix row carries its own output path except one, and that one is identified:
+
+```
+CTRL_PAUSE_MANUAL_S1   completed   (empty)
+```
+
+That is **not a new defect.** It is §5(c) of the 4.99 status document — the HITL injection
+replacing the payload, so the pause node records no output — already diagnosed, already
+scheduled. The single empty post-fix row is a known, recorded, scheduled defect.
+
+The `tjrd` run's E1 confirmation now holds **at the database level**, not only in the merged
+document: eight lanes with eight distinct recorded outputs, plus the merge artifact, plus the
+final step.
+
+```
+OSINT_Analyst_S0      …/OSINT_Analyst_S0_116.md      TopperShepherd_S0 …/TopperShepherd_S0_119.md
+TopperBuddy_S0        …/TopperBuddy_S0_117.md        NewGuy_S0         …/NewGuy_S0_120.md
+TopperAngry_S0        …/TopperAngry_S0_118.md        Testy_S0          …/Testy_S0_121.md
+Regular_Joe_S0        …/Regular_Joe_S0_122.md        TestAgent_S0      …/TestAgent_S0_123.md
+CTRL_MERGE_S0         …/CTRL_MERGE_S0_merged.md      AGENT_Gretchen…S2 …/…_S2_126.md
+```
+
+**Conclusion: no 4.99 evidence needs retracting.** The concern that motivated running this
+measurement first was correct to raise and did not materialise.
+
+**Remedy unchanged, and now better justified:** one owner for the DDL. Six schemas for the
+ownership-authoritative table is Principle 4 at a scale nobody intended, and the thing
+currently keeping it safe is a recovery index created for a different reason.
+
+***
+
+### Feature Name: Chat Studio strands a `locked` row nearly every time it runs
+**Abstract:** 22 rows across 7 live databases are stuck in `lock_status='locked'`, some for over two months. **21 of the 22** were written by the Chat Studio / live-session path. Anything enumerating work by status sees two dozen tasks that look claimed and in progress, and are not.
+**Date/Time Entered:** 2026-09-03T21:00:00-04:00
+**Status:** Unfulfilled
+**Verified:** **Reproduced by measurement** across all 18 `task_queue` databases, read-only.
+Not yet reproduced *interactively* — the mechanism is inferred from the row provenance, not
+observed in a live Chat Studio session.
+
+**Description:**
+Stranded `locked` rows, by database and writer:
+
+| Database | Stranded | From Chat Studio / live-session |
+|---|---|---|
+| `APPLE_TEST` | 5 | 5 |
+| `DDD_TEST` | 5 | 5 |
+| `GLOBAL` | 5 | 5 |
+| `CCC_TEST` | 3 | 3 |
+| `POST_TEST` | 2 | 2 |
+| `499_TEST` | 1 | 1 |
+| `BBB_TEST` | 1 | **0** — a real flow node, `C_JUDGE_3c769211_S1` |
+| **total** | **22** | **21** |
+
+The `job_id` values are `studio_session_*` and `live_session`, and `studio_session_` is
+`nexus_plex.py`'s literal prefix:
+
+```python
+job_id = f"studio_session_{self.active_chat_name}"
+```
+
+Oldest is `2026-07-04`; the one in the live 4.99 project dates from `2026-08-20` and is the
+`studio_session__job_20260820-020251-xj6z` residual already noted in the 4.99 status
+document §9. **That residual is not a one-off. It is one instance of a recurring pattern
+that this measurement makes visible for the first.**
+
+**Why this matters beyond tidiness.** Chat Studio session concurrency is a stated near-term
+goal, and this is a pre-existing zombie generator directly in that path. The 4.99 document
+already flags the residual as relevant to the Session Manager work and to Importer
+integration, because *anything enumerating sessions by status will see a session that looks
+live and is not.* At 21 rows that stops being a curiosity.
+
+It is also Principle 3 from the other direction: not success reported over unperformed work,
+but **work reported as in-progress that has no worker.** `reclaim_zombie_locks` exists;
+either it does not cover this path, or nothing invokes it here.
+
+**First action is reproduction, per Principle 7:** open Chat Studio, start a session, close
+it the way the operator normally would, and observe whether the row is released. The fix
+differs entirely depending on whether the lock is never released, released only on a clean
+exit, or released by a path Chat Studio does not use.
+
+**Related:** the `task_queue` DDL entry (same writer, same measurement); *Session Manager
+Dashboard*; *Session Manager / File Cabinet alignment for Sovereign Importer*; and the
+event-sourced history entry, since an event log would have made this visible two months ago.
+
+***
+
+### Feature Name: A pattern silo was created, injected, and never consumed
+**Abstract:** `pattern_executor` built a silo database on 2026-08-09, injected an `INGEST` task, and that task is still `open` 25 days later. Nothing has ever claimed it. The pattern path creates work that no worker collects.
+**Date/Time Entered:** 2026-09-03T21:00:00-04:00
+**Status:** Unfulfilled
+**Verified:** **Reproduced by measurement.** One row, unclaimed, in a database the broker has
+demonstrably never opened.
+
+```
+__DATACENTER/PATTERN_session_brief_def02cce/swarm_queue.db
+  columns: 10, output_path: absent, idx_job_node: absent
+  row: ('pat_session_brief_def02cce', 'INGEST', 'open', '2026-08-09 23:02:33')
+```
+
+**Description:**
+The absence of `idx_job_node` is the proof: the broker creates that index on every
+connection as a recovery step, so a database without it has never been opened by the broker.
+Combined with the row still being `open` rather than `locked` or `completed`, this means
+`_spawn_worker` either never ran, ran and failed before connecting, or connected somewhere
+else entirely.
+
+**This is why exposure 2 on the DDL entry has never been felt** — not because the missing
+`output_path` column is harmless, but because **no pattern flow has ever progressed far
+enough to read it.** A latent defect behind a dead path reads as a working system.
+
+**It also means the pattern-silo capability is, on this evidence, non-functional** — and
+nothing reported that. There is no failure, no stall, no error status: just a task sitting
+`open` for 25 days in a database nobody opens. Principle 3's applied rule says an ambiguous
+terminal state gets its own distinct status rather than being folded into success; here the
+state is not even ambiguous, it is simply unobserved.
+
+**Reproduce before sizing.** Run a pattern silo end-to-end and find out where it stops. The
+outcome decides whether this is a wiring defect, a retired capability that should be
+`WITHDRAWN`, or something in between.
+
+**Related:** the `task_queue` DDL entry; *Blind Code Inspection Swarm Delegation*, which
+would run through this machinery.
+
+***
+
+### Feature Name: Nested twin project directories — `<project>/<project>/` — with a retired 6-column schema inside
+**Abstract:** Four projects contain a directory of their own name inside themselves: `AAA_Test/AAA_Test/`, `CCC_TEST/CCC_TEST/`, `GLOBAL/GLOBAL/` (29 entries), `UNNAMED/UNNAMED/`. Each twin holds a `swarm_queue.db` on a 6-column schema that exists nowhere else — `target_node` and `status` instead of `current_node` and `lock_status`.
+**Date/Time Entered:** 2026-09-03T21:00:00-04:00
+**Status:** Unfulfilled
+**Verified:** **Reproduced by measurement.** Found while enumerating `task_queue` schemas;
+not previously recorded anywhere.
+
+**Description:**
+The shape is a datacenter path resolved twice — something joined the project name onto a
+path that already ended in it. `GLOBAL/GLOBAL/` holds 29 entries, so this is not a single
+stray mkdir.
+
+The databases inside are on a schema no current writer produces:
+
+```
+columns (6): id, job_id, target_node, payload_path, status, created_at
+```
+
+`target_node`/`status` rather than `current_node`/`lock_status` dates it to a writer that has
+since been retired or renamed. `CCC_TEST/CCC_TEST/` holds 7 rows, all with
+`job_id LIKE 'studio_session%'`, so the retired writer was on the Chat Studio path.
+
+**Two open questions, neither answered:**
+
+1. **Is the duplication still being produced, or is it a fossil?** All the evidence is
+   consistent with either. Deciding it needs a fresh project created through the normal path
+   and then inspected. Until that is done this is a **lead, not a finding**, on the question
+   of whether the path-resolution defect is current.
+2. **Does anything read from the twin?** If a reader resolves the doubled path it will find a
+   database with a schema no current code understands, and `target_node` is close enough to
+   `current_node` to be the kind of approximately-correct address Principle 2 exists for.
+
+**Why it is worth an entry rather than a cleanup.** The twins are inert today, and deleting
+them would remove the only evidence of how they were produced. `get_datacenter_path` is the
+seam every artifact address goes through, and *Session Manager / File Cabinet alignment* is
+about to publish a stable addressing scheme built on it. A path resolver that has
+demonstrably doubled a segment at least four times should be understood before its output
+becomes a published contract.
+
+**Recommended:** treat as a diagnosis task against `get_datacenter_path` and its callers, not
+as a directory tidy-up. Leave the twins in place until the mechanism is known.
+
+**Related:** *Session Manager / File Cabinet alignment for Sovereign Importer* — this is a
+defect in the addressing scheme that entry will publish; the `task_queue` DDL entry, which
+this was found alongside.
