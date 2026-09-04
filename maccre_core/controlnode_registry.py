@@ -298,6 +298,23 @@ _BUILTIN_NODES: list[dict[str, Any]] = [
     },
     # ── Coming Soon — declared, not yet implemented ───────────────────────────
     {
+        # Added 2026-09-04 by the topological-semantic amendment (Requirement 32).
+        # Declared here as ComingSoon because that is the truth: the requirement is
+        # specified and the handler does not exist. Listing it keeps the registry the
+        # honest answer to "what control nodes are there", which is the only reason it
+        # is the single source of truth for node types.
+        "name": "CTRL_WAIT",
+        "category": "Flow Control",
+        "description": (
+            "Waits for named agents on named lanes (tether-qualified references), then "
+            "collects their outputs. Declares unsatisfiable rather than timing out when "
+            "a target's lane finishes without producing."
+        ),
+        "handler_module": "",
+        "handler_func": "",
+        "status": "ComingSoon",
+    },
+    {
         "name": "CTRL_DIALOG",
         "category": "Orchestration",
         "description": "Typed group dialog dispatch between multiple agents.",

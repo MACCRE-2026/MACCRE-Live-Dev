@@ -3946,3 +3946,143 @@ did not contain the topological vision either.
 
 **Related:** *Master MACCRE Schema Doctrine* — same argument, that a claim needs mechanical
 enforcement or it decays; the topological-semantic entries this unblocks; Doctrine 5.
+
+***
+
+### Feature Name: The topological semantic, specified — Requirements 29–33 and Requirement 19.4 repealed
+**Abstract:** Five new requirements amend the 6.13 spec: lanes may terminate without merging (29), a step's output is a set (30), cross-lane routing (31), `CTRL_WAIT` (32), and pre-launch paradox validation with a total-sum readout (33). Requirement **19.4 is SUPERSEDED** — it made a merge mandatory per scatter branch, forbidding the central case of the design it was written to support. 22 tests written **red** in the same pass.
+**Date/Time Entered:** 2026-09-04T19:30:00-04:00
+**Status:** COMPLETED — *the specification.* The capabilities remain unbuilt by design.
+**Completed:** 2026-09-04T19:30:00-04:00
+**Completion Metric:** `AMENDMENT — 2026-09-04` appended to
+`.kiro/specs/phase-6-13-multi-flow-lane/requirements.md` with the original 28 requirements preserved
+intact; 19.4 superseded with rationale; Requirements 29–33 stated as 31 acceptance criteria with a
+traceability table. `tests/test_topological_semantic_spec.py`: **1 passing, 21 `xfail(strict=True)`**
+— one per criterion that needs code. `CTRL_WAIT` declared in the registry as `ComingSoon`. Gate
+2026-09-04: `omni qa` PASS whole project 18:41; pytest **821 passed / 21 xfailed / 1 failed**, the
+failure being the pre-existing wall-clock flake — see the entry below and read that gate line as
+**not green**.
+**Prior art:** writing acceptance tests in the same pass as the requirement is ordinary
+test-first / specification-by-example practice, and `xfail(strict=True)` is a standard pytest
+facility. No novelty claimed.
+
+**Description:**
+**Why 19.4 had to go.** It required every nested scatter branch to have a corresponding
+`CTRL_MERGE` before execution was allowed. The operator's design requires that **a scatter may never
+merge** — each Flow Lane an independent topology that can terminate on its own, with a `CTRL_WAIT`
+collecting from a named lane later, or nothing collecting at all. The clause forbade the central case
+of the vision it was written to serve.
+
+**What was preserved from it.** Its instinct was right: an *unintended* missing merge is a real
+authoring error, and silently running a flow whose author expected a gather is worse than refusing
+it. Requirement 29 keeps the check and converts it from a prohibition into a **declaration** — the
+author states a Gather Strategy (`Merge` / `Concat` / `Ungathered`), and the engine enforces what was
+declared. `Ungathered` is the case 19.4 made impossible.
+
+**Subsume, not replace, as directed.** `CTRL_MERGE` and `CTRL_CONCAT` remain first-class nodes,
+usable downstream and out of band to pull from separate areas and points in a flow. Gather Strategy
+is the scatter's declaration about *its own lanes*; it does not remove the ability to place a merge
+anywhere. Requirement 29.6 defaults pre-amendment topologies to `Merge`, so saved MacroNodes keep
+their behaviour — hard replacement was rejected for exactly that reason.
+
+**The three clauses that carry the most weight, and why:**
+
+- **30.4 — an ungathered multi-output step refuses to pick one.** Silently selecting one of eight
+  outputs is Principle 2: a plausible artifact representing an eighth of the work, which downstream
+  logic then acts on. The old code treated multiple terminals as an anomaly to warn about; now it is
+  normal, and *choosing without being told* is the error.
+- **31.3–31.5 — an unresolvable lane reference fails at validation, never at runtime.** A route to
+  `X.9` in a four-lane scatter must be refused before launch. The register already records what a
+  blanked tether id cost: a scatter and its merge in different scopes, and a gather gate that could
+  never open.
+- **32.4–32.5 — an unsatisfiable wait is detected by observing state, not by timing out.** If a
+  `CTRL_WAIT`'s target lane has already finished without producing, that is knowable *immediately*.
+  Defect F3 was a hold nobody could release that ran out a 3600-second budget and then reported
+  `completed`; waiting out a timeout to discover a fact the queue already contains is the same
+  mistake in a new place. `pause_owner_alive` established the pattern — **ask, rather than wait and
+  guess.**
+
+**Tests written red, in the same pass, deliberately.** `xfail(strict=True)` rather than skip: while
+a capability is missing the suite stays green and reports `xfail`, but **the moment one starts
+working the strict marker turns it into a failure** and forces the marker to be removed on purpose.
+A plain skip would let a capability land with its spec claim still unverified — the Doctrine 5
+failure now recorded four times in this project.
+
+**That mechanism proved itself within minutes.** `CTRL_WAIT` was added to the registry as
+`ComingSoon`, because that is the truth — specified, not built — and the registry can only be the
+honest answer to *what control nodes exist* if a declared-but-unimplemented node appears with that
+status. Doing so turned `test_ctrl_wait_is_a_registered_control_node` into an `XPASS`, which strict
+mode converted into a failure, forcing the test to be split into a declaration half that passes and
+an implementation half that does not. **A stale marker over a half-built capability was caught by the
+marker's own strictness.**
+
+**And the derived counts from earlier today paid off immediately:** adding `CTRL_WAIT` required
+**zero** count updates anywhere. Under the previous hand-maintained scheme it would have broken
+three numbers.
+
+**Deliberately not specified:** the authoring surface for Gather Strategy, cross-lane route targets
+and `CTRL_WAIT` configuration. Those belong with the authoring-ownership decision (Era 2), still
+open. Specifying a UI before its owner is settled is how two authoring surfaces over one graph came
+to be proposed.
+
+**Related:** the Era 3 retcon, which made this the era's defining work; *Make a step's output a set*;
+*Cross-lane routing*; *`CTRL_WAIT` and lanes that never merge*; the E1/E2 payload-lineage fixes this
+generalises.
+
+***
+
+### Feature Name: The wall-clock scatter test is the last load-sensitive test, and its bound is an operator decision
+**Abstract:** `test_eight_lane_scatter_beats_sequential_wall_clock` failed under full-suite load on 2026-09-04 at **1.33 s against a 1.20 s bound** (60% of a 2.00 s sequential baseline), reporting peak concurrency 5. It passes 32/32 in isolation. This is the flake recorded in the 4.99 status document §9 — **not** a regression, and now the **only** load-sensitive test, since the linear-flow slot failure was root-caused and fixed earlier the same day.
+**Date/Time Entered:** 2026-09-04T19:30:00-04:00
+**Status:** Deferred (needs decision)
+**Verified:** **Reproduced**, and localised: fails in a 843-test full run, passes in a 32-test
+file-scoped run, twice.
+
+**Description:**
+**Measured, both ways, same tree, same day:**
+
+| Run | Result |
+|---|---|
+| full suite, 843 collected | `1 failed` — 1.33 s against a 1.20 s bound, peak concurrency 5 |
+| `tests/test_scatter_concurrency.py` alone | **32 passed**, 16.90 s |
+
+**It is a measurement artifact, and the width claim is untouched.** The companion barrier proof —
+`threading.Barrier(8)`, which *deadlocks* rather than reporting a lower number if the pool cannot
+get eight lanes in flight — **passed in both runs**. So 8-way concurrency is intact; what is unstable
+is the wall-clock *ratio*, because fixed overhead is a large fraction of a 2.00 s baseline when the
+machine is also running 800 other tests.
+
+**One observation worth recording, offered as a data point and not a claim:** §9 measured this at
+**1.70 s** against the same 1.20 s bound. Today it measured **1.33 s**. That is closer to passing,
+and the over-provisioning fix landed in between — which plausibly reduced contention by removing
+wasted worker constructions and their `BEGIN EXCLUSIVE` attempts. **One measurement is not a trend**
+and this is explicitly not offered as evidence of improvement.
+
+**Why it now matters more than it did.** The analysis observed that two load-sensitive tests mean
+every gate result carries an unstated asterisk. One of the two is gone — the linear-flow slot failure
+was reproduced, root-caused as a demand-estimator double-count, and fixed. **This is the last one**,
+and closing it would make "the suite is green" an unqualified statement for the first time.
+
+**Four options, and the recommendation is the third.**
+
+1. **Loosen the bound** from 60% to something like 75%. Cheapest, and it weakens the claim the test
+   exists to make.
+2. **Accept and document the tolerance** — record that this test requires isolation. Honest, but it
+   means a full-suite run can never be clean, which is the asterisk again.
+3. **Raise the simulated node duration** so the ratio is dominated by work rather than overhead.
+   **Recommended.** This does not weaken the assertion — it removes measurement noise from it. A
+   longer baseline makes fixed overhead a smaller fraction, and the ratio becomes stable under load.
+   Cost: the suite gets slower by a few seconds.
+4. **Split the claim in two** — keep the barrier test as the proof of *width*, and move the
+   wall-clock measurement to `omni smoke` or a live UT-1 run, where nothing else competes. This is
+   arguably the most correct, because UT-1 test 3's speedup criterion is a *live* criterion and the
+   4.99 document already records that it has no trustworthy automated proxy.
+
+**Why this is an operator decision and not an agent's.** The 4.99 status document §9 explicitly
+records it as one: *"loosening the bound, raising the simulated node time, or accepting the flake is
+an operator decision."* It is a question about what the project wants to assert, not about what is
+broken.
+
+**Related:** the demand-estimator over-provisioning fix, which removed the other load-sensitive
+test; UT-1 test 3, whose speedup half this test stands in for; the barrier proof, which is the
+authority on width.

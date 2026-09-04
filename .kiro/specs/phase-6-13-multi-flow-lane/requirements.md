@@ -510,3 +510,252 @@ Phase 6.13 extends MACCRE's parallel scatter execution (Phase 6.12) with multi-l
 **Author:** Kiro AI Agent  
 **Created:** 2025-01-24  
 **Status:** Initial Draft — Awaiting User Review
+
+---
+
+# AMENDMENT — 2026-09-04: The Topological Semantic
+
+**Everything above is preserved as originally written.** This amendment supersedes one
+acceptance criterion and adds five requirements. It is appended rather than edited in, so the
+original intent stays readable and the change is auditable.
+
+**Why this amendment exists.** Phase 4.99 user testing was paused because the contract governing
+*which payload a node receives* was never specified, and three defects were found inside it in 48
+hours. Settling that contract exposed a larger problem: the operator's design for `CTRL_SCATTER` is
+**topological** — each Flow Lane an independent topology, routable between, nestable, and possibly
+never merging — and this specification contradicts it in one place and is silent about it in three
+others.
+
+Recorded per the Era 3 retcon: this specification was written while Era 3 ran under loose
+spec-driven development, so its silences are not oversights but the expected residue of features
+worked in without being written down. The retcon's cost is being paid here, in re-decisions.
+
+---
+
+## SUPERSEDED: Requirement 19.4
+
+> **19.4 (original, 2026-08-30).** WHEN the user attempts to execute a flow with nested scatter,
+> THE Flow_Engine SHALL validate that all nested scatter branches have corresponding CTRL_MERGE
+> nodes before allowing execution
+
+**Status: SUPERSEDED by Requirement 29.**
+
+**Why it is repealed rather than relaxed.** The clause makes a merge *mandatory* for every scatter
+branch. The operator's design requires that **a scatter may never merge** — lanes can be
+independent topologies that terminate on their own, with a `CTRL_WAIT` collecting from a named lane
+later, or nothing collecting at all. 19.4 forbids the central case of the design it was written to
+support.
+
+**What was right about it, and is preserved in Requirement 29.** Its instinct was correct: an
+*unintended* missing merge is a real authoring error, and silently running a flow whose author
+expected a gather is worse than refusing it. Requirement 29 keeps the check and makes it a
+**declaration** rather than a prohibition — the author states the intent, and the engine enforces
+what was declared.
+
+---
+
+### Requirement 29: Lanes May Terminate Without Merging
+
+**User Story:** As a flow author, I want a `CTRL_SCATTER` lane to be able to end on its own without
+a gather node, so that each Flow Lane can be an independent topology rather than a branch that must
+rejoin.
+
+#### Acceptance Criteria
+
+29.1. THE Flow_Engine SHALL allow a `CTRL_SCATTER` lane to terminate at a node with no downstream
+gather node
+
+29.2. THE `CTRL_SCATTER` node SHALL carry a declared **Gather Strategy** with the values `Merge`,
+`Concat`, and `Ungathered`
+
+29.3. WHEN Gather Strategy is `Merge` or `Concat` AND any lane lacks a reachable corresponding
+gather node, THE Flow_Engine SHALL refuse execution before launch and name every unreachable lane
+by tether ID
+
+29.4. WHEN Gather Strategy is `Ungathered`, THE Flow_Engine SHALL NOT require a gather node, and
+SHALL record each lane's terminal output separately
+
+29.5. WHEN a flow contains lanes that never merge, THE Flow_Engine SHALL still reach a terminal
+session status, and SHALL NOT report `completed` while any lane holds an unresolved task
+
+29.6. THE Gather Strategy SHALL default to `Merge` for topologies loaded from a schema version
+predating this amendment, so existing saved MacroNodes retain their current behaviour
+
+> **Design note — subsume, not replace.** `CTRL_MERGE` and `CTRL_CONCAT` remain first-class nodes
+> and remain usable **downstream and out of band**, to pull from separate areas and points in a
+> flow. The Gather Strategy is the scatter's *declaration of intent about its own lanes*; it does
+> not remove the operator's ability to place a merge anywhere. This is why 29.2 is a strategy on
+> the scatter and not a replacement for the nodes.
+
+---
+
+### Requirement 30: A Step's Output Is a Set
+
+**User Story:** As a system maintainer, I want a step's output to be modelled as a set of terminal
+outputs rather than a single artifact, so that an ungathered multi-lane step is the normal case
+rather than an anomaly.
+
+#### Acceptance Criteria
+
+30.1. THE Flow_Engine SHALL model a step's output as an **ordered set** of `(node_id, output_path)`
+pairs, ordered by declared topology position and never by completion time
+
+30.2. WHEN a step has exactly one terminal node, THE Flow_Engine SHALL treat that as the degenerate
+single-element case, preserving the behaviour established by defect E2's fix
+
+30.3. WHEN a step has more than one terminal node AND the step's Gather Strategy is `Merge` or
+`Concat`, THE Flow_Engine SHALL pass the gather node's output as the step's output
+
+30.4. WHEN a step has more than one terminal node AND Gather Strategy is `Ungathered`, THE
+Flow_Engine SHALL record all terminal outputs and SHALL NOT select one as *the* output
+
+30.5. WHEN a step's output set is empty, THE Flow_Engine SHALL log at ERROR, leave the payload
+unchanged, and SHALL NOT substitute a guessed artifact — preserving the no-silent-fallback rule
+established by defect E2
+
+30.6. FOR ALL steps, THE Flow_Engine SHALL record the output set in a form that survives to the
+next step boundary, so the set is auditable after the run
+
+> **Design note.** 30.4 is the load-bearing clause. Silently selecting one output from several is
+> exactly the approximately-correct value Principle 2 exists for — downstream logic would act on a
+> plausible-looking artifact that represents one eighth of the work. The prior behaviour treated
+> multiple terminals as an anomaly to warn about; under this amendment it is normal, and *choosing
+> without being told* becomes the error.
+
+---
+
+### Requirement 31: Cross-Lane Routing
+
+**User Story:** As a flow author, I want to route deterministically and conditionally between Flow
+Lanes, so that a lane's output can feed a node on a different lane rather than only its own
+descendants.
+
+#### Acceptance Criteria
+
+31.1. THE tether hierarchy SHALL support routing edges between lanes, in addition to its existing
+containment relationships — it becomes a **routing graph over a containment tree**, not a
+containment tree alone
+
+31.2. THE Flow_Engine SHALL accept a **tether-qualified node reference** as a route target,
+identifying a node by both its node id and its lane tether ID
+
+31.3. WHEN a route target names a tether ID that no lane will occupy at execution, THE Flow_Engine
+SHALL refuse execution before launch and name the offending reference
+
+31.4. WHEN a route target names a node id absent from the referenced lane, THE Flow_Engine SHALL
+refuse execution before launch and name the offending reference
+
+31.5. THE Flow_Engine SHALL NOT silently drop, ignore, or reroute an unresolvable cross-lane
+reference at runtime
+
+31.6. FOR ALL cross-lane routes, THE Flow_Engine SHALL record the crossing in `flow_vector` lineage
+so a downstream artifact's provenance includes the lane it came from
+
+31.7. THE containment tether ID of a node SHALL remain unchanged by any cross-lane route into it —
+routing does not re-parent
+
+> **Design note — 31.3 through 31.5 are one rule stated three ways, and it is Principle 2.** An
+> approximately-correct lane address is worse than an absent one: a route to `X.9` in a
+> four-lane scatter must fail at validation, because at runtime it would either no-op silently or
+> resolve to something plausible. The register already records what a blanked tether id cost — a
+> scatter and its merge in different scopes, and a gather gate that could never open.
+
+---
+
+### Requirement 32: CTRL_WAIT
+
+**User Story:** As a flow author, I want a node that waits for a specific agent on a specific lane,
+so that I can collect from an ungathered lane at a point of my choosing rather than at the scatter's
+boundary.
+
+#### Acceptance Criteria
+
+32.1. THE Flow_Engine SHALL provide a `CTRL_WAIT` control node whose configuration names one or
+more **tether-qualified node references** as wait targets
+
+32.2. WHEN all of a `CTRL_WAIT` node's targets have recorded an output, THE Flow_Engine SHALL
+release the wait and make those outputs available as its own output set per Requirement 30
+
+32.3. WHEN a `CTRL_WAIT` target names a nonexistent node or lane, THE Flow_Engine SHALL refuse
+execution before launch, per Requirement 31
+
+32.4. WHEN a `CTRL_WAIT` target's lane has reached a terminal state **without** the target
+producing an output, THE Flow_Engine SHALL declare the wait **unsatisfiable** and SHALL record a
+distinct terminal status — never `completed`, and never a plain timeout
+
+32.5. THE Flow_Engine SHALL detect the condition in 32.4 by observing the target lane's terminal
+state, and SHALL NOT rely on a wall-clock timeout to discover an unsatisfiable wait
+
+32.6. WHEN a `CTRL_WAIT` is released, THE Flow_Engine SHALL record which targets satisfied it, in
+declared order
+
+32.7. FOR ALL `CTRL_WAIT` nodes, the wait SHALL be observable in the TUI as a distinct state from
+running and from paused
+
+> **Design note — 32.5 is the important one and it is a lesson already paid for.** Defect F3 was a
+> hold nobody could release, which ran out a 3600-second budget and then reported `completed`. A
+> `CTRL_WAIT` whose target lane has already finished without producing is knowable *immediately*,
+> not in an hour. Waiting out a timeout to discover a fact the queue already contains is the same
+> mistake in a new place. `pause_owner_alive` established the pattern: **ask, rather than wait and
+> guess.**
+
+---
+
+### Requirement 33: Pre-Launch Topology Validation and Total-Sum Readout
+
+**User Story:** As a flow author, I want the whole configuration validated and described to me
+before I press launch, so that an impossible topology is refused rather than discovered at runtime,
+and so that I can see what I have actually built.
+
+#### Acceptance Criteria
+
+33.1. THE Flow_Engine SHALL detect and refuse a **temporal paradox** before launch — any wait
+condition that cannot be satisfied by any execution order
+
+33.2. THE paradox detection SHALL cover, at minimum: a wait on a node downstream of itself within
+the same lane; a cycle of waits across two or more lanes; a wait on a lane that the topology never
+spawns; and a wait on a node absent from its named lane
+
+33.3. WHEN a paradox is detected, THE Flow_Engine SHALL name the participating nodes and lanes in
+the refusal, and SHALL NOT report a generic validation failure
+
+33.4. THE Flow_Engine SHALL produce a **total-sum configuration readout** before launch, describing
+the whole Active Flow rather than node-by-node
+
+33.5. THE readout SHALL state, at minimum: the number of Flow Lanes and their tether IDs; nodes per
+lane; each scatter's declared Gather Strategy; every `CTRL_WAIT` with its targets; every cross-lane
+route; the count of terminal nodes; and the expected peak concurrency
+
+33.6. THE readout's counts SHALL be **derived from the hydrated topology**, not from the authoring
+surface, so that it describes what will execute rather than what was drawn
+
+33.7. WHEN the readout cannot be produced, THE Flow_Engine SHALL refuse launch rather than launching
+undescribed
+
+> **Design note — 33.6 exists because of a recorded incident.** The TUI built node ids as `NAME_{i}`
+> while the engine built `NAME_S{i}`, and that was harmless only while the TUI merely drew them. A
+> readout generated from the authoring surface would be a second representation of the topology and
+> would drift from the executed one — Principle 4, in the one place whose entire job is to tell the
+> operator the truth before they commit. The readout must therefore be generated from the same
+> hydrated structure the engine executes.
+>
+> **Existing groundwork:** the pre-flight pipeline already performs a DFS cycle check and a
+> `WAIT_FOR` dependency validation. Requirement 33 extends both across lanes rather than
+> introducing a new mechanism.
+
+---
+
+## Traceability
+
+| Amendment | Supersedes | Depends on | Blocks |
+|---|---|---|---|
+| Req 29 — lanes may terminate unmerged | **19.4** | Req 17 (`children`), Req 18 (tether IDs) | Req 30, Phase 4.99 certification |
+| Req 30 — output is a set | — | Req 29 | the payload contract, Phase 4.99 |
+| Req 31 — cross-lane routing | — | Req 18 | Req 32 |
+| Req 32 — `CTRL_WAIT` | — | Req 29, 30, 31 | Phase 4.99 |
+| Req 33 — pre-launch validation and readout | — | Req 29, 31, 32 | Phase 4.99, Req 19.1–19.3 enforcement |
+
+**Not specified here, deliberately:** the *authoring surface* for Gather Strategy, cross-lane route
+targets and `CTRL_WAIT` configuration. Those belong with the authoring-ownership decision (Era 2),
+which is still open, and specifying a UI before its owner is settled is how two authoring surfaces
+over one graph got proposed in the first place.
