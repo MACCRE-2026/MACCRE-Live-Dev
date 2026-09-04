@@ -3412,3 +3412,154 @@ answering the concurrency question, not the liveness one.
 **Related:** the amendment above, which found it; UT-1 test 3, whose speedup half has no
 trustworthy automated proxy and would benefit from a real concurrency measure; Doctrine 5 —
 this is a claim about behaviour that nothing tested, in a metric used as evidence.
+
+***
+
+# ENTRIES ADDED 2026-09-04 — the prior-art search, and what it cost
+
+***
+
+### Feature Name: The restrictive trust default is prior art — formally specified in an IETF draft
+**Abstract:** The 2026-09-03 analysis called MACCRE's restrictive trust default *"the one genuinely novel position here"*. An adversarial search found it specified as a formal, model-checked security property in IETF `draft-bondar-wca-00` (March 2026): `W(final) = min_i(W_institutional(source_i))`. The threat model has at least three names in the literature. **The novelty claim is dead and must not be published.**
+**Date/Time Entered:** 2026-09-04T12:00:00-04:00
+**Status:** **WITHDRAWN** — as a novelty claim. Superseded by a case-study framing, below.
+**Rationale for withdrawal:** falsified by primary sources. Publishing it would be refuted by one
+search, and the analysis's own Persona 2 predicts a reader with a security background stops
+reading at the first such claim.
+**Verified:** **Reproduced.** Primary sources read directly, not inferred from abstracts.
+**Prior art:** the point of the entry — see below.
+
+**Description:**
+**The decisive match.** Bondar, *Auditable Data Provenance for AI-Agent Tool-Call Chains*, IETF
+Internet-Draft `draft-bondar-wca-00`, March 2026, Appendix A:
+
+| WCA property | MACCRE Doctrine 1 |
+|---|---|
+| A.1 `W(p) <= W_institutional(source(p))` | *"bounded above by the trust of its inputs"* |
+| A.6 `W(final) = min_i(W_institutional(source_i))` | *"bounded above by the **minimum** trust of its inputs"* |
+| A.2 agent-generated content gets `W(p) = 0` | *"never a label applied by the last handler"* |
+
+A.6 is the rule verbatim, in formal notation, verified in TLA+ with TLC — including a
+counterexample in three transitions where an agent generates content, writes it to a source, and
+reads it back with warrant above zero. That is the laundering loop the doctrine exists to stop.
+
+Its **Warrant Erosion Principle** also formalises the corollary: an interpretive process can only
+lose observations and inference rules, never gain them. Compare *"provenance that evaporates at
+the first summarisation is decorative."*
+
+**The threat model is named, three times over.** *Semantic laundering* (Romanchuk & Bondar,
+arXiv 2601.08333, January 2026) — weakly-warranted data acquiring unwarranted status by crossing
+a trusted boundary, *channel-to-content trust conflation*. *Memory provenance laundering* and
+**source-authority non-amplification** (arXiv 2607.29167, July 2026), which also ships a
+provenance-preserving memory **firewall**. *Authority collapse* (arXiv 2608.01679), measured at
+48 of 49 configurations with a ~50% unauthorized-action rate once authority metadata is lost.
+
+**There is a systematic literature review of the surrounding taxonomy** (arXiv 2607.05031, July
+2026). A field with an SLR is not unclaimed territory.
+
+**Why the previous analysis missed it, which matters as much as the finding.** It recorded that
+the idea appears in none of SLSA, in-toto, Sigstore, W3C PROV, NIST AI RMF, the EU AI Act, C2PA,
+OpenLineage or OTel. **Every one of those is a standards body.** The work is in the agent-security
+research literature. The statement was true and the conclusion drawn from it was wrong — a
+search-scope error, and the second time in two days that a confident claim rested on an unexamined
+premise. Recorded because *how* the false negative happened is reusable and the finding itself is
+not.
+
+**What this does not damage.** The doctrine is *correct*, and independently derived from a real
+incident. That is the same category of result as Biba/LOMAC and W3C PROV: strong evidence the
+reasoning is sound, no evidence of novelty. **Two things also become cheaper rather than
+worse:** the formal property to implement is already written and model-checked, so Epoch 4 can
+adopt rather than invent; and there is now a vocabulary a reader in this field already knows.
+
+**Related:** the case-study entry below; *System-wide provenance doctrine*; CrumbRunner;
+`.kiro_artifacts/2026-09-04_restrictive_trust_default_prior_art_search.md`.
+
+***
+
+### Feature Name: Publish the fan-in laundering case study instead of a novelty claim
+**Abstract:** The prior-art literature is about *agent memory* and *tool-call boundaries*. MACCRE's instance is *fan-in aggregation inside a flow engine* — a merge node consuming eight lane outputs and emitting one document that carries none of their trust. No paper was found on laundering through orchestration fan-in. That is a different **surface**, not a different idea, which makes it a legitimate case study and not a claim.
+**Date/Time Entered:** 2026-09-04T12:00:00-04:00
+**Status:** Unfulfilled — blocked on `ASSISTANT_NAME` indirection before any publication
+**Verified:** N/A — a writing task.
+**Prior art:** semantic laundering (arXiv 2601.08333) is the phenomenon; this is an instance of it
+in a setting the literature has not covered. **Searched: no paper found on trust laundering
+through fan-in aggregation in a multi-agent flow engine.** Recorded as *searched, not found*
+rather than *does not exist*.
+
+**Description:**
+**The honest shape of the contribution:** *here is a phenomenon the literature calls semantic
+laundering, appearing in a place it has not been described, found from a concrete incident by
+someone who had not read the literature — and here is what it cost.*
+
+The incident is already the strongest asset: a `CTRL_MERGE` node reporting `Merged 8 sources`,
+literally true, over eight identical paths. Then the same node emitting a document whose
+provenance is the union of nothing. That is a fan-in laundering event with a measured cost, and
+the analysis's Persona 3 — the near-peer builder — is reached by exactly that opening and lost by
+eight principles up front.
+
+**What the write-up must include, or it repeats the mistake:**
+
+1. **The prior art, cited up front rather than in a footnote.** Naming semantic laundering and
+   source-authority non-amplification is what makes the case study credible instead of naive.
+2. **An explicit non-claim of novelty**, in the opening.
+3. **The state of implementation, plainly.** Zero. The trust ceiling exists as doctrine and is
+   enforced nowhere — 646 files, no trust field, no ceiling computation, no test. Publishing
+   provenance as a *feature* is what the analysis says gets the project dismissed in ninety
+   seconds.
+4. **Why fan-in is a distinct surface.** Memory consolidation launders one observation into
+   apparent history. Fan-in launders *N artifacts of differing provenance into one*, and the
+   aggregation step is where the union should be computed and currently is not. The `output_path`
+   defect (E1) is the concrete mechanism: eight lanes' identities collapsed to one path, so even
+   the *inputs* to a provenance union were unrecoverable until 2026-09-01.
+
+**Do not write it yet.** Two prerequisites: `ASSISTANT_NAME` indirection, which blocks any public
+artifact; and the incident-named doctrine practice should get the same adversarial search this
+claim just failed, since it is now the leading candidate for MACCRE's actual contribution and has
+never been checked.
+
+**Related:** the withdrawal above; *Rename Nexus Copilot before any public artifact*;
+*System-wide provenance doctrine*; the E1 fan-in defect this case study is built on.
+
+***
+
+### Feature Name: Sovereign Importer's human content gate has a published scaling objection
+**Abstract:** The Importer is a human gate that evaluates content. Romanchuk & Bondar's *Responsibility Vacuum* (arXiv 2601.15059) argues human oversight shifts from genuine evaluation to ritualised approval above a throughput threshold, and the WCA draft builds on that to argue **content-evaluating mediators cannot scale** — and worse, that a mediator's own "approved" label becomes a new laundering channel. This is a citable objection to the strongest control in the design.
+**Date/Time Entered:** 2026-09-04T12:00:00-04:00
+**Status:** Unfulfilled — recorded for consideration, no change proposed yet
+**Verified:** **Reproduced by reading** WCA §3.3 and its summary of the cited paper. The
+underlying paper itself was **not** read in full — its argument is taken from WCA's
+characterisation, which is a secondary source. Treat the strength of the argument as
+**unverified**; its existence is not.
+
+**Description:**
+WCA §3.3 argues that any mediator evaluating content must identify proposition boundaries, define
+canonical representations, and assign warrant status — and that the last of these ritualises under
+throughput, after which the mediator's certification becomes the new unwarranted-status channel.
+Its architectural response is the design principle **certify sources, not content**.
+
+**Why this lands on MACCRE.** The sovereignty contract makes Sovereign Importer the deterministic
+firewall and knowledge gate, with no agentic control, *specifically* so that a human decides what
+crosses. That is a content-evaluating human mediator, which is the exact class under objection.
+
+**Why it is not fatal, stated precisely rather than dismissively:**
+
+- The argument is about **throughput**, and MACCRE's throughput is one operator. That is the
+  regime where a phase-transition argument is weakest.
+- The doctrine already concedes the gating is an acknowledged violation of principle that must
+  remain auditable rather than silent — so the design does not claim the gate is costless.
+- The analysis separately observed that the Importer's guarantees are currently *asserted by the
+  system to its own operator* and have never been independently examined. This objection is what
+  an independent examiner would raise first.
+
+**What to do with it.** Nothing urgent, and specifically **not** a redesign. Two cheap moves when
+the Importer seam is next opened: consider whether some of what the gate reads could be replaced
+by *source* certification rather than *content* reading, which is WCA's answer and costs less
+human attention; and record the objection in the contract itself, in the same style the contract
+already uses for its own acknowledged violation. An objection named in the design is stronger than
+one discovered by a reader.
+
+**This is also SOP-shaped.** The Sovereign Importer team owns their side and should hear that a
+published argument exists against the control they implement. It asks nothing of them.
+
+**Related:** the sovereignty contract; the reframing in analysis §6.2 that the Importer's evidence
+is unexamined; B7 signing at the Importer seam, where WCA's WAL-0…WAL-3 ladder is now a candidate.
