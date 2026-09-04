@@ -3289,3 +3289,126 @@ this is an operator decision, not a defect to guard against.
 portability class as the DPAPI credential vault, and the session-lease option composes with the
 device lease; the register entry recording that this module previously made the topology loader
 Windows-only; `.oracle_artifacts/2026-09-03_paranoia_mode_honest_disable_and_portability.md`.
+
+***
+
+### AMENDMENT to *A linear flow opened two worker slots*
+**Amended:** 2026-09-04T06:30:00-04:00
+**Status:** **COMPLETED** — reproduced deterministically, root-caused, fixed, and guarded.
+**Completion Metric:** On a single-task queue with worker construction slower than the
+recheck interval, the pool spawned **5 workers, 4 of which never claimed anything**, and made
+**11 claim attempts for 1 task**. After the fix: **1 worker, 0 wasted, 3 claim attempts.** The
+`threading.Barrier(8)` width proof still passes, so the correction cost no concurrency.
+**Verified:** **Reproduced.** Not by waiting for the intermittent failure, but by forcing the
+condition — see below.
+
+**What it actually was: a ramp to the ceiling, not an extra thread.**
+
+The original observation was `AssertionError: linear flow used slots {0, 1}`, which reads like
+one spare worker. Instrumenting the scaler showed something worse. `_scale_to_demand` computed
+`target = active + ready`, and that double-counts every live worker that has not claimed yet:
+the worker is in `_active`, and the task it is about to take is still `open`, so it is still
+counted in `ready`.
+
+Because `active` grows while `ready` does not, **the target grew by one on every recheck
+interval.** The measured decision record, `(active_before, ready, is_fresh, target)`:
+
+```
+(0, 1, True, 1)
+(1, 1, True, 2)   <-- double count
+(2, 1, True, 3)   <-- double count
+(3, 1, True, 4)   <-- double count
+(4, 1, True, 5)   <-- double count
+```
+
+One task. Five workers. Bounded only by `max_workers`, which on a scatter-configured pool is
+8. Each worker builds a `TopologyEngine` and a `LocalMessageBroker` that runs schema DDL
+against the very SQLite file the one real claim needs.
+
+**This is defect F2's construction storm, reached by a different route.** F2 was *paused, so
+demand stays high, so respawn*. This is *unclaimed, so demand stays high, so spawn more*. Same
+shape, same cost, different trigger — which is worth noting because F2's fix (the scaler
+returns early while paused) could not have caught this one, and did not.
+
+**Why the existing guard missed it.** A stale-estimate guard was already present, and its
+comment already recorded this exact symptom: *"Measured on a linear 3-step flow, which opened
+two threads for one task at a time."* It closes the window **inside** `demand_recheck_seconds`
+by refusing to scale on a cached estimate. It does not close the window **at** the boundary,
+where a fresh estimate still sees the unclaimed task. The diagnosis was right, the fix was
+one case short, and nothing tested the remaining case.
+
+**Why it was load-sensitive**, and therefore why it looked like a flake: worker construction is
+slower under load, so the gap between *spawned* and *claimed* widens past the recheck interval.
+Under a full suite it exceeds it; run alone, the worker claims first. **The register's earlier
+framing — that this was not distinguished from slot-id reuse — is now resolved: it was neither
+a flake nor slot reuse.**
+
+**The fix**, one line of arithmetic plus the bookkeeping to support it:
+
+```python
+unclaimed = live workers that have not yet executed a node
+target    = active + max(0, ready - unclaimed)
+```
+
+Checked against every case the original formula existed to serve:
+
+| Situation | Old | New | Correct |
+|---|---|---|---|
+| 8 lanes, nothing claimed | 0+8 = 8 | 0+(8−0) = 8 | ramps to width |
+| 8 lanes, 3 claimed, 5 warming | 8+5 = 8 (capped) | 8+(5−5) = 8 | holds at width |
+| linear, worker warming | 1+1 = **2** | 1+(1−1) = **1** | the defect |
+| linear, worker claimed | 1+0 = 1 | 1+(0−0) = 1 | unchanged |
+| burst arriving later | 1+7 = 8 | 1+(7−0) = 8 | still scales |
+
+**It was never double execution**, and that is asserted separately rather than assumed. The
+atomic claim was always the authority; the losing workers simply retired. The cost was wasted
+construction and lock contention, not a task run twice. Recording that distinction is what kept
+the fix proportionate.
+
+**Consequence for 4.99: this unblocks UT-0.** The analysis recorded UT-0 as blocked because the
+demand estimator is the component UT-0 exists to measure and it held an unexplained
+non-determinism. It is now explained, fixed, and guarded, and a UT-0 baseline taken after this
+is measuring a pool that behaves the same way twice.
+
+***
+
+### Feature Name: `PoolResult.peak_concurrency` measures workers alive, not lanes executing
+**Abstract:** The field documented itself as *"Highest number of workers simultaneously executing nodes"* and has never measured that. It is `max(len(self._active))`, and a slot enters `_active` in `_spawn` before its thread starts, before the worker is constructed, and before it has claimed anything. Docstring corrected 2026-09-04; the number itself is unchanged and still useful, as an upper bound.
+**Date/Time Entered:** 2026-09-04T06:30:00-04:00
+**Status:** Unfulfilled — docstring corrected, a true measurement not yet built
+**Verified:** **Reproduced by code read.** Found while instrumenting the over-provisioning
+defect: a worker that is built and then finds no work counted in full toward "executing nodes".
+
+**Description:**
+**What the number is.** An upper bound on simultaneous execution. Every worker counted was at
+least *reserved*; some had not been constructed yet, and — as the over-provisioning defect
+showed — some never claimed anything at all. Before that fix, a linear flow could report
+`peak_concurrency=5` for one task executed once.
+
+**What is unaffected, and this matters for every artifact quoting the number.** The 8-lane width
+claim does **not** rest on this field. It rests on `tests/test_scatter_concurrency.py`, which
+uses `threading.Barrier(8)` and therefore **deadlocks** rather than reporting a lower number if
+the pool is one thread short. That is a genuine proof of simultaneous execution and it is
+untouched. Live figures such as `peak_concurrency=8` on run `job_20260831-041428-6goe` remain
+accurate *as workers alive*, and on a scatter with eight genuinely-open lanes the two numbers
+coincide anyway.
+
+**Why it is not simply redefined.** Two reasons, both about honesty over tidiness. The number is
+quoted in four artifacts and a live run log, and silently changing what a published metric means
+is worse than leaving it correctly labelled. And measuring true simultaneity properly is not a
+one-line change: it needs the overlap of intervals during which workers were *inside* a node,
+and the pool cannot get that from `execute_cycle`'s return value alone, because an idle poll and
+a worked cycle are indistinguishable until the call returns. The tests already have the right
+instrument — `ConcurrencyTracker` in `test_scatter_concurrency.py`, which counts workers
+simultaneously inside node execution — and the honest move is to lift that into the pool
+deliberately rather than approximate it.
+
+**Recommended:** add `peak_lanes_executing` alongside, computed from interval overlap, and leave
+`peak_concurrency` as the alive-count with its corrected docstring. Two numbers, each saying
+what it means, rather than one number meaning whichever the reader assumes. Then make the flow
+engine's readout and UT-0's recording quote the new one, since *"N/8 active"* in the TUI is
+answering the concurrency question, not the liveness one.
+
+**Related:** the amendment above, which found it; UT-1 test 3, whose speedup half has no
+trustworthy automated proxy and would benefit from a real concurrency measure; Doctrine 5 —
+this is a claim about behaviour that nothing tested, in a metric used as evidence.

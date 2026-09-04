@@ -87,6 +87,13 @@ from maccre_core.orchestration.swarm_worker import (
 
 logger = logging.getLogger("maccre_core.swarm_pool")
 
+#: Cap on :attr:`PoolResult.spawn_decisions`. Diagnostics must not become a leak:
+#: a long-running scatter polls its scaler many times a second, and an unbounded
+#: list of decisions would grow for the life of the run. The first entries are the
+#: informative ones — ramp-up is where a sizing defect shows — so the bound drops
+#: later records rather than rotating.
+_MAX_SPAWN_DECISIONS = 64
+
 __all__ = ["DynamicSwarmPool", "PoolResult", "SwarmWorkerLike"]
 
 
@@ -140,14 +147,50 @@ class PoolResult:
     #: larger budget, while this needs the operator told that their UI died under
     #: a running flow.
     pause_abandoned: bool = False
-    #: Highest number of workers simultaneously executing nodes. The headline
-    #: Phase 6.12 metric — with the old single-threaded loop this could only ever
-    #: be 1, whatever the scatter width.
+    #: Highest number of workers simultaneously **alive**, at any point in the run.
+    #:
+    #: Corrected 2026-09-03. This previously documented itself as "workers
+    #: simultaneously executing nodes", which it has never measured: it is
+    #: ``max(len(self._active))``, and a slot enters ``_active`` in :meth:`_spawn`
+    #: *before* its thread starts, before the worker is constructed, and before it
+    #: has claimed anything. A worker that is built and then finds no work counts
+    #: here in full.
+    #:
+    #: The distinction is not pedantic — it is the difference between "the pool
+    #: opened 8 threads" and "8 lanes ran at once". **The authority on true
+    #: simultaneity is the barrier proof** in ``tests/test_scatter_concurrency.py``,
+    #: which uses ``threading.Barrier(8)`` and therefore *deadlocks* unless all
+    #: eight lanes are genuinely inside execution together. This field is an upper
+    #: bound on that number, not a measurement of it.
+    #:
+    #: Live figures quoted in artifacts (e.g. ``peak_concurrency=8`` on run
+    #: ``job_20260831-041428-6goe``) remain accurate *as workers alive*, and the
+    #: 8-lane width claim stands on the barrier proof rather than on this number.
     peak_concurrency: int = 0
     #: Total cycles that actually executed a node.
     cycles_worked: int = 0
     #: Threads spawned over the whole run (not the same as peak concurrency).
     workers_spawned: int = 0
+    #: Workers that were constructed, ran, and **never executed a single node**.
+    #:
+    #: The direct measure of over-provisioning. A worker costs a
+    #: ``TopologyEngine`` and a ``LocalMessageBroker`` — the latter running schema
+    #: DDL against the very SQLite file live claims are contending for — so one
+    #: that never claims is pure cost plus contention.
+    #:
+    #: Nonzero is not automatically a defect: a genuine burst can be over by the
+    #: time the last thread is ready, and the atomic claim means the loser simply
+    #: retires. **On a linear flow it should be zero**, and that is the assertion
+    #: worth making, because a linear flow has one claimable task at a time by
+    #: construction.
+    workers_that_never_worked: int = 0
+    #: One record per spawn decision: ``(active_before, ready, is_fresh, target)``.
+    #:
+    #: Exists because "the pool opened a second thread" is a symptom with several
+    #: possible causes, and the inputs to the decision distinguish them without
+    #: guessing. Bounded at :data:`_MAX_SPAWN_DECISIONS` so a long run cannot grow
+    #: it without limit.
+    spawn_decisions: list[tuple[int, int | None, bool, int]] = field(default_factory=list)
     #: Unhandled worker exceptions, formatted.
     errors: list[str] = field(default_factory=list)
 
@@ -283,6 +326,13 @@ class DynamicSwarmPool:
         self._shutdown = threading.Event()
         self._lock = threading.Lock()
         self._active: set[int] = set()
+        #: Slots whose *current* worker has executed at least one node.
+        #:
+        #: ``_active - _worked_slots`` is therefore the set of live workers that
+        #: have not claimed anything yet, and those must not be counted as having
+        #: consumed a ready task. Cleared per slot on retirement, so a recycled
+        #: slot starts unclaimed again.
+        self._worked_slots: set[int] = set()
         self._threads: list[threading.Thread] = []
         self._free_slots: list[int] = []
         self._peak_concurrency = 0
@@ -292,6 +342,12 @@ class DynamicSwarmPool:
         self._last_demand: int | None = None
         self._last_demand_at: float = 0.0
         self._demand_calls = 0
+        #: Workers that retired without ever executing a node. See
+        #: :attr:`PoolResult.workers_that_never_worked`.
+        self._workers_that_never_worked = 0
+        #: Bounded log of scaling decisions. See
+        #: :attr:`PoolResult.spawn_decisions`.
+        self._spawn_decisions: list[tuple[int, int | None, bool, int]] = []
 
     # ── Introspection ─────────────────────────────────────────────────────────
 
@@ -314,9 +370,27 @@ class DynamicSwarmPool:
         with self._lock:
             return len(self._active)
 
+    def _unclaimed_worker_count(self) -> int:
+        """Live workers that have not yet executed a node.
+
+        These are workers already paid for — a slot reserved, a thread started,
+        and in production a ``TopologyEngine`` plus a ``LocalMessageBroker`` being
+        constructed — that have not yet taken anything off the queue. Each one is
+        already committed to consuming a ready task, so the scaler must not size
+        as though those tasks were unattended.
+        """
+        with self._lock:
+            return len(self._active - self._worked_slots)
+
     @property
     def peak_concurrency(self) -> int:
-        """Highest simultaneous worker count observed so far."""
+        """Highest simultaneous count of **alive** workers observed so far.
+
+        Not a measure of how many lanes ran at once — see
+        :attr:`PoolResult.peak_concurrency` for why, and for what is. A slot is
+        counted from the moment :meth:`_spawn` reserves it, which is before its
+        worker exists.
+        """
         with self._lock:
             return self._peak_concurrency
 
@@ -374,6 +448,12 @@ class DynamicSwarmPool:
         idle_streak = 0
         #: When this worker first observed the flow held, or None if running.
         paused_since: float | None = None
+        #: Whether this worker instance ever executed a node. A worker that
+        #: retires with this still False was pure cost — it built a
+        #: ``TopologyEngine`` and a ``LocalMessageBroker``, contended with live
+        #: claims, and did nothing. Reported as
+        #: :attr:`PoolResult.workers_that_never_worked`.
+        worked_at_least_once = False
         try:
             try:
                 worker = self.worker_factory(slot)
@@ -402,8 +482,10 @@ class DynamicSwarmPool:
                 if outcome is CycleOutcome.WORKED:
                     idle_streak = 0
                     paused_since = None
+                    worked_at_least_once = True
                     with self._lock:
                         self._cycles_worked += 1
+                        self._worked_slots.add(slot)
                     continue
 
                 # ── PAUSED is not IDLE (defect F2) ────────────────────────────
@@ -452,10 +534,15 @@ class DynamicSwarmPool:
         finally:
             with self._lock:
                 self._active.discard(slot)
+                # A recycled slot must start unclaimed again, or the next worker in
+                # it would be credited with this one's claim.
+                self._worked_slots.discard(slot)
                 self._free_slots.append(slot)
+                if not worked_at_least_once:
+                    self._workers_that_never_worked += 1
             logger.debug(
-                "[SWARM_POOL] Worker slot %d retired (job=%s, active=%d).",
-                slot, self.job_id, self.active_worker_count(),
+                "[SWARM_POOL] Worker slot %d retired (job=%s, active=%d, worked=%s).",
+                slot, self.job_id, self.active_worker_count(), worked_at_least_once,
             )
 
     # ── Scaling ───────────────────────────────────────────────────────────────
@@ -614,9 +701,60 @@ class DynamicSwarmPool:
             # 3-step flow, which opened two threads for one task at a time.
             return
         else:
+            # ── Do not count a task twice against the worker coming for it ─────
+            # `active + ready` double-counts every live worker that has not
+            # claimed yet: the worker is in `active`, and the task it is about to
+            # take is still `open`, so it is still in `ready`.
+            #
+            # The stale-estimate guard above closes that window *inside*
+            # demand_recheck_seconds. It does not close it *at* the boundary,
+            # where a fresh estimate still sees the unclaimed task — and because
+            # `active` grows while `ready` does not, the target grew by one every
+            # recheck interval. Measured on a single-task queue with construction
+            # slower than the recheck: 5 workers spawned, 4 of which never
+            # claimed, 11 claim attempts for 1 task, with the decision record
+            # reading (0,1,True,1) (1,1,True,2) (2,1,True,3) (3,1,True,4)
+            # (4,1,True,5). That is a ramp to `max_workers` for one task, bounded
+            # only by the ceiling — the same construction storm as defect F2,
+            # reached by a different route.
+            #
+            # Subtracting the unclaimed workers fixes it without weakening the
+            # scatter case, which is why `active + ready` was chosen originally:
+            #   8-lane, nothing claimed yet : 0 + (8-0) = 8   (ramps to width)
+            #   8-lane, 3 claimed, 5 warming: 8 + (5-5) = 8   (holds at width)
+            #   linear, worker warming      : 1 + (1-1) = 1   (was 2 — the defect)
+            #   linear, worker claimed      : 1 + (0-0) = 1   (unchanged)
+            #   burst arriving later        : 1 + (7-0) = 8   (still scales up)
+            unclaimed = self._unclaimed_worker_count()
+            effective_ready = max(0, ready - unclaimed)
             # At least one worker while work remains, or a queue whose head is
             # briefly gated would stall with nobody polling it.
-            target = min(self.max_workers, max(1, self.active_worker_count() + ready))
+            target = min(
+                self.max_workers,
+                max(1, self.active_worker_count() + effective_ready),
+            )
+
+        # ── Record why, before acting on it ───────────────────────────────────
+        # `active + ready` double-counts whenever an already-spawned worker has
+        # not claimed yet: the worker is in `active`, and the task it is about to
+        # take is still `open`, so it is still in `ready`. The stale-estimate
+        # guard above closes the window *inside* demand_recheck_seconds; it does
+        # not close the window *at* the recheck boundary, where a fresh estimate
+        # can still see an unclaimed task belonging to a live worker.
+        #
+        # That is load-sensitive by construction: worker construction builds a
+        # TopologyEngine and a LocalMessageBroker (schema DDL against SQLite), so
+        # under load the gap between "spawned" and "claimed" widens past the
+        # recheck interval and the supervisor sizes against a task already spoken
+        # for. Suspected cause of the intermittent
+        # `test_linear_flow_stays_single_threaded` failure — recorded rather than
+        # assumed, which is what these numbers are for.
+        before = self.active_worker_count()
+        if before < target:
+            with self._lock:
+                if len(self._spawn_decisions) < _MAX_SPAWN_DECISIONS:
+                    self._spawn_decisions.append((before, ready, is_fresh, target))
+
         while self.active_worker_count() < target:
             if not self._spawn(pause_event, stop_event):
                 break
@@ -705,6 +843,9 @@ class DynamicSwarmPool:
             self._last_demand = None
             self._last_demand_at = 0.0
             self._demand_calls = 0
+            self._workers_that_never_worked = 0
+            self._spawn_decisions.clear()
+            self._worked_slots.clear()
 
         result = PoolResult()
         started_at = time.monotonic()
@@ -834,16 +975,31 @@ class DynamicSwarmPool:
             result.peak_concurrency = self._peak_concurrency
             result.cycles_worked = self._cycles_worked
             result.workers_spawned = self._workers_spawned
+            result.workers_that_never_worked = self._workers_that_never_worked
+            result.spawn_decisions = list(self._spawn_decisions)
             result.errors = list(self._errors)
 
         logger.info(
             "[SWARM_POOL] job=%s finished: drained=%s stopped=%s timed_out=%s "
-            "stalled=%s pause_abandoned=%s peak_concurrency=%d cycles=%d "
-            "spawned=%d errors=%d",
+            "stalled=%s pause_abandoned=%s workers_alive_peak=%d cycles=%d "
+            "spawned=%d never_worked=%d errors=%d",
             self.job_id, result.drained, result.stopped, result.timed_out,
             result.stalled, result.pause_abandoned, result.peak_concurrency,
-            result.cycles_worked, result.workers_spawned, len(result.errors),
+            result.cycles_worked, result.workers_spawned,
+            result.workers_that_never_worked, len(result.errors),
         )
+        if result.workers_that_never_worked:
+            # Not an error — a genuine burst can be over before the last thread is
+            # ready, and the atomic claim means the loser just retires. Logged at
+            # INFO with the decision inputs because it is the signal that
+            # distinguishes that benign case from a sizing defect, and because
+            # nothing recorded it before.
+            logger.info(
+                "[SWARM_POOL] job=%s over-provisioned: %d worker(s) never claimed. "
+                "Spawn decisions (active_before, ready, is_fresh, target): %s",
+                self.job_id, result.workers_that_never_worked,
+                result.spawn_decisions,
+            )
         return result
 
     def _count_held_locks(self, locked_probe: Optional[Callable[[], int]]) -> int:
