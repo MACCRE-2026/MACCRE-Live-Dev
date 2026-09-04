@@ -3214,3 +3214,78 @@ import and the guard can both go. The vault is an architecture problem; this is 
 beside the vault, and it is in a more central path; risk R1 (Windows coupling), which this makes
 worse than recorded, alongside `win10toast` sitting in sovereign core; the Drive transport
 assessment artifact, which found it.
+
+***
+
+### Feature Name: Paranoia Mode — finish the hardware-token topology gate
+**Abstract:** The USB-key topology gate is implemented, honest about being disabled, and inert. Finishing it means solving the one problem that switched it off: a headless swarm cannot insert a USB stick. Until that is answered the gate can only be an interactive-launch control, not a system-wide one.
+**Date/Time Entered:** 2026-09-03T22:30:00-04:00
+**Status:** Deferred (needs decision)
+**Verified:** N/A — this is a capability to build. The current *disabled* state is verified by
+`tests/test_paranoia_mode.py` (17 tests), including a docstring-vs-flag drift test.
+**Prior art:** Hardware-token presence gating is the pattern behind FIDO2/U2F, YubiKey-backed
+GPG, and full-disk-encryption key files. **Searched, and MACCRE's variant is not novel**: what
+is slightly unusual is stamping the *authorisation result* into an NTFS Alternate Data Stream so
+a directory scan does not reveal which topologies are approved. That is steganography-by-storage
+rather than a new access-control idea, and it is the weakest part of the design (see below).
+
+**Description:**
+**What exists.** `maccre_core/utils/secret_auth.py`, as of 2026-09-03:
+
+- `PARANOIA_MODE_ENABLED: bool = False` — the single seam.
+- `stamp_topology()` — real and working. Enumerates removable volumes via `GetLogicalDrives` /
+  `GetDriveTypeW`, hashes each volume serial with SHA-256, and on a match writes
+  `O_AUTH_VALID` to `topology.csv:maccre_auth`.
+- `has_auth_stamp()` — reads that stream. Returns `False` off Windows, because a check that
+  cannot be performed has not passed.
+- `is_topology_approved()` — short-circuits to `True` while the flag is off, and says so.
+
+**The operator's stated intent**, recorded so the goal is not lost: *abstract credential access
+from the system via a USB key the user has to keep inserted during sessions.* Described as "a
+layer of paranoia", which is the right framing — it is defence in depth, not a load-bearing
+control.
+
+**Why it was switched off, and the real problem to solve.** A headless swarm has no operator
+present to insert anything. That is not an implementation gap, it is a design question, and it
+is the decision this entry is deferred on:
+
+1. **Interactive-launch gate only.** The token is required to *start* a flow from the TUI;
+   once started, workers run unauthenticated. Cheap, honest, and matches how FDE key files
+   work — the key unlocks, it is not consulted per read. **Recommended.**
+2. **Per-topology-load gate.** Every `TopologyEngine` load requires the stamp. Closest to the
+   original design and the reason it had to be disabled; would also require re-solving it for
+   pattern silos, which are generated programmatically with no operator present.
+3. **Session lease.** The token mints a time-boxed lease at launch; workers check the lease,
+   not the hardware. Middle ground, and it composes with the *device lease* work already in the
+   register's Chain B.
+
+**Three things to fix when it is built, all of them recorded now because they are easy to lose:**
+
+- **The ADS is the wrong substrate for the target platform.** Alternate Data Streams are NTFS
+  only. They cannot exist on Android, and they do not survive a Drive sync or most copy
+  operations. Since the stated end goal is MACCRE on Android, an approval marker that cannot
+  exist there is a dead end. A sidecar file, or a signed marker inside the `.stamp` record,
+  would be portable. **Do not reinstate the ADS dependency without deciding this first.**
+- **Volume serials are weak identifiers.** `GetVolumeInformationW`'s serial is assigned at
+  format time, is 32 bits, and is trivially settable with common tools. It identifies *a
+  formatted volume*, not *a physical device*. This is Principle 2's territory — an
+  approximately-correct identifier that downstream logic acts on. If the threat model is
+  anything beyond "stop an accidental launch", this needs a real device identifier or a
+  challenge-response token.
+- **The stamp is a boolean, not a binding.** `O_AUTH_VALID` says nothing about *which*
+  topology was approved or *when*. A stamp copied to another topology authorises it, and a
+  stamp never expires. `stamp_topology` already computes the topology's SHA-256 content hash —
+  binding the stamp to that hash and a timestamp would make it mean something, and would cost
+  almost nothing since the hash is already written to `topology.csv.stamp`.
+
+**What must not happen: enabling the flag without this work.** Flipping
+`PARANOIA_MODE_ENABLED` to `True` today would refuse every topology on a machine with no token
+inserted, and refuse every topology on any non-Windows host, because `has_auth_stamp` correctly
+reports `False` where the stream cannot exist. The drift test will fail loudly if the flag moves
+without the docstring, but no test prevents the flag from moving — that is deliberate, since
+this is an operator decision, not a defect to guard against.
+
+**Related:** *Android assistant client* and Chain B — the ADS substrate question is the same
+portability class as the DPAPI credential vault, and the session-lease option composes with the
+device lease; the register entry recording that this module previously made the topology loader
+Windows-only; `.oracle_artifacts/2026-09-03_paranoia_mode_honest_disable_and_portability.md`.

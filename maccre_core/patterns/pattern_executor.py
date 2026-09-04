@@ -89,7 +89,7 @@ class PatternExecutor:
         topology_path = self._materialize_silo(pattern, job_id, silo_project)
         payload_path = self._write_payload(payload, job_id, silo_project)
         self._merge_roster(pattern, silo_project)
-        self._sign_topology(topology_path)
+        self._record_topology_hash(topology_path)
 
         db_path = self._silo_db(silo_project)
         self._inject_task(db_path, job_id, str(payload_path))
@@ -285,41 +285,36 @@ class PatternExecutor:
             )
         roster_path.write_text("\n".join(rows), encoding="utf-8")
 
-    def _sign_topology(self, topology_path: Path) -> None:
-        """Sign the topology with the hardware auth stamp.
+    def _record_topology_hash(self, topology_path: Path) -> None:
+        """Write the topology's SHA-256 content hash as an offline audit record.
 
-        For pattern silos, the hardware token will not be present in headless
-        execution, so the SHA-256 fallback stamp is always used.  This is by
-        design — patterns execute in isolated silos that bypass the interactive
-        auth gate (the gate exists for user-facing workbook topologies).
+        **This performs no authentication.** Paranoia Mode
+        (``maccre_core.utils.secret_auth``) is disabled, so nothing reads an auth
+        stamp and nothing gates execution on one.
 
-        The NTFS ADS (topology.csv:maccre_auth) is written unconditionally for
-        pattern silos so TopologyEngine.is_topology_approved() always returns True.
+        Until 2026-09-03 this method wrote an NTFS Alternate Data Stream and logged
+        ``ADS auth stamp written``, and its docstring claimed the write happened
+        "so TopologyEngine.is_topology_approved() always returns True". That was
+        false in a way worth naming: ``is_topology_approved`` returned ``True``
+        regardless of the stamp, so the write was dead work and the log line implied
+        a security step that was not occurring. Doctrine 3 — a success message must
+        be conditional on work actually performed — applies to a log line asserting
+        an authorisation as much as to a task status.
+
+        The ADS write is gone rather than corrected because it had no reader. The
+        content hash is kept: it is a genuine audit record, it is platform-neutral,
+        and it is what a future Paranoia Mode would stamp *over*.
         """
         import hashlib  # noqa: PLC0415
         content = topology_path.read_bytes()
         content_hash = hashlib.sha256(content).hexdigest()
-        try:
-            from maccre_core.utils.secret_auth import stamp_topology  # noqa: PLC0415
-            result = stamp_topology(str(topology_path), content_hash)
-            _log.debug("[PatternExecutor] stamp_topology result: %s", result)
-        except (ImportError, AttributeError):
-            pass
-
-        # Pattern silos are programmatically generated — always write the ADS
-        # auth token directly.  The hardware gate is for interactive workbook
-        # topologies; pattern silos are sovereign by construction.
-        ads_path = f"{topology_path}:maccre_auth"
-        try:
-            with open(ads_path, "w", encoding="utf-8") as _ads_f:
-                _ads_f.write("O_AUTH_VALID")
-            _log.debug("[PatternExecutor] ADS auth stamp written: %s", ads_path)
-        except OSError as _ads_err:
-            _log.warning("[PatternExecutor] ADS stamp failed (%s) — topology may not run", _ads_err)
 
         # Write the SHA-256 hash as an offline audit record
         stamp_path = topology_path.with_suffix(".stamp")
         stamp_path.write_text(content_hash, encoding="utf-8")
+        _log.debug(
+            "[PatternExecutor] Content hash recorded (no auth performed): %s", stamp_path
+        )
 
 
     def _inject_task(self, db_path: Path, job_id: str, payload_path: str) -> None:
@@ -551,3 +546,4 @@ def get_executor(project_id: str = "") -> PatternExecutor:
 
 
 __all__ = ["PatternExecutor", "get_executor"]
+

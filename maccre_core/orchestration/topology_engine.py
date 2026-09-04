@@ -134,8 +134,21 @@ class TopologyEngine(TopologyProvider):
             raise ValueError(f"Node '{node_id}' not found in topology.csv")
 
     def _pull_from_csv(self) -> Dict[str, Any]:
-        """Loads and parses the CSV into the engine dictionary."""
-        from maccre_core.utils.secret_auth import is_topology_approved
+        """Loads and parses the CSV into the engine dictionary.
+
+        No hardware-auth gate is applied here, deliberately. Paranoia Mode
+        (``maccre_core.utils.secret_auth``) is disabled, so the previous
+        ``is_topology_approved`` call could only ever return ``True`` and the
+        ``PermissionError`` beneath it was unreachable.
+
+        Removing it also removed a hard portability blocker: ``secret_auth`` imports
+        ``ctypes.wintypes``, which cannot import on a non-Windows host, and the
+        import here was **unguarded**. That made the topology loader — on every
+        execution path in the system — Windows-only, in service of a gate that
+        always said yes. See the register entry *Paranoia Mode — finish the
+        hardware-token topology gate*; when the gate is genuinely wanted, the
+        enforcement point comes back here, behind a platform guard.
+        """
         from maccre_core.utils.path_resolver import get_maccre_root
 
         if not os.path.exists(self.csv_path):
@@ -144,9 +157,6 @@ class TopologyEngine(TopologyProvider):
             if not fallback_path.exists():
                 raise FileNotFoundError(f"Topology missing at {self.csv_path} and GLOBAL fallback.")
             self.csv_path = str(fallback_path)
-
-        if not is_topology_approved(self.csv_path):
-            raise PermissionError(f"DENIED: Topology {self.csv_path} lacks Hardware Auth Stamp.")
 
         try:
             # 1. Load the Base Agent Configuration Matrix from the Agent Roster
