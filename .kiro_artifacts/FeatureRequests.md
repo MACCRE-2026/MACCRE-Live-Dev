@@ -3120,3 +3120,97 @@ three-file problem entirely rather than mitigating it.
 lease, conflict-fork detection) — this entry is direct evidence those are not theoretical;
 risk R8; *`omni` hardening*, whose WAL cleanup looks only at the repository root and would not
 see any of these 68.
+
+***
+
+### Feature Name: `secret_auth` advertises a hardware gate that returns `True`, and its Windows-only import makes the topology loader unportable
+**Abstract:** `is_topology_approved()` unconditionally returns `True`, so the topology auth gate is disabled — a deliberate operator decision. But the module docstring still advertises *"Air-Gap Steganographic Hardware Authentication… NTFS Alternate Data Streams and Hardware tokens"*, and `secret_auth.py` does `from ctypes import wintypes` at module scope. `topology_engine._pull_from_csv` imports it **unguarded**, so the topology loader cannot run off Windows — for the sake of a gate that always says yes.
+**Date/Time Entered:** 2026-09-03T22:00:00-04:00
+**Status:** Unfulfilled
+**Verified:** **Reproduced by code read.** The non-Windows import failure is **inferred from
+`ctypes.wintypes` being Windows-only and NOT executed on a non-Windows host**, since none is
+available. That inference is strong but it is an inference.
+
+**Description:**
+Found while assessing the Drive header-space transport idea
+(`.kiro_artifacts/2026-09-03_drive_transport_layer_assessment.md`), which led into NTFS
+Alternate Data Streams and from there into this module.
+
+**Part 1 — the documented control does not exist.**
+
+```python
+def is_topology_approved(csv_path: str) -> bool:
+    """Checks if the topology is approved.
+
+    Hardware Auth Stamp is now disabled by default as per user request to
+    streamline agent execution.
+    """
+    return True
+```
+
+Disabling it was an operator decision and the function's own docstring records it, which is
+correct practice. The problem is everything around it still claims otherwise:
+
+- the **module docstring** reads *"Air-Gap Steganographic Hardware Authentication. Approves
+  topologies without exposing triggers to programmatic scanners. Uses NTFS Alternate Data
+  Streams and Hardware tokens."*
+- `topology_engine._pull_from_csv` still guards on it, so
+  `raise PermissionError(f"DENIED: Topology {self.csv_path} lacks Hardware Auth Stamp.")`
+  is **unreachable code**;
+- `pattern_executor` still calls `stamp_topology` and logs `ADS auth stamp written`, and its
+  docstring explains it writes the ADS *"so `is_topology_approved()` always returns True"* —
+  which is not why it returns `True`; it returns `True` regardless. The ADS write is dead work
+  with a log line implying a security action;
+- `stamp_topology` itself is still fully implemented, sweeping removable drives and hashing
+  volume serials, and nothing consumes its result.
+
+This is Doctrine 5 and it is the **same shape as the doctrine's own `--smart` incident** — a
+thing documented as implemented and never read. It is worse in kind because it is an
+**authorization control**. A reader concludes topologies are hardware-gated. They are not. In a
+single-operator system that is not a vulnerability, but it is a false belief about a security
+property, and it is precisely the class of claim the competitive analysis says gets a project
+dismissed in ninety seconds by anyone who checks.
+
+**Part 2 — and this is the more consequential half.**
+
+```python
+from ctypes import wintypes        # secret_auth.py, module scope
+```
+
+`ctypes.wintypes` cannot be imported on a non-Windows host. And in `topology_engine.py`:
+
+```python
+def _pull_from_csv(self) -> Dict[str, Any]:
+    from maccre_core.utils.secret_auth import is_topology_approved   # unguarded
+```
+
+`pattern_executor` wraps its own import in `try/except (ImportError, AttributeError)` and
+degrades. `topology_engine` does not. **So the topology loader — which is on every execution
+path in the system — is Windows-only.**
+
+**This is a hard Android blocker of the same class as the DPAPI credential vault**, and the
+Eisenhower map's central observation about the vault applies verbatim: *a prerequisite that
+only exists inside the description of the thing it blocks is a prerequisite nobody will
+schedule.* This one was not even inside a description. It had no entry at all.
+
+**Unlike the vault, it is nearly free to remove.** Nothing depends on the return value, so the
+import and the guard can both go. The vault is an architecture problem; this is two lines.
+
+**Recommended, and the order matters because one is a decision:**
+
+1. **Decide whether the gate is coming back.** If it is retired, say so in the module docstring
+   and delete the unreachable `PermissionError` branch. If it is dormant pending hardware,
+   record it as `Deferred (needs decision)` and keep the code — but move the Windows-only import
+   behind a guard either way, because the portability cost should not be paid by a dormant
+   feature.
+2. **Remove `topology_engine`'s dependency on it.** This alone un-blocks the loader off Windows.
+3. **Stop `pattern_executor` writing an ADS nothing reads**, or keep it and correct the log line
+   and docstring so neither implies an active auth step.
+4. **Add the test.** Doctrine 5's applied rule: a test asserting that either the gate enforces
+   something or the documentation does not claim it does. The cheapest version asserts
+   `is_topology_approved` is referenced by nothing that depends on a `False` result.
+
+**Related:** *Android assistant client* and Chain B — this is a second hard Windows coupling
+beside the vault, and it is in a more central path; risk R1 (Windows coupling), which this makes
+worse than recorded, alongside `win10toast` sitting in sovereign core; the Drive transport
+assessment artifact, which found it.
