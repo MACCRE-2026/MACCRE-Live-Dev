@@ -3033,3 +3033,90 @@ as a directory tidy-up. Leave the twins in place until the mechanism is known.
 **Related:** *Session Manager / File Cabinet alignment for Sovereign Importer* — this is a
 defect in the addressing scheme that entry will publish; the `task_queue` DDL entry, which
 this was found alongside.
+
+***
+
+### Feature Name: The workspace is inside an active Google Drive sync — Doctrine 8's incident is live, not hypothetical
+**Abstract:** `B:\EXO_GANS` is being synced by GoogleDriveFS right now. So the repeated claim that this project has "no backup / one disk" is **wrong**. What it has instead is the exact backup mechanism Doctrine 8 was written about: a sync client uploading files independently, across 94 SQLite databases of which **68 currently carry live `-wal` and `-shm` sidecars**. Separately, the upload staging area holds 8,154 files, 97% of them more than a week old and the oldest from 2026-05-31.
+**Date/Time Entered:** 2026-09-03T21:30:00-04:00
+**Status:** Unfulfilled — **operator decision required; no remediation attempted**
+**Verified:** **Reproduced by direct observation**, 2026-09-03.
+
+```
+B:\EXO_GANS\.tmp.driveupload
+   created   2026-07-27 01:12:12
+   lastwrite 2026-09-03 20:26:23      <- during this session
+   entries   8,154        total 34.9 MiB
+   oldest    2026-05-31 18:15:42
+   age       >30d: 5,105   8-30d: 2,838   1-7d: 116   today: 95
+
+GoogleDriveFS  PID 4844   started 2026-09-03 14:13
+GoogleDriveFS  PID 11908  started 2026-08-30 10:11
+
+__DATACENTER/  2,115 files, 18.1 MiB
+   .db 94    .db-wal 68    .db-shm 68
+```
+
+**Description:**
+**First, the correction.** The 2026-08-31 handover, the 2026-09-02 status document, the
+2026-09-03 competitive analysis and this project's own risk R8 all state or imply that the
+tree exists on one disk with no backup. A sync client has been running against it since at
+least May. **The premise every backup recommendation was built on was never checked.** That
+is Principle 5 applied to an environment claim rather than a code claim, and it is the second
+time in two days that a confidently-repeated number turned out to be unverified.
+
+This does not make the risk smaller. It changes its shape from *absent* to *unverified*, which
+is the more dangerous of the two, because an absent backup is visibly absent and an unverified
+one looks like safety.
+
+**Second, why this is Doctrine 8 exactly.** The doctrine's incident reads: *"a WAL database is
+three files (`.db`, `.db-wal`, `.db-shm`) that must be mutually consistent, and a sync client
+uploads them independently. Single-writer discipline does not help, because sync is not atomic
+across a file set."* Every clause of that is currently true of this workspace, 68 times over.
+The doctrine was written from this situation and the situation was never remediated — most
+likely because nobody connected the abstract rule to the concrete folder.
+
+**Third, the staging backlog, stated carefully.** 8,154 files in `.tmp.driveupload`, 7,943 of
+them older than a week, oldest more than three months. Google Drive uses that directory for
+transient upload state, so entries persisting for months are consistent with **repeated failed
+or abandoned uploads that were never cleaned up.**
+
+**What this does NOT establish, and must not be claimed:** whether the Drive-side copy is
+complete or current. That cannot be determined from the local side, and the backlog is
+evidence about *these staged items*, not about the whole tree. Per Principle 7 this is a
+**lead**, not a finding, on the question "is the backup good?" The first task is verification
+— open the Drive copy and check whether a known recent file is present and intact.
+
+**Fourth, the remedy is known and deliberately not applied.** Doctrine 8's applied rule is
+**checkpoint, never unlink**: `PRAGMA wal_checkpoint(TRUNCATE)` is lossless, while deleting a
+`-wal` can destroy committed transactions. Running it across the 68 databases would make what
+Drive uploads internally consistent.
+
+**It was not run, for two reasons.** It writes to 68 live databases, and the operator has TUI
+processes running (PIDs 3508 / 13280 / 6252 / 9476) that may hold connections — a checkpoint
+against a database with an active writer can block or contend. And Doctrine 8's second clause
+is a per-deployment decision that is not an agent's to make: *"choose journal mode per
+deployment — WAL where there is concurrency to optimise, `DELETE` where there is none."* On
+synced storage the doctrine's own Chain B reasoning points at `DELETE`, which removes the
+three-file problem entirely rather than mitigating it.
+
+**Recommended sequence, all requiring sign-off:**
+
+1. **Verify the Drive copy** before changing anything. If it is good, this is a hardening task.
+   If it is not, it is an emergency and everything else waits.
+2. **Decide the journal mode for synced storage.** `DELETE` eliminates the file-set atomicity
+   problem; WAL keeps the concurrency benefit and needs the checkpoint discipline. This is the
+   register's existing *per-deployment `journal_mode`* item (Chain B link 2) arriving early,
+   with a concrete trigger.
+3. **Checkpoint the 68 databases** with the TUI closed, if WAL is retained.
+4. **Exclude `__DATACENTER` from Drive sync** and back it up with a copy taken after
+   checkpointing, if the databases matter more than their convenience.
+5. **The 191 text/source files** in `Analysis/` (33), `History/` (42), `scripts/` (65),
+   `_legacy/` (28), `_archive/` (9) and `scratch/` (14) total ~3 MiB and are a clean git
+   candidate. A sync client is not version control; these want a second private remote
+   regardless of what Drive is doing.
+
+**Related:** the Android entry's Chain B links 2–4 (`journal_mode` per deployment, device
+lease, conflict-fork detection) — this entry is direct evidence those are not theoretical;
+risk R8; *`omni` hardening*, whose WAL cleanup looks only at the repository root and would not
+see any of these 68.
