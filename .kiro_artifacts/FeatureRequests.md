@@ -3684,3 +3684,123 @@ the log is the essay's evidence base, so it comes first.
 
 **Related:** all three withdrawal entries; the attributions log; *Rename Nexus Copilot before any
 public artifact*; `.kiro_artifacts/2026-09-04_restrictive_trust_default_prior_art_search.md`.
+
+***
+
+# ENTRY DOCTRINE — THIRD AMENDMENT (2026-09-04)
+
+**Operator directive: when we find we are using a concept already in play elsewhere, or drawing
+on named work by someone else, we say so.**
+
+The First and Second Amendments stand. This adds one required field and one habit.
+
+## The field
+
+Any entry that **asserts a general principle** — a rule about how systems should behave, rather
+than a request for a specific capability — carries:
+
+```
+**Prior art:** <established name and source, or "searched, none found" with the domains searched>
+```
+
+`searched, none found` is a **legitimate and interesting answer**, and it is deliberately phrased
+as a statement about the search rather than about the world. That phrasing is the whole point of
+this amendment: the failure that produced it was a true statement about where someone had looked
+being read as a statement about what existed.
+
+Entries requesting a feature — a button, a node type, a schema column — do not need the field.
+The test is whether the entry would still be true in a different project.
+
+## The habit, and why it is post-hoc by design
+
+**Derive first. Look up the name afterwards.**
+
+Two triggers, both late:
+
+1. **before publishing it**, and
+2. **before committing to a private implementation of it.**
+
+This ordering is deliberate and it is not laziness. MACCRE's architecture was substantially
+derived from first principles in response to concrete failures, and that process is the reason the
+engine works. Requiring a literature review *before* designing would replace it with assembling
+other people's answers to other people's problems — which is how a project ends up with a
+collection of imported patterns and no coherent model of its own failures.
+
+What the derivation process does not do is check whether the answer has a name. So the check is
+bolted on at the two moments where not knowing becomes expensive: publication, where an
+unattributed claim is falsified by one search; and implementation, where re-deriving a standard
+privately costs interoperability for nothing.
+
+## Rationale, recorded because it was paid for
+
+Three novelty claims were withdrawn on 2026-09-03 and 2026-09-04, each falsified by the project's
+own search rather than by a reviewer:
+
+| Claim | Falsified by |
+|---|---|
+| The restrictive trust default is unclaimed | IETF `draft-bondar-wca-00` §A.6, a formally verified property; *semantic laundering*, January 2026 |
+| The register format is the least imitable thing here | Architecture Decision Records, Nygard 2011 |
+| Terminal states requiring evidence is the most transferable idea here | Assurance cases / GSN / OMG SACM — which are **stricter** |
+
+Two of the three had been identified by an independent analysis as MACCRE's strongest
+differentiators. **The cost of not having this field was not embarrassment — it was three items on
+a roadmap sized as original work when the specification already existed, model-checked, for one of
+them.**
+
+## Where the convergences live
+
+`ATTRIBUTIONS.md`, at the repository root, public. It records each convergence, **the specific
+incident that produced it here**, the established name, and an explicit non-claim of novelty. It
+also holds a *searched, not found* section and a list of convergences noted but not yet searched —
+so that the unexamined ones cannot be mistaken for cleared ones.
+
+Adding to it late is normal and expected. A convergence found after the fact is still a
+convergence, and the log is append-only for the same reason the register is.
+
+***
+
+### Feature Name: Attributions log, and prior-art checking as a doctrine step
+**Abstract:** `ATTRIBUTIONS.md` records nine ideas MACCRE derived from first principles that turned out to have established names, each with its originating incident and an explicit non-claim of novelty. The Entry Doctrine's Third Amendment requires a prior-art line on any entry asserting a general principle, checked **post-hoc** — before publishing, and before committing to a private implementation — so that derivation-from-incident remains the design process.
+**Date/Time Entered:** 2026-09-04T14:00:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-04T14:00:00-04:00
+**Completion Metric:** `ATTRIBUTIONS.md` exists and is public, with nine sourced convergences,
+three *searched-not-found* items and four unsearched ones listed separately. Entry Doctrine Third
+Amendment added. Doctrine 1 in the shared standing doctrine now names Biba low-water-mark and uses
+PROV's entity/activity/derivation vocabulary. `tests/test_attributions_contract.py` asserts the log
+is structurally complete and that the doctrine names its ancestor — verified to go red when the
+Biba attribution is removed. Gate: `omni qa` PASS whole project 2026-09-04.
+**Prior art:** the practice of maintaining an attributions file is ordinary open-source hygiene
+(`NOTICE`, `THIRD-PARTY-NOTICES`, `CREDITS`), and academic related-work sections are the same
+instinct. **What is unusual here is only the scope** — attributing *independently derived ideas*
+rather than *imported code or dependencies*. Searched, not found as a named practice; recorded as a
+statement about the search, per the amendment this entry introduces.
+
+**Description:**
+**What was built:** the log, the amendment, two doctrine corrections, and a test.
+
+**The two doctrine corrections are the substantive part.** Doctrine 1 previously presented the
+trust ceiling as native. It now names **Biba low-water-mark** and cites `mac_lomac`, and its
+union-of-inputs corollary uses **W3C PROV**'s three words — entity, activity, derivation — instead
+of a private vocabulary. Neither changes what the doctrine requires. Both change whether a reader
+can tell the project knows where the idea came from.
+
+**Why the check is post-hoc, since this looks like a weaker rule than checking first.** Requiring
+a literature review before designing would replace derivation-from-incident with assembling other
+people's answers to other people's problems. The derivation process is why the engine works; it
+simply has no step that checks for a name. So the check goes at the two moments where not knowing
+becomes expensive — publication and private implementation — and nowhere else.
+
+**What it does not do.** It does not make the ideas less good, and it does not make the project
+smaller. Nine independent derivations that each turn out to have a name is evidence the reasoning
+was sound. The log says exactly that and claims nothing more.
+
+**Note on scope, recorded because it crosses a boundary.** The shared standing doctrine at
+`~/.kiro/steering/maccre-systems-doctrine.md` applies to **both** MACCRE Systems workspaces, so
+editing it changes what the Sovereign Importer team's sessions see. The edit is a factual
+attribution correction and changes no rule's behaviour, but an SOP was raised rather than letting
+it appear unannounced.
+
+**Related:** the three withdrawal entries; *Write the audit as the essay*, whose evidence base this
+is; *Master MACCRE Schema Doctrine*, which is the same argument — a claim needs mechanical
+enforcement or it decays.
