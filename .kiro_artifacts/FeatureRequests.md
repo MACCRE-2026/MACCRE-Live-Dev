@@ -3873,3 +3873,76 @@ code's live claims were corrected. Anything needing a current figure now reads t
 
 **Related:** *Master MACCRE Schema Doctrine*, which is the same argument at larger scale; the
 `CTRL_WAIT` work, which this had to land before; Doctrine 4 and Doctrine 5.
+
+***
+
+### Feature Name: Era 3 retconned — the roadmap and the codebase disagreed about which era this is
+**Abstract:** The Eisenhower map's Epoch 3 is *Sessions are addressable*. Era 3 as actually executed was the engine becoming **topological** — 8-lane concurrent flowlines and cross-lane manipulation — and several of its load-bearing elements appear in no epoch at all. Renumbered, with the drift's cause recorded: Era 3 ran under loose spec-driven development enforced only by operator memory, and that is **a primary reason for the transition to Kiro's enforced SDD.**
+**Date/Time Entered:** 2026-09-04T19:00:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-04T19:00:00-04:00
+**Completion Metric:** A dated `REVISION — 2026-09-04` section appended to
+`.kiro_artifacts/2026-08-31_MACCRE_Long_Term_Evolution_Eisenhower_Planning_Map.md`, with the
+original text preserved intact above it. Seven eras named, four renumbered with their previous
+numbers given, Era 3 defined with a six-row delivered table and a seven-row still-required table,
+and an exit criterion stated. Operator-directed and operator-framed.
+**Prior art:** documenting a retroactive renumbering rather than editing history is ADR practice
+(a reversal is a new record; the old one stays) — already attributed in `ATTRIBUTIONS.md` §7. No
+novelty claimed.
+
+**Description:**
+**The disagreement.** §4's Epoch 3 is *Sessions are addressable*. Era 3 was the topological engine.
+Worse, three of the vision's load-bearing elements are in **no** epoch — a scatter that never
+merges, routing between lanes, and `CTRL_WAIT` — and Requirement 19.4 of the 6.13 spec actively
+**forbids** the first of them. The map and the codebase were describing different projects.
+
+**The cause, recorded rather than tidied away.** Era 3 was executed under loose spec-driven
+development enforced only by the operator's memory and will to stay oriented, mostly predating the
+five-Oracle artifact discipline and predating the map itself. In the operator's words, kept verbatim
+because a paraphrase would soften it: *"i probably worked in things while we were doing it that
+didnt get recorded or tracked."*
+
+**That is Doctrine 5 applied to the roadmap instead of to code**, and it is the same shape as every
+instance already recorded: the `--smart` flag accepted and never read; the type-checker config
+naming targets it never checked; `secret_auth`'s docstring advertising a control that returned
+`True`. A specification maintained by recall silently disagrees with the implementation, and the
+disagreement is invisible because the person holding it is the person checking it.
+
+**Named as a primary reason for the Kiro transition, at the operator's direction.** Not tooling
+preference. The previous arrangement made the operator the single point of failure for spec
+orientation, on a project whose doctrine is that single points of failure get mechanised rather than
+remembered — and a spec held in mind competes for attention with the design work itself, which wins,
+as it should and as it did.
+
+**The revised structure.** Names are load-bearing; numbers follow the names.
+
+| Era | Name | Was |
+|---|---|---|
+| 1 | The engine tells the truth | Epoch 1 |
+| 2 | One graph, one owner | Epoch 2 |
+| **3** | **The engine is topological** | **new — the retcon** |
+| 4 | Sessions are addressable | Epoch 3 |
+| 5 | Knowledge carries its origin | Epoch 4 |
+| 6 | MACCRE off the laptop | Epoch 5 |
+| 7 | Observation (trigger-gated) | Epoch 6 |
+
+**Why Era 4 is *Sessions* rather than *Knowledge***, since the operator's phrasing named the dev
+break rather than a subject: the map's own Chain A forces it — session naming → MacroNode round-trip
+→ Session Manager Dashboard → File Cabinet read API → KnowledgeStore → CrumbRunner. Knowledge cannot
+precede addressable sessions because it has nowhere contractual to live. **The dependency order
+chose, not preference.**
+
+**Consequence flagged rather than buried:** the *"Era 4 removals"* pass now spans revised Eras 4 and
+5, most of those items being provenance-era. The set is unchanged; only its label moved.
+
+**The honest cost.** The retcon itself is cheap. **Recovering what Era 3 decided is not always
+possible**, and where a decision cannot be recovered it must be re-made. Requirement 19.4 is the
+first such re-decision. That is the bill for the old arrangement, arriving now.
+
+**What was deliberately not done:** no historical document quoting the old numbering was edited; the
+original §4 text was preserved rather than rewritten; and no claim was made that the 2026-08-31
+epochs were wrong — they were accurate about a project whose spec was incomplete, since the register
+did not contain the topological vision either.
+
+**Related:** *Master MACCRE Schema Doctrine* — same argument, that a claim needs mechanical
+enforcement or it decays; the topological-semantic entries this unblocks; Doctrine 5.

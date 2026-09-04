@@ -708,3 +708,126 @@ modifies nothing. Re-run the Eisenhower pass at every epoch boundary.*
 > epoch, so Epoch 5's entry list is incomplete as drawn. Treat §§2–4 as a 33-entry
 > snapshot pending the next pass; §5 (standing architectural principles) and §6 (risk
 > register) remain current.
+
+---
+
+# REVISION — 2026-09-04: The Era 3 Retcon
+
+**Everything above this line is preserved as written on 2026-08-31.** Nothing has been
+edited out. This section supersedes the epoch numbering in §4 and explains why the
+numbering had to change, because the reason is more useful than the correction.
+
+---
+
+## 1. The problem, stated plainly
+
+**§4's Epoch 3 is *Sessions are addressable*. That is not what Era 3 was.**
+
+Era 3, as actually executed, was the engine becoming **topological** — 8-lane concurrent
+flowlines, tethered scatter/gather, and now cross-lane flow manipulation. None of that is
+in §4's Epoch 3, and much of it is not in §4's epoch list at all: *a scatter that never
+merges*, *routing between lanes* and *`CTRL_WAIT`* have no epoch, and Requirement 19.4 of
+the 6.13 spec actively **forbids** the first of them.
+
+So the map and the codebase disagreed about which era the project was in.
+
+## 2. Why it drifted, recorded rather than tidied away
+
+**Era 3 was executed under loose spec-driven development, enforced only by the operator's
+memory and will to stay oriented.** Most of it predates the five-Oracle artifact
+discipline and predates this map. Features were worked in during the doing — some of them
+good, several of them load-bearing — and were never written down as spec.
+
+The operator's own account, kept verbatim because a paraphrase would soften it: *"i
+probably worked in things while we were doing it that didnt get recorded or tracked."*
+
+That is Doctrine 5 applied to the roadmap instead of to code. **A specification maintained
+by recall is a specification that silently disagrees with the implementation**, and the
+disagreement is invisible precisely because the person holding it is the person checking
+it. Every failure mode this project has documented in code — the `--smart` flag accepted
+and never read, the type-checker config naming targets it never checked, the module
+docstring advertising a disabled security control — is the same shape. The roadmap was
+simply the last place anyone looked.
+
+**This is one of the primary reasons for the transition to Kiro and its enforced
+spec-driven development.** Not tooling preference. The previous arrangement made the
+operator the single point of failure for spec orientation, on a project whose entire
+doctrine is that single points of failure must be mechanised rather than remembered. A
+spec the operator has to hold in mind competes for the same attention as the design work
+itself, and design work wins — as it should, and as it did.
+
+**Recorded consequence, and it is not small:** the retcon below is cheap. Reconstructing
+what Era 3 *decided* is not always possible, and where a decision cannot be recovered it
+has to be re-made. That is the cost of the old arrangement, being paid now.
+
+## 3. The revised era structure
+
+Names are load-bearing; numbers are labels that follow the names. Where a number changed,
+the old one is given.
+
+| Era | Name | Was | State |
+|---|---|---|---|
+| **1** | The engine tells the truth | Epoch 1 | Largely delivered. E1, E2, F1, F2, F3 fixed and the timeout semantics closed. UT-1 stands at 4 of 6; UT-0 not begun but **no longer blocked** |
+| **2** | One graph, one owner | Epoch 2 | Open. Node-ID divergence unfixed; authoring ownership decided on principle, not in code |
+| **3** | **The engine is topological** | **new — this is the retcon** | In flight. Ends at the dev break, certified by Phase 4.99 |
+| **4** | Sessions are addressable | Epoch 3 | Unstarted. **Begins after the dev break** |
+| **5** | Knowledge carries its origin | Epoch 4 | Unstarted, and **gated on an event-sourced execution history** |
+| **6** | MACCRE off the laptop | Epoch 5 | Unstarted |
+| **7** | Observation | Epoch 6 | Trigger-gated, unchanged, still no scheduled start |
+
+**Why Era 4 is *Sessions* and not *Knowledge*, since the operator's phrasing pointed at
+the dev break rather than at a subject.** The map's own Chain A settles it: session naming
+→ MacroNode round-trip → Session Manager Dashboard → the File Cabinet read API →
+KnowledgeStore → CrumbRunner. Knowledge cannot precede addressable sessions because it has
+nowhere contractual to live. The dependency order chooses, not preference.
+
+**One consequence to flag rather than bury:** the *"Era 4 removals"* — the withdrawal pass
+over the eleven items the 2026-09-03 analysis recommends reducing or dropping — now spans
+**revised Eras 4 and 5**, because most of those items are provenance-era. The set is
+unchanged; only its label moved.
+
+## 4. Era 3, as it actually is
+
+**Defining capability:** each Flow Lane is an independent topology. Lanes run
+concurrently at 8-wide, may be routed *between*, may nest, and **may never merge** — with
+a `CTRL_WAIT` node able to collect from a named agent on a named lane, later.
+
+| Delivered in Era 3 | Evidence |
+|---|---|
+| 8-lane concurrent execution | `threading.Barrier(8)` width proof, which deadlocks rather than degrading; live `peak_concurrency=8, errors=0` |
+| `BEGIN EXCLUSIVE` as sole ownership authority | Per-thread connections; the recorded 12-tasks/15-claims incident that forced it |
+| Tethered scatter/gather with `flow_vector` lineage | Live runs `6goe`, `tjrd` |
+| Demand-scaled worker pool, 0 → N → 0 | `DynamicSwarmPool`; over-provisioning defect found and fixed 2026-09-04 |
+| Payload lineage across a step boundary | E1/E2, confirmed live on `tjrd` and at the database level |
+| A pause path that cannot silently succeed | F1/F2/F3 and the timeout decision |
+
+| Still required before the dev break | Status |
+|---|---|
+| Repeal Requirement 19.4's merge mandate; define a step's output as a **set** | Specified, not built |
+| Cross-lane routing — tether hierarchy from containment tree to routing graph | Not built |
+| `CTRL_WAIT` | Does not exist |
+| Nested scatter with enforced depth and lane limits | Partly specified |
+| Pre-launch validation: temporal-paradox detection and a total-sum configuration readout | Not built |
+| The payload contract as one design — `Payload_Mode` at step boundaries, `Preceding Node Only`, HITL accompanying rather than replacing | Decided, not built |
+| Phase 4.99 certification of all of the above | UT-1 4/6, UT-0 unblocked and not begun |
+
+**Exit criterion.** An 8-lane scatter where lanes are routed between one another, at least
+one lane never merges, a `CTRL_WAIT` collects from a named lane terminal, and the
+pre-launch readout describes the whole configuration before launch — certified by UT-1 six
+of six and a valid UT-0 baseline. Then the dev break.
+
+**Size:** not estimated, deliberately. Cross-lane routing and `CTRL_WAIT` are unspecified
+in the parts that matter, and sizing unspecified capability is exactly how the four
+untracked Era 3 items got worked in without being recorded. **The spec comes first, and
+the size comes after it** — Principle 7 applied to scope rather than to defects.
+
+## 5. What this revision does not do
+
+- **It does not correct the historical documents that quote the old numbering.** Prior
+  audits and `.oracle_artifacts/` records are append-only and were true when written.
+- **It does not recover the untracked Era 3 decisions.** Where one is needed and cannot be
+  found, it is re-made deliberately and recorded — the topological semantic is the first
+  such case, and Requirement 19.4 is the first re-decision.
+- **It does not claim the epochs above were wrong.** They were written on 2026-08-31 from
+  the register as it then stood, and the register did not contain the topological vision
+  either. The map was accurate about a project whose spec was incomplete.
