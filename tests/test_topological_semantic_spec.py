@@ -143,7 +143,6 @@ class TestReq30StepOutputIsASet:
 class TestReq31CrossLaneRouting:
     """Tether hierarchy from containment tree to routing graph."""
 
-    @pytest.mark.xfail(strict=True, reason="Req 31.2: tether-qualified references not parsed")
     def test_a_route_target_may_be_tether_qualified(self) -> None:
         """31.2 — identify a node by node id *and* lane."""
         from maccre_core.orchestration.topology_graph import parse_tether_qualified_ref
@@ -152,9 +151,17 @@ class TestReq31CrossLaneRouting:
         assert ref.node_id == "AGENT_A"
         assert ref.tether_id == "X.2"
 
-    @pytest.mark.xfail(strict=True, reason="Req 31.3: nonexistent-lane refusal not built")
     def test_a_route_to_a_lane_that_never_exists_is_refused_by_name(self) -> None:
-        """31.3 — Principle 2. `X.9` in a four-lane scatter must fail at validation."""
+        """31.3 — Principle 2. `X.9` in a four-lane scatter must fail at validation.
+
+        `message()` is a call, not an attribute. This marker was authored asserting
+        `report.message` and that was the marker being wrong, not the code: the shipped
+        `ParadoxReport.message` in the same module is a method, and three tests in
+        `test_prelaunch_validation.py` already call it. Two spellings of "render the
+        refusal" in one module is precisely the drift `topology_graph` exists to stop,
+        so the assertion was corrected to the established convention. What is asserted —
+        that the refusal names `X.9` — is unchanged.
+        """
         from maccre_core.orchestration.topology_graph import validate_cross_lane_routes
 
         report = validate_cross_lane_routes(
@@ -162,9 +169,8 @@ class TestReq31CrossLaneRouting:
             routes=[("A@X.1", "Z@X.9")],
         )
         assert report.refused is True
-        assert "X.9" in report.message
+        assert "X.9" in report.message()
 
-    @pytest.mark.xfail(strict=True, reason="Req 31.5: silent-drop guard not built")
     def test_an_unresolvable_cross_lane_reference_never_no_ops(self) -> None:
         """31.5 — the runtime half of the same rule."""
         from maccre_core.orchestration.local_broker import resolve_cross_lane_target
@@ -172,7 +178,6 @@ class TestReq31CrossLaneRouting:
         with pytest.raises(LookupError):
             resolve_cross_lane_target("GHOST@X.99", known_lanes={"X.1"})
 
-    @pytest.mark.xfail(strict=True, reason="Req 31.7: re-parenting guard not built")
     def test_routing_into_a_lane_does_not_reparent_the_node(self) -> None:
         """31.7 — containment and routing are different relations.
 
@@ -183,6 +188,27 @@ class TestReq31CrossLaneRouting:
 
         node = apply_cross_lane_route(node_id="B", own_tether="X.2", from_tether="X.1")
         assert node.tether_id == "X.2"
+
+    @pytest.mark.xfail(strict=True, reason="Req 31.6: record_crossing is built but not wired")
+    def test_the_worker_records_a_crossing_through_the_one_seam(self) -> None:
+        """31.6 — lineage must carry the lane, and via one derivation of the separator.
+
+        `record_crossing` and `FLOW_VECTOR_SEPARATOR` exist in `topology_graph`, while
+        `swarm_worker` still builds `flow_vector` from a literal `">"`. That is two
+        derivations of one structure — the exact defect shape Principle 4 names — and it
+        is a real one right now, not a hypothetical.
+
+        **This marker is what stops the duplication settling in as permanent.** It stays
+        red until the worker composes lineage through the seam, at which point the
+        literal goes away and there is one notion of how a `flow_vector` is joined.
+        Grouped with 31.6 rather than deferred silently to the wiring task, because an
+        unrecorded gap is not a gap anybody finds again.
+        """
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "maccre_core" / "orchestration" / "swarm_worker.py"
+        ).read_text(encoding="utf-8")
+        assert "record_crossing(" in source
 
 
 # ── Requirement 32 — CTRL_WAIT ───────────────────────────────────────────────

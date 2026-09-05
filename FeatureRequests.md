@@ -5202,3 +5202,141 @@ truncation path is entirely unexercised outside tests.
 **Related:** Req 30 (a step's output is a set), which this consumes; the payload mode seam,
 which made `Preceding Node Only` conditionable; tracker #18, which supplies the measurement
 this is waiting on; the Era 4 payload manager daemon, which inherits the distillation seam.
+---
+### Feature Name: Cross-lane routing built — and the parse/render seam it had to consolidate first
+**Abstract:** Requirement 31 implemented. The tether hierarchy becomes a **routing graph over a containment tree**: a route target may be tether-qualified (`AGENT_A@X.2`), an address naming a lane no execution will occupy is refused **before launch** and **again at runtime**, and routing into a lane does **not** re-parent the node it arrives at. Six of seven criteria done. **Most of this requirement was not new capability — it was Principle 4 applied to a reference shape `topology_graph` already carried twice, where the two copies had already diverged.**
+**Date/Time Entered:** 2026-09-05T15:35:00-04:00
+**Status:** COMPLETED — *the mechanisms, six of seven criteria.* **Nothing calls any of it. 31.6 is built and unwired.**
+**Completed:** 2026-09-05T15:35:00-04:00
+**Completion Metric:** `TETHER_SEPARATOR`, `FLOW_VECTOR_SEPARATOR`, `TetherRefError`,
+`TetherQualifiedRef`, `RoutedNode`, `CrossLaneRouteReport`, `parse_tether_qualified_ref`,
+`_lane_fault`, `validate_cross_lane_routes`, `apply_cross_lane_route`, `record_crossing` in
+`maccre_core/orchestration/topology_graph.py`; `resolve_cross_lane_target` in
+`maccre_core/orchestration/local_broker.py`. `tests/test_cross_lane_routing.py` — **55 tests,
+nine groups**. The **four `xfail(strict=True)` markers** standing in for Requirement 31 in
+`tests/test_topological_semantic_spec.py` removed after all four XPASSed; **one new marker added
+for 31.6**. Gate 2026-09-05: `omni clean` 14:49 (294 bytecode), `omni qa` **PASS whole project**
+14:50:56, pytest **1152 collected / 1144 passed / 8 xfailed / 0 failed** in 179.03 s, `omni smoke`
+**ALL CHECKS PASSED** (inference 0.9 s, $0.00). Reconciles exactly against 1096/1085/11:
+`1096 + 55 + 1 = 1152`, `1085 + 55 + 4 = 1144`, xfailed `11 - 4 + 1 = 8`. Smoke was run because
+`local_broker.py` is on the execution path and its import statement changed, even though the new
+function has no caller. Eight red markers remain: 34.1, 31.6, 29.3, 29.4, and Req 32's four.
+
+**The two derivations that were already there, and already wrong.** `detect_temporal_paradox`
+parsed `NODE@TETHER` inline — `"@" not in target`, then `partition("@")` — while `_qualify`
+rendered it from a separate f-string. Three literal separators, two derivations, and the parse
+accepted three references **the renderer could never produce**:
+
+| Reference | Old inline parse gave | Renderer can produce it? |
+|---|---|---|
+| `"@X.1"` | `node_id=""`, accepted silently | never |
+| `"A@"` | `tether_id=""`, accepted silently | never |
+| `"A@X.1@Y"` | a lane literally named `X.1@Y` | never |
+
+**`"A@"` is not a hypothetical.** Principle 2's named incident is a blanked tether id putting a
+scatter and its merge in different scopes, so the gather gate could never open and an 8-lane run
+deadlocked — where an *empty* tether would merely have degraded visibly. A parser that hands one
+back is the mechanism that manufactures that exact address. All three are now refused, and the
+round trip is asserted in **both** directions **against the constant, never a literal `@`** — a
+literal would pass while the constant said something else, which is the whole failure mode.
+
+**One resolver behind four criteria.** 31.3, 31.4 and 33.2's cases 3 and 4 are the same question —
+can this reference resolve against these lanes — asked by two callers. They now share `_lane_fault`
+and therefore produce **word-for-word identical diagnostics**, asserted by comparing the two
+callers' reason strings directly. That is the test that fails if either grows a private copy again.
+Consolidating also **closed two silent holes in Requirement 33**, which now refuses a blank node
+and a blank lane in a `waits` target where it previously accepted both.
+
+**The `message` convention clash, and the marker was the thing that was wrong.** The 31.3 marker as
+authored asserted `report.message` — an attribute. `ParadoxReport.message` in the same module is a
+**method**, and three already-passing tests in `test_prelaunch_validation.py` call it. Making the
+new report's `message` a property to satisfy the marker would have put **two spellings of "render
+the refusal" in one module**, precisely the drift `topology_graph` exists to prevent. The assertion
+was corrected to `report.message()` with the reasoning in the test's own docstring; **what it
+asserts — that the refusal names `X.9` — is unchanged.** Recorded plainly because editing a red
+marker to make it pass is a suspicious shape by default: this edit is to the *calling convention*,
+not to the criterion.
+
+**31.5 lives in the broker, not the graph.** `route_task` already skips terminal sentinels without
+enqueueing anything, so an unresolvable `GHOST@X.99` taking that same quiet exit would be
+**indistinguishable from a lane that ended**. The refusal has to be where the drop would otherwise
+happen. It is **module-level rather than a `LocalMessageBroker` method** so it holds no connection —
+it is a decision about a string, and giving it `self` would invite it to grow a query — and it
+delegates parsing upward so the broker grows no second reading of the syntax. `TetherRefError`
+(malformed) and `LookupError` (well-formed, absent lane) stay distinct because they call for
+different fixes: a typo in the syntax versus a typo in the topology. The `LookupError` names the
+lanes that *do* exist, since a refusal that does not sends the author guessing.
+
+**31.7's real assertion is not that a tether survives — it is that two different origins yield the
+same one.** `apply_cross_lane_route` also refuses an empty containment tether rather than defaulting
+to the routing lane (that convenience being the deadlock above), and refuses
+`from_tether == own_tether`, because that is not a crossing and recording one would be a false
+lineage entry.
+
+**Rejected:** making the new `message` a property (satisfies the marker, breaks the convention); a
+Requirement-31-local second parse (the cheap path, and the exact defect being fixed); leaving 33's
+inline parse alone so this touched nothing existing (would have left one strict and one permissive
+parser — worse than the single permissive one it had); skipping 31.6 (it has no marker, so its
+absence would have been recorded nowhere); editing `swarm_worker`'s `">"` literal without wiring
+`record_crossing` (half-wiring an execution path for cosmetic consistency, with no baseline run
+available).
+
+**LIMITS, and they are the main thing to read here. Nothing calls any of it.**
+`validate_cross_lane_routes` is not invoked by pre-flight, `resolve_cross_lane_target` is not
+invoked by `route_task`, `record_crossing` is not invoked by `swarm_worker`. Six criteria are
+*implemented and covered*, not *in force*; no operator sees a cross-lane refusal today.
+**31.6 is unwired and its duplication is live**: `swarm_worker` still joins `flow_vector` from a
+literal `">"`, so `FLOW_VECTOR_SEPARATOR` is a second derivation **right now**, not a hypothetical —
+the red marker is the mitigation, not a fix.
+**31.3/31.4's intended home already exists**: pre-flight validation point 7, *"Dynamic Route Targets
+Exist?"*. Wiring **extends** that check rather than adding an eighth point; a parallel mechanism
+would be the same drift 31.2 just removed.
+**No cross-lane route has ever executed** — there is no authoring surface for one — so every
+assertion is over pure functions and hand-built inputs.
+**Recorded rather than fixed:** `detect_temporal_paradox` validates `waits` *targets* but not
+`waits` *keys*, so a malformed waiter reference silently becomes a precedence-graph node. A real
+Principle 2 hole, out of this requirement's scope, belonging with the work that gives `waits` a real
+producer.
+**Related:** Req 33 (paradox detection), whose parse this absorbed and whose two holes it closed;
+Req 32 (`CTRL_WAIT`), which 32.3 defers to this requirement and which inherits the `waits`-key gap;
+pre-flight validation point 7, the wiring target.
+---
+### Feature Name: Correction — a suite stall was attributed to the wrong cause twice
+**Abstract:** The pytest stall recorded on 2026-09-05 as *"`omni clean` purged caches three seconds after the suite started"* **reproduced with no `omni clean` anywhere near it.** The attribution was wrong, and so was a second one made during this session's diagnosis. Both are corrected here rather than left standing in an append-only record.
+**Date/Time Entered:** 2026-09-05T15:35:00-04:00
+**Status:** COMPLETED — correction recorded. **The mechanism is a hypothesis, not a finding.**
+**Completed:** 2026-09-05T15:35:00-04:00
+**Completion Metric:** Amends the process note in the Req 34 entry (*The step-boundary payload
+contract*) and the corresponding ledger entry, both of which stand as written per the append-only
+rule.
+
+**What actually happened.** `omni clean` finished 14:49:36. `omni qa` finished 14:50:56. pytest
+started 14:51:00 and last wrote to its scratch directory at **14:51:34**, then produced **zero test
+progress for 16.5 minutes** while accumulating **541 s of CPU** — spinning, not deadlocked. No
+cache purge occurred at any point in that window.
+
+**First wrong attribution (previously recorded).** `omni clean` racing the run. Ruled out by the
+timeline above.
+
+**Second wrong attribution (made and withdrawn during this session).** I localised the stall to
+`test_demand_overprovisioning.py` because every scratch directory present belonged to it. **That
+module passes 8/8 in 3.6 s in isolation.** The directories were the last `tmp_path` dirs *created*,
+not the running test — a later test that allocates no scratch was the one executing. Reading the
+newest artifact as the current position is the error, and it is the same shape as trusting a stale
+registry: an approximately-correct address that downstream reasoning then acts on.
+
+**What both incidents do share.** A **foreground pytest run whose tool call was interrupted**. The
+process outlived the interruption. The same suite, launched via `Start-Process` with output
+redirected to a **file** rather than a pipe, completed in **179.03 s**.
+
+**Stated honestly: the pipe mechanism is a hypothesis.** What is verified is the suite's health
+(1152 collected / 1144 passed / 0 failed), that module's innocence (8/8 in 3.6 s), and that both
+stalls followed an interrupted run. The claim that a readerless stdout pipe causes the spin has
+**not** been reproduced deliberately and should not be relied on.
+
+**Practice changed.** The suite is now run via `Start-Process` with file redirection and polled,
+which sidesteps the interaction entirely and gives progress readouts instead of a silent
+three-minute block. Termination of the stalled process was corroborated on **three signals** — PID,
+creation time matching the launch, and the exact command line — per Principle 2, never PID alone.
+**Related:** the Req 34 entry carrying the original process note; `cache_clearing_protocol`, which
+names the genuine clean-versus-run hazard that is still real and still worth avoiding.

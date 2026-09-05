@@ -34,13 +34,17 @@ import os
 import json
 import sqlite3
 import threading
-from typing import Any, Literal, Optional
+from typing import Any, Collection, Literal, Optional
 
 
 from maccre_core.utils.path_resolver import get_datacenter_path
 from maccre_core.orchestration.broker_interface import MessageBroker
 from maccre_core.orchestration.concurrency import DEFAULT_HEARTBEAT_SECONDS
-from maccre_core.orchestration.topology_graph import is_terminal_target
+from maccre_core.orchestration.topology_graph import (
+    TetherQualifiedRef,
+    is_terminal_target,
+    parse_tether_qualified_ref,
+)
 
 #: Seconds a lock may go unrefreshed before :meth:`
 #: LocalMessageBroker.reclaim_zombie_locks` treats it as abandoned.
@@ -62,6 +66,51 @@ _SCOPE_WARN_LOCK = threading.Lock()
 
 #: Result of evaluating a task's Gather Gate. See :meth:`LocalMessageBroker._gather_gate_state`.
 GateState = Literal["ready", "waiting", "upstream_failed"]
+
+
+def resolve_cross_lane_target(ref: str, known_lanes: Collection[str]) -> TetherQualifiedRef:
+    """Resolve a cross-lane reference, or refuse. Requirement 31.5.
+
+    The runtime half of Requirements 31.3 through 31.5, which are one rule stated three
+    times: an approximately-correct lane address is worse than an absent one. Pre-launch
+    validation (``topology_graph.validate_cross_lane_routes``) is the first statement of
+    it; this is the second, and it lives **here** rather than in ``topology_graph``
+    because the broker is what creates successor rows. A reference that cannot be
+    resolved has to raise at the exact place the silent drop would otherwise happen —
+    ``route_task`` already skips terminal sentinels without enqueueing anything, and an
+    unresolvable ``GHOST@X.99`` taking that same quiet exit is indistinguishable from a
+    lane that simply ended.
+
+    Parsing is delegated to ``topology_graph.parse_tether_qualified_ref`` so there is one
+    reading of the reference syntax rather than a broker-flavoured second one. That is
+    the same reason this module already imports ``is_terminal_target`` instead of
+    re-deriving the sentinel list.
+
+    Args:
+        ref: A tether-qualified reference, ``"NODE@TETHER"``.
+        known_lanes: Tether IDs the running job actually has. A ``Collection`` rather
+            than an ``Iterable`` because it is tested for membership, and an exhausted
+            generator would make every lane look absent.
+
+    Returns:
+        The parsed reference, its lane confirmed present.
+
+    Raises:
+        topology_graph.TetherRefError: The reference is malformed. A ``ValueError``
+            subclass, raised by the shared parse rather than re-detected here.
+        LookupError: The reference is well-formed but names a lane this job does not
+            have. Distinct from the parse failure because they call for different fixes:
+            one is a typo in the syntax, the other a typo in the topology.
+    """
+    parsed = parse_tether_qualified_ref(ref)
+    if parsed.tether_id not in known_lanes:
+        available = ", ".join(sorted(known_lanes)) or "none"
+        raise LookupError(
+            f"cross-lane reference {ref!r} names lane {parsed.tether_id!r}, which this job does "
+            f"not have (lanes present: {available}). Refusing rather than dropping it: a dropped "
+            "route is indistinguishable from a lane that ended."
+        )
+    return parsed
 
 
 class LocalMessageBroker(MessageBroker):

@@ -81,15 +81,25 @@ from typing import Any, Iterable, Mapping, Sequence
 logger = logging.getLogger("maccre_core.topology_graph")
 
 __all__ = [
+    "FLOW_VECTOR_SEPARATOR",
     "TERMINAL_SENTINELS",
+    "TETHER_SEPARATOR",
+    "CrossLaneRouteReport",
+    "RoutedNode",
+    "TetherQualifiedRef",
+    "TetherRefError",
+    "apply_cross_lane_route",
     "build_edges",
     "describe",
     "entry_nodes",
     "is_terminal_target",
     "node_ids",
     "parse_targets",
+    "parse_tether_qualified_ref",
+    "record_crossing",
     "terminal_nodes",
     "unreachable_nodes",
+    "validate_cross_lane_routes",
 ]
 
 #: Values that may appear as a routing target without naming a real node.
@@ -300,6 +310,324 @@ def describe(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+# ── Requirement 31: tether-qualified references and cross-lane routing ───────
+#
+# Added 2026-09-05. A tether ID names a lane; a node ID names a step. A route between
+# lanes needs both, so ``AGENT_A@X.2`` is the address the routing graph works in — and
+# the tether hierarchy stops being a containment tree alone and becomes a routing graph
+# over one.
+#
+# ONE SEPARATOR, ONE PARSE, ONE RENDER
+# ------------------------------------
+# Requirement 33's paradox detector already parsed this shape, inline, with a bare
+# ``"@" not in target`` test followed by ``partition("@")``, while ``_qualify`` rendered
+# it from a separate ``f"{node_id}@{tether_id}"``. Two derivations of one structure, and
+# they had already diverged: the inline parse accepted ``"@X.1"`` (no node), ``"A@"``
+# (no lane) and read ``"A@X.1@Y"`` as a lane literally named ``X.1@Y``. The renderer
+# could never produce any of the three.
+#
+# An empty tether ID is not hypothetical. Principle 2's named incident is a blanked
+# tether id putting a scatter and its merge in different scopes, so the gather gate
+# could never open and an 8-lane run deadlocked — an *empty* tether would merely have
+# degraded visibly. A parser that hands back an empty tether instead of refusing is the
+# mechanism that manufactures exactly that address.
+#
+# So: one constant for the separator, one parse, one render, a round-trip test tying
+# them together, and Requirement 33's detector reads through the parse rather than
+# keeping a private lookalike. ``_lane_fault`` below is the single resolver both the
+# paradox detector and the cross-lane validator consult, which is why 31.3/31.4 and
+# 33.2's cases 3 and 4 produce word-for-word identical diagnostics: they are the same
+# check asked by two callers, not two checks that happen to agree today.
+
+#: The one place the node/lane separator is written.
+TETHER_SEPARATOR: str = "@"
+
+#: Separator ``flow_vector`` lineage strings are joined with.
+#:
+#: Matches what ``swarm_worker`` writes today. **It is still a literal there**, so this
+#: is a second derivation until :func:`record_crossing` is wired — the red Requirement
+#: 31.6 marker in ``tests/test_topological_semantic_spec.py`` is what keeps that visible
+#: rather than letting it settle in as permanent duplication.
+FLOW_VECTOR_SEPARATOR: str = ">"
+
+
+class TetherRefError(ValueError):
+    """A reference that does not name exactly one node in exactly one lane.
+
+    Carries *reason* as a bare predicate — ``"is not tether-qualified ..."`` — so a
+    caller composing a sentence about the offending reference does not print the
+    reference twice. ``str(exc)`` is the whole sentence, for anyone who lets it
+    propagate.
+
+    Subclasses ``ValueError`` because that is what a malformed string argument already
+    means everywhere else in this package; callers that do not care about the
+    distinction keep working.
+    """
+
+    def __init__(self, ref: str, reason: str) -> None:
+        self.ref: str = ref
+        self.reason: str = reason
+        super().__init__(f"{ref!r} {reason}")
+
+
+@dataclass(frozen=True)
+class TetherQualifiedRef:
+    """A node in a named lane. Requirement 31.2.
+
+    Attributes:
+        node_id: The step's ``Node_ID``. Never empty — :func:`parse_tether_qualified_ref`
+            refuses rather than constructing one.
+        tether_id: The lane's tether ID. Never empty, for the same reason.
+    """
+
+    node_id: str
+    tether_id: str
+
+    def render(self) -> str:
+        """The reference as authored. Inverse of :func:`parse_tether_qualified_ref`."""
+        return _qualify(self.node_id, self.tether_id)
+
+
+@dataclass(frozen=True)
+class RoutedNode:
+    """A node that a cross-lane route arrived at. Requirement 31.7.
+
+    Attributes:
+        node_id: The node routed to.
+        tether_id: Its **containment** tether — unchanged by the route. Routing and
+            containment are different relations, and fan-in scopes by containment, so
+            letting a route rewrite this would make a node's gather scope depend on who
+            pointed at it.
+        arrived_from: The tether the route came from. Recorded rather than substituted.
+    """
+
+    node_id: str
+    tether_id: str
+    arrived_from: str
+
+    def render(self) -> str:
+        """The node's own address — the lane it belongs to, not the one that called."""
+        return _qualify(self.node_id, self.tether_id)
+
+
+@dataclass(frozen=True)
+class CrossLaneRouteReport:
+    """Which cross-lane route targets a topology cannot honour. Requirements 31.3/31.4.
+
+    Attributes:
+        refused: True when any route names an address the topology will not contain at
+            execution. The single question a launch gate needs answered.
+        offences: ``(route, offending_ref, reason)`` per fault, where *route* is the
+            ``source -> target`` pair as authored.
+        participants: Every reference implicated, first-seen order, de-duplicated. Same
+            obligation as :attr:`ParadoxReport.participants`: name them, because a
+            generic refusal sends the author searching eight lanes for the one typo.
+    """
+
+    refused: bool
+    offences: list[tuple[str, str, str]] = field(default_factory=list)
+    participants: list[str] = field(default_factory=list)
+
+    def message(self) -> str:
+        """A refusal a human can act on.
+
+        A **method**, not a property, because :meth:`ParadoxReport.message` is one and
+        two spellings of "render the refusal" in one module is the drift this module
+        exists to prevent.
+        """
+        if not self.refused:
+            return "No cross-lane routing fault detected."
+        return "; ".join(
+            f"route {route} names {ref}, which {reason}" for route, ref, reason in self.offences
+        )
+
+
+def _qualify(node_id: str, tether_id: str) -> str:
+    """Render a tether-qualified reference. The only place the separator is written."""
+    return f"{node_id}{TETHER_SEPARATOR}{tether_id}"
+
+
+def parse_tether_qualified_ref(ref: str) -> TetherQualifiedRef:
+    """Read ``"AGENT_A@X.2"`` into its node and lane. Requirement 31.2.
+
+    The inverse of :meth:`TetherQualifiedRef.render`, over the same
+    :data:`TETHER_SEPARATOR`.
+
+    Every rejection below is a reference that *would have produced a usable-looking
+    address*: an empty node id, an empty tether id, or a lane whose name silently
+    swallowed a second separator. Returning any of them would satisfy the caller's type
+    expectations and be wrong downstream, which is the Principle 2 failure mode
+    exactly — so this raises instead of degrading.
+
+    Args:
+        ref: The reference as authored. Surrounding whitespace is tolerated on the whole
+            string and on each component, because these come from CSV and hand editing.
+
+    Returns:
+        The parsed reference, with both components non-empty.
+
+    Raises:
+        TetherRefError: The reference does not name exactly one node in exactly one lane.
+    """
+    text = str(ref or "").strip()
+    separators = text.count(TETHER_SEPARATOR)
+    if separators == 0:
+        raise TetherRefError(
+            text, f"is not tether-qualified (expected NODE{TETHER_SEPARATOR}TETHER)"
+        )
+    if separators > 1:
+        raise TetherRefError(
+            text,
+            f"holds {separators} {TETHER_SEPARATOR!r} separators; a reference names "
+            "exactly one node in exactly one lane",
+        )
+    node_id, _, tether_id = text.partition(TETHER_SEPARATOR)
+    node_id, tether_id = node_id.strip(), tether_id.strip()
+    if not node_id:
+        raise TetherRefError(text, f"names no node before the {TETHER_SEPARATOR!r}")
+    if not tether_id:
+        raise TetherRefError(text, f"names no lane after the {TETHER_SEPARATOR!r}")
+    return TetherQualifiedRef(node_id=node_id, tether_id=tether_id)
+
+
+def _lane_fault(ref_text: str, known: Mapping[str, set[str]]) -> str:
+    """Why *ref_text* cannot be resolved against *known* lanes, or ``""`` if it can.
+
+    The single resolver behind Requirements 31.3, 31.4 and 33.2's cases 3 and 4. The
+    reason strings are the diagnostic surface of all four, so they live here once.
+    """
+    try:
+        ref = parse_tether_qualified_ref(ref_text)
+    except TetherRefError as exc:
+        return exc.reason
+    if ref.tether_id not in known:
+        return f"names lane {ref.tether_id!r}, which the topology never spawns"
+    if ref.node_id not in known[ref.tether_id]:
+        return f"names a node absent from lane {ref.tether_id!r}"
+    return ""
+
+
+def validate_cross_lane_routes(
+    lanes: Mapping[str, Sequence[str]],
+    routes: Sequence[tuple[str, str]],
+) -> CrossLaneRouteReport:
+    """Refuse routes naming an address no lane will occupy. Requirements 31.3 and 31.4.
+
+    Both ends of every route are checked. A route *from* a node that does not exist is
+    as broken as a route *to* one, and the offence names which end is at fault by
+    quoting the reference rather than the position.
+
+    Args:
+        lanes: ``{tether_id: [node_id, ...]}`` — every lane the topology will spawn and
+            the nodes it will contain. Order is irrelevant here (unlike
+            :func:`detect_temporal_paradox`, where it carries the same-lane ordering).
+        routes: ``(source_ref, target_ref)`` pairs, both tether-qualified.
+
+    Returns:
+        A :class:`CrossLaneRouteReport`. ``refused`` False is a statement about these
+        routes against these lanes — not that the flow will succeed.
+    """
+    known: dict[str, set[str]] = {t: set(nodes) for t, nodes in lanes.items()}
+    offences: list[tuple[str, str, str]] = []
+    participants: list[str] = []
+
+    for source, target in routes:
+        route = f"{source} -> {target}"
+        for ref_text in (source, target):
+            reason = _lane_fault(ref_text, known)
+            if reason:
+                offences.append((route, ref_text, reason))
+                participants.append(ref_text)
+
+    seen: set[str] = set()
+    ordered = [p for p in participants if not (p in seen or seen.add(p))]
+    return CrossLaneRouteReport(refused=bool(offences), offences=offences, participants=ordered)
+
+
+def apply_cross_lane_route(node_id: str, own_tether: str, from_tether: str) -> RoutedNode:
+    """Route into a node without re-parenting it. Requirement 31.7.
+
+    Containment and routing are different relations. The returned node keeps
+    *own_tether*; *from_tether* is recorded as :attr:`RoutedNode.arrived_from` and never
+    substituted. Conflating them would make a node's tether ID depend on who routed to
+    it, and the tether ID is what fan-in scopes by — so the merge for lane ``X.2`` would
+    start or stop seeing this node according to which other lane pointed at it.
+
+    Args:
+        node_id: The node being routed to.
+        own_tether: Its containment tether. **Required**, and an empty one is refused
+            rather than defaulted to *from_tether*.
+        from_tether: The lane the route originates in.
+
+    Returns:
+        The routed node, containment intact.
+
+    Raises:
+        ValueError: A component is empty, or *from_tether* equals *own_tether* — which
+            is not a cross-lane route and would record a crossing that never happened.
+    """
+    node = str(node_id or "").strip()
+    own = str(own_tether or "").strip()
+    origin = str(from_tether or "").strip()
+    if not node:
+        raise ValueError("a cross-lane route needs a node id; got an empty one")
+    if not own:
+        raise ValueError(
+            f"node {node!r} has no containment tether id. Refusing rather than adopting "
+            f"the routing lane {origin!r}: a blanked tether id is what put a scatter and "
+            "its merge in different scopes, so the gather gate could never open."
+        )
+    if not origin:
+        raise ValueError(f"a route into {node!r} needs the lane it came from; got an empty one")
+    if origin == own:
+        raise ValueError(
+            f"{_qualify(node, own)} is not a cross-lane route: the origin lane {origin!r} is "
+            "the node's own lane"
+        )
+    return RoutedNode(node_id=node, tether_id=own, arrived_from=origin)
+
+
+def record_crossing(flow_vector: str, routed: RoutedNode) -> str:
+    """Append a lane crossing to a ``flow_vector`` lineage string. Requirement 31.6.
+
+    No new syntax. Entries are tether-qualified, so ``A@X.1>B@X.2`` states the crossing
+    by itself and a downstream artifact's provenance carries the lane it came from
+    without a second notation to keep in step.
+
+    When the existing vector's last entry *is* tether-qualified and its lane disagrees
+    with :attr:`RoutedNode.arrived_from`, the two records contradict each other and this
+    raises. When the last entry is a bare node name — which is what ``swarm_worker``
+    writes today — the crossing cannot be corroborated, and it is appended without any
+    claim that it was.
+
+    Args:
+        flow_vector: The lineage so far. Empty starts a new one.
+        routed: The node arrived at, from :func:`apply_cross_lane_route`.
+
+    Returns:
+        The extended lineage string.
+
+    Raises:
+        ValueError: The previous entry names a lane other than *routed.arrived_from*.
+    """
+    existing = str(flow_vector or "").strip()
+    if not existing:
+        return routed.render()
+
+    previous = existing.rsplit(FLOW_VECTOR_SEPARATOR, 1)[-1].strip()
+    if TETHER_SEPARATOR in previous:
+        try:
+            previous_ref = parse_tether_qualified_ref(previous)
+        except TetherRefError:
+            previous_ref = None  # unparseable history: cannot corroborate, do not claim to
+        if previous_ref is not None and previous_ref.tether_id != routed.arrived_from:
+            raise ValueError(
+                f"lineage says the previous node ran in lane {previous_ref.tether_id!r} but the "
+                f"route into {routed.node_id!r} claims to come from {routed.arrived_from!r}"
+            )
+    return f"{existing}{FLOW_VECTOR_SEPARATOR}{routed.render()}"
+
+
 # ── Requirement 33: pre-launch paradox detection ─────────────────────────────
 #
 # Added 2026-09-04 by the topological-semantic amendment. A wait condition that no
@@ -368,11 +696,6 @@ class ParadoxReport:
         return "; ".join(parts)
 
 
-def _qualify(node_id: str, tether_id: str) -> str:
-    """Render a tether-qualified reference the way Requirement 31.2 states it."""
-    return f"{node_id}@{tether_id}"
-
-
 def detect_temporal_paradox(
     lanes: Mapping[str, Sequence[str]],
     waits: Mapping[str, Sequence[str]],
@@ -396,23 +719,17 @@ def detect_temporal_paradox(
     known: dict[str, set[str]] = {t: set(nodes) for t, nodes in lanes.items()}
 
     # ── Reference validity first: an unresolvable target cannot be graphed ────
+    #
+    # Through `_lane_fault`, which `validate_cross_lane_routes` also calls. This block
+    # used to carry its own copy of the parse and its own copy of the three reason
+    # strings; the copies are why Requirement 31 found this detector accepting `"@X.1"`
+    # while `_qualify` could not produce it.
     unresolvable: list[tuple[str, str, str]] = []
     for waiter, targets in waits.items():
         for target in targets:
-            if "@" not in target:
-                unresolvable.append(
-                    (waiter, target, "is not tether-qualified (expected NODE@TETHER)")
-                )
-                continue
-            node_id, _, tether_id = target.partition("@")
-            if tether_id not in known:
-                unresolvable.append(
-                    (waiter, target, f"names lane {tether_id!r}, which the topology never spawns")
-                )
-            elif node_id not in known[tether_id]:
-                unresolvable.append(
-                    (waiter, target, f"names a node absent from lane {tether_id!r}")
-                )
+            reason = _lane_fault(target, known)
+            if reason:
+                unresolvable.append((waiter, target, reason))
 
     # ── Build the precedence graph: "must happen before" ─────────────────────
     precedence: dict[str, set[str]] = {}

@@ -660,6 +660,40 @@ routing does not re-parent
 > resolve to something plausible. The register already records what a blanked tether id cost — a
 > scatter and its merge in different scopes, and a gather gate that could never open.
 
+> **Design note — 31.2 is a consolidation before it is an addition.** `topology_graph` already
+> held this reference shape **twice**: Requirement 33's `detect_temporal_paradox` parsed it inline
+> while `_qualify` rendered it from a separate f-string, and the two had already diverged — the
+> parse accepted `"@X.1"`, `"A@"` and `"A@X.1@Y"`, none of which the renderer can produce. So
+> 31.2 is satisfied by **one** `TETHER_SEPARATOR`, one parse, one render and a round-trip test,
+> with Requirement 33 reading through the parse. `_lane_fault` is the single resolver behind
+> 31.3, 31.4 **and** 33.2's cases 3 and 4, which is why all four produce identical diagnostics:
+> they are one check with two callers, not two checks that happen to agree.
+
+> **Design note — 31.5 belongs to the broker, not the graph.** `route_task` already skips terminal
+> sentinels without enqueueing anything. An unresolvable `GHOST@X.99` taking that same quiet exit
+> would be indistinguishable from a lane that ended, so the refusal has to live at the point where
+> the drop would otherwise happen.
+
+> **Design note — 31.3 and 31.4 extend pre-flight validation point 7.** The pipeline already has
+> *"7. Dynamic Route Targets Exist?"*. Wiring extends that check rather than adding an eighth
+> point; a parallel mechanism would be the same drift 31.2 just removed.
+
+#### Implementation status (2026-09-05)
+
+| Criterion | State |
+|---|---|
+| 31.1, 31.2, 31.3, 31.4, 31.5, 31.7 | Implemented and covered — **as pure functions, not yet called by any launch or routing path** |
+| 31.6 | `record_crossing` implemented; **not wired.** `swarm_worker` still joins `flow_vector` from a literal `">"`, so `FLOW_VECTOR_SEPARATOR` is a live second derivation. A red `xfail(strict=True)` marker holds the record until the worker composes through the seam |
+
+**Stated limitation.** No cross-lane route has ever executed — there is no authoring surface for
+one. Every assertion is over hand-built inputs, so these criteria are satisfied as *mechanism* and
+their live behaviour is unobserved.
+
+**Known gap recorded against Requirement 32 rather than fixed here.**
+`detect_temporal_paradox` validates `waits` *targets* but not `waits` *keys*, so a malformed waiter
+reference silently becomes a precedence-graph node. It belongs with the work that gives `waits` a
+real producer.
+
 ---
 
 ### Requirement 32: CTRL_WAIT
