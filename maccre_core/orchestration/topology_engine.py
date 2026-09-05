@@ -28,6 +28,7 @@ from typing import Dict, Any
 
 
 from maccre_core.utils.path_resolver import get_datacenter_path
+from maccre_core.orchestration.payload_modes import resolve_payload_mode
 from maccre_core.orchestration.topology_interface import TopologyProvider
 
 import logging
@@ -255,7 +256,13 @@ class TopologyEngine(TopologyProvider):
                         "agent_name": agent_name,
                         "max_recursion": max_rec,
                         "live_profile": str(row_upper.get('LIVE_PROFILE', '')).strip(),
-                        "payload_mode": str(row_upper.get('PAYLOAD_MODE', 'Unified Ledger')).strip() or 'Unified Ledger',
+                        # Normalised through the one seam that names the modes, so a
+                        # blank cell, a missing column and a typo all resolve here
+                        # rather than each read comparing against its own literal.
+                        # Stored as the string the rest of the system already expects.
+                        "payload_mode": resolve_payload_mode(
+                            row_upper.get('PAYLOAD_MODE'), context=node_id
+                        ).value,
                         # ── Dialogue Mode ────────────────────────────────────────
                         # When set, swarm_worker fires DialogueRunner instead of
                         # the standard single-shot generate loop.

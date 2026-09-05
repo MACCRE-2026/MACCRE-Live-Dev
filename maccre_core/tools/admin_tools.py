@@ -27,6 +27,7 @@ import sqlite3
 import subprocess
 from pathlib import Path as _Path
 from typing import Any, List
+from maccre_core.orchestration.payload_modes import DEFAULT_PAYLOAD_MODE
 from maccre_core.utils.path_resolver import get_datacenter_path, get_maccre_root
 
 def mint_agent(
@@ -107,7 +108,9 @@ def build_topology(nodes: List[List[str]]) -> str:
                 Wait_For?, Failure_Target?, Max_Recursion?, Artifact_Path?, Live_Profile?, Dialogue_Partner?, Dialogue_Rounds?, Payload_Mode?, Tools_Allowed?, Tether_ID?]
                Optional columns receive defaults.
     """
-    _DEFAULTS = ["none", "FAILED", "3", "", "FALSE", "", "0", "Unified Ledger", "", ""]
+    # Index 7 here is the Payload_Mode column, so a short row is padded with the one
+    # default the whole system agrees on rather than a literal that could drift from it.
+    _DEFAULTS = ["none", "FAILED", "3", "", "FALSE", "", "0", DEFAULT_PAYLOAD_MODE.value, "", ""]
     try:
         topo_path = get_datacenter_path("02_Dynamic_Context", "topology.csv")
         os.makedirs(os.path.dirname(topo_path), exist_ok=True)

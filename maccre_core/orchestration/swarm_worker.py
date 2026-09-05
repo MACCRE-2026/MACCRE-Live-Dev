@@ -43,6 +43,11 @@ from maccre_core.orchestration.concurrency import (
 )
 from maccre_core.orchestration.local_broker import LocalMessageBroker
 from maccre_core.orchestration.memory_engine import CognitiveMemoryEngine
+from maccre_core.orchestration.payload_modes import (
+    DEFAULT_PAYLOAD_MODE,
+    PayloadMode,
+    resolve_payload_mode,
+)
 from maccre_core.orchestration.tool_executor import ToolExecutor
 from maccre_core.orchestration.topology_interface import TopologyProvider
 from maccre_core.orchestration.topology_engine import TopologyEngine
@@ -1019,8 +1024,14 @@ All file paths must strictly resolve to these five silos:
             #   [PREVIOUS NODE OUTPUT] — the ledger written by the prior agent
             # For the first node (INGEST), these are the same file; we skip the duplicate block.
             # ── Targeted Filter Payload Generation ─────────────────────────────
-            _payload_mode = str(node_config.get("payload_mode", "Unified Ledger"))
-            if _payload_mode == "Targeted Filter":
+            # Resolved through the shared seam rather than compared to a literal, so a
+            # typo'd mode is reported instead of silently missing this branch. Note
+            # this read is on the *completing* node — it changes what this node reads.
+            # The Unified Ledger read further down is on the *successor*.
+            _payload_mode = resolve_payload_mode(
+                node_config.get("payload_mode"), context=current_node
+            )
+            if _payload_mode is PayloadMode.TARGETED_FILTER:
                 try:
                     from maccre_core.orchestration.flow_engine import generate_targeted_ledger  # noqa: PLC0415
                     _judge_node = str(node_config.get("next_node_success", node_config.get("Next_Node", ""))).split(",")[0].strip()
@@ -1862,17 +1873,37 @@ All file paths must strictly resolve to these five silos:
                 _ul_path = generate_unified_ledger(job_id)
                 logger.info(f"[{self.worker_id}] Live-updated unified ledger: {_ul_path}")
                 
-                payload_mode = "Unified Ledger"
+                # The SUCCESSOR's mode, not this node's: payload mode is a statement
+                # about what a node wants to *receive*. Only the first successor is
+                # consulted, so a fan-out to lanes with differing modes uses lane 0's
+                # for all of them — recorded in the register, not fixed here.
+                _successor = next_node.split(",")[0].strip()
+                payload_mode = DEFAULT_PAYLOAD_MODE
                 if self.topology:
                     try:
-                        tgt_cfg = self.topology.get_node_config(next_node.split(",")[0].strip())
-                        payload_mode = str(tgt_cfg.get("payload_mode", "Unified Ledger"))
+                        tgt_cfg = self.topology.get_node_config(_successor)
+                        payload_mode = resolve_payload_mode(
+                            tgt_cfg.get("payload_mode"), context=_successor
+                        )
                     except Exception:
                         pass
-                
-                if payload_mode == "Unified Ledger" and _ul_path:
+
+                if payload_mode is PayloadMode.UNIFIED_LEDGER and _ul_path:
                     routing_payload_path = _ul_path
                     logger.info(f"[{self.worker_id}] Routing via Unified Ledger: {routing_payload_path}")
+                elif payload_mode is PayloadMode.PRECEDING_NODE_ONLY:
+                    # ── Now an explicit branch, and it deliberately changes nothing ──
+                    # This mode was offered in the UI and read by no conditional
+                    # anywhere; it worked because the override above simply did not
+                    # fire, leaving routing_payload_path at this node's own artifact or
+                    # ledger. That is the correct behaviour, so it is preserved exactly
+                    # — what changes is that it is now *stated*. A mode that exists only
+                    # as a fall-through cannot be conditioned on, and the operator's
+                    # CTRL_REVIEW design is conditioned on precisely this one.
+                    logger.info(
+                        "[%s] Routing via Preceding Node Only: %s",
+                        self.worker_id, routing_payload_path,
+                    )
             except Exception as e:
                 logger.warning(f"[{self.worker_id}] Failed to live-update or route unified session ledger: {e}")
 

@@ -4370,3 +4370,132 @@ be downgraded and the test comment rewritten to stop describing it as open.
 
 **Related:** the Req 30 entry above; the Era 2 authoring-ownership decision, which is what
 blocks there being a field to declare a strategy in.
+
+---
+
+### Feature Name: One seam names the payload modes — and a typo had been selecting a different contract
+**Abstract:** `"Unified Ledger"`, `"Preceding Node Only"` and `"Targeted Filter"` were bare literals in seven files, while only **two** conditionals in the whole tree read the value — both `==` against a literal. So a topology carrying `"Unifed Ledger"` did not fail, did not warn, and **routed as `Preceding Node Only`**. New `payload_modes.py` is the single seam; `Preceding Node Only` is now a real branch that deliberately changes nothing.
+**Date/Time Entered:** 2026-09-04T22:10:00-04:00
+**Status:** COMPLETED — the seam and `Preceding Node Only`. **Step-boundary behaviour is untouched and still undecided.**
+**Completed:** 2026-09-04T22:10:00-04:00
+**Completion Metric:** `maccre_core/orchestration/payload_modes.py` — `PayloadMode`,
+`DEFAULT_PAYLOAD_MODE`, `AUTHORABLE_MODES`, `resolve_payload_mode`; stdlib imports only.
+Both `swarm_worker` reads resolve through it; `topology_engine`'s normalisation seam
+resolves through it; the literal defaults in `flow_engine` (4), `macro_factory`,
+`admin_tools` and `nexus_plex` (4) all replaced. `tests/test_payload_modes.py` — **35
+tests**, including a parametrised guard that **none of the seven files spells a mode for
+itself**. Revert-to-red: reverting `topology_engine`'s resolve call reddened three tests
+(`assert 'X' == 'Unified Ledger'`, and `'unified ledger' == 'Unified Ledger'`). Gate
+2026-09-04: `omni clean` 21:57, `omni qa` **PASS whole project** 21:58, pytest **948
+collected / 938 passed / 10 xfailed / 0 failed**, `omni smoke` **ALL CHECKS PASSED**.
+Collected 913 → 948 is +35 exactly and the pass count moved by the same 35, so nothing
+already passing changed behaviour under test.
+**Prior art:** replacing duplicated string literals with an enum is elementary practice.
+No novelty claimed. What is recorded here is the *measurement* — two reads against
+twenty-five writes — and the defect the duplication was hiding.
+
+**Description:**
+
+**The behaviour change, stated as one rather than filed as cleanup.** Both reads were
+equality against a literal, and the else-branch of the `Unified Ledger` test *was* the
+whole of `Preceding Node Only`. So one transposed letter in a CSV cell silently changed
+which document the next agent read, with nothing logged. Resolution is now
+case-insensitive against the three known values, falling back to the default **with a
+warning naming the node**. That topology now routes as `Unified Ledger` — differently than
+before, and as authored.
+
+**Two modes on one field with opposite subjects**, which nothing stated anywhere and is
+now on the enum members: `Targeted Filter` is read on the **completing** node and rewrites
+what *that node* reads; `Unified Ledger` is read on the **successor** and rewrites what the
+*next* node reads.
+
+**Why this resolver warns where `resolve_gather_strategy` raises.** A deliberate asymmetry
+between two functions a day apart, and the rule that produces both: **raise when the
+default could silently do the opposite of what was asked** — defaulting an unknown Gather
+Strategy to `Merge` would gather lanes the author asked to leave alone — **and warn when
+the default lands on the likely intent**, which is the case here, on the worker's hot path,
+where a topology typo is not worth killing a running flow.
+
+**Also fixed, and it is defect F1's class exactly.** `Targeted Filter` is written by
+`macro_factory` onto consensus advocate rows and is **not** offered by the node config
+modal. Opening the modal on such a node handed the `Select` a `value` absent from its
+options — decided at construction, inside a `compose`, where a raise is an app-killing
+traceback rather than a message. Options now derive from `AUTHORABLE_MODES` with a
+non-authorable current value appended and labelled: two offerable, three renderable.
+
+**Recorded and deliberately not fixed**, because the right answer to each depends on the
+undecided step-boundary question: a fan-out consults only **lane 0's** payload mode
+(`next_node.split(",")[0]`); and `payload_mode` is per-node in the CSV but **per-step in
+the flow model**, since `_hydrate_topology` stamps one `FlowStep.payload_mode` onto every
+row, so a TUI-authored step cannot vary mode between its own nodes while `macro_factory`
+rows can.
+
+**Related:** the two 2026-09-02 payload-contract entries, one of which is amended below;
+defect E1, which was a change to the default routing path with unexamined consequences for
+a mode nobody had written down.
+
+---
+
+### AMENDMENT to *`Preceding Node Only` is offered in the UI and implemented nowhere*
+**Date:** 2026-09-04T22:10:00-04:00
+**Status change:** Unfulfilled → **PARTIALLY COMPLETED.** The mode is now a real branch and
+the shared enum exists. What it *does at a step boundary* remains undecided.
+
+The entry said the mode "appears to work because it falls through to the default routing
+path". Confirmed exactly, and now stated in code: the branch exists, logs, and **contains
+no assignment** — `test_the_branch_does_not_change_the_routing_payload` asserts that,
+because preceding-node-only routing is *already* what the surrounding code produces and
+making the mode explicit had to state that rather than redefine it.
+
+The entry's third consequence — *"it blocks the operator's stated `CTRL_REVIEW` design,
+because that design is conditioned on the mode"* — is now **unblocked at the mechanism
+level**. A design can branch on `PayloadMode.PRECEDING_NODE_ONLY`. Whether it *should*
+route the preceding ledger plus the HITL injection downstream is the open decision, not a
+missing capability.
+
+The entry's "also worth resolving while here" — no enum, literals across seven files — is
+**done**, and it found the typo defect described in the entry above.
+
+---
+
+### Feature Name: The HITL resume never passed its topology, so every review closed its lane
+**Abstract:** `resume_paused_task` takes a `topology_engine` so a paused pause node can be routed to its configured successor, and falls back to `"END"` without one. `_hitl_resume_with_context` — the only production caller — never passed it. Every HITL resume from the TUI therefore terminated the lane at the pause node and silently dropped whatever was authored after it.
+**Date/Time Entered:** 2026-09-04T22:10:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-04T22:10:00-04:00
+**Verified:** Reproduced by inspection and by reading the resolution path.
+`_resolve_next_node` returns `"END"` when `topology_engine is None`; the TUI's call site
+passed two positional arguments only. The parameter's own docstring warns about this
+failure in detail.
+**Completion Metric:** `_hitl_resume_with_context` now passes
+`topology_engine=TopologyEngine()`. Three tests in `tests/test_payload_modes.py`
+(`TestTheHitlResumePassesItsTopology`) pin the parameter's default, the TUI supplying it,
+and the `"END"` fallback being **kept** for callers that genuinely have no topology.
+**Prior art:** not applicable.
+
+**Description:**
+
+**The `--smart` shape, third instance in this register.** A documented mechanism with no
+caller supplying it, and no test that failed when the claim went false. The docstring even
+names the consequence — *"a review node with a configured successor would resume straight
+to END and silently drop the rest of the lane"* — and that is what shipped.
+
+**A plain `TopologyEngine` is sufficient, and this was verified rather than assumed.** The
+worry was real: a control node's successor is config-driven through
+`merge_config_overlay`, which by design never writes to `topology.csv`, so a fresh
+CSV-reading engine could plausibly resolve the wrong successor. Reading
+`_get_macronode`'s control-node auto-wrap settled it — `next_node` is written **into the
+topology row**, and `_hydrate_topology` writes that row to the CSV with the step suffix.
+The overlay carries the *other* config fields (scatter targets, gate predicates,
+`auto_resume_after`), not the successor. So the CSV is authoritative for this one lookup
+and no overlay is needed. Had that gone the other way, the fix would have been a design
+change rather than an argument, and it would not have landed here.
+
+**Not verified in production.** This is TUI wiring, which sits outside the Pyright include
+list and outside the suite's reach; the test is a source assertion, not an execution.
+Nobody has pressed Inject-and-Resume on a review node with a configured successor since
+the change. It is the same honesty limit as defect F3's two-line `nexus_plex` wiring.
+
+**Related:** defect F3, which was also a HITL hold whose release path nobody could
+exercise; the `CTRL_REVIEW` accompany-not-replace decision, which touches the same
+function and is still open.

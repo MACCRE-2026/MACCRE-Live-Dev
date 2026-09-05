@@ -50,6 +50,11 @@ from maccre_tui.widgets.topology_visualizer import (
 )
 from maccre_core.orchestration.concurrency import MAX_SCATTER_AGENTS
 from maccre_core.orchestration.nexus_agent import NexusAgent
+from maccre_core.orchestration.payload_modes import (
+    AUTHORABLE_MODES,
+    DEFAULT_PAYLOAD_MODE,
+    resolve_payload_mode,
+)
 from maccre_core.workbook_data import load_agent_names_from_library, load_model_ids
 from maccre_core.utils.path_resolver import get_maccre_root
 from maccre_core.agent_library import get_agent_store
@@ -2022,7 +2027,7 @@ class NodeConfigModal(ModalScreen[dict | None]):
     """
     
     def __init__(
-        self, node_name: str, current_payload_mode: str = "Unified Ledger",
+        self, node_name: str, current_payload_mode: str = DEFAULT_PAYLOAD_MODE.value,
         current_instructions: str = "", active_project: str = "",
         agents_in_node: list[str] | None = None, baked_tools: dict[str, str] | None = None,
         current_agent_tools_overrides: dict[str, str] | None = None,
@@ -2067,9 +2072,22 @@ class NodeConfigModal(ModalScreen[dict | None]):
                 
             with Horizontal(classes="node-cfg-row"):
                 yield Label("Ledger Routing Mode: ")
+                # Options come from AUTHORABLE_MODES, so the two the operator may
+                # choose are named in one place rather than spelled out here.
+                #
+                # The current value is added when it is not authorable, and that is
+                # not defensive padding — `Targeted Filter` is a real mode that
+                # `macro_factory` writes onto consensus advocate rows, and it is
+                # deliberately not offered. Passing a Select a `value` absent from its
+                # options is exactly the class of widget-construction fault that
+                # crashed the app in defect F1, out of a render nobody was watching.
+                _authorable = [(m.value, m.value) for m in AUTHORABLE_MODES]
+                _current = resolve_payload_mode(self.current_payload_mode)
+                if _current not in AUTHORABLE_MODES:
+                    _authorable.append((f"{_current.value} (not authorable)", _current.value))
                 yield Select(
-                    [("Unified Ledger", "Unified Ledger"), ("Preceding Node Only", "Preceding Node Only")],
-                    value=self.current_payload_mode,
+                    _authorable,
+                    value=_current.value,
                     id="cfg-payload-mode"
                 )
 
@@ -4033,7 +4051,7 @@ class NexusPlex(App[None]):
         self.push_screen(
             NodeConfigModal(
                 node_name=nd.node_id,
-                current_payload_mode=getattr(matched_step, "payload_mode", "Unified Ledger") if matched_step else "Unified Ledger",
+                current_payload_mode=getattr(matched_step, "payload_mode", DEFAULT_PAYLOAD_MODE.value) if matched_step else DEFAULT_PAYLOAD_MODE.value,
                 current_instructions=getattr(matched_step, "custom_instructions", "") if matched_step else "",
                 agents_in_node=list(agents_in_node),
                 active_project=self.active_project,
@@ -4509,7 +4527,7 @@ class NexusPlex(App[None]):
 
         self.push_screen(NodeConfigModal(
             node_name=node.macronode_name,
-            current_payload_mode=getattr(node, "payload_mode", "Unified Ledger"),
+            current_payload_mode=getattr(node, "payload_mode", DEFAULT_PAYLOAD_MODE.value),
             current_instructions=getattr(node, "custom_instructions", ""),
             active_project=self.active_project,
             agents_in_node=list(agents_in_node),
@@ -5205,8 +5223,25 @@ class NexusPlex(App[None]):
 
         # Resume the paused task with the new payload
         from maccre_core.orchestration.local_broker import LocalMessageBroker  # noqa: PLC0415
+        from maccre_core.orchestration.topology_engine import TopologyEngine  # noqa: PLC0415
+
+        # ── The topology engine is passed, and it has to be ───────────────────
+        # `resume_paused_task` takes this parameter so a paused *pause node* can be
+        # completed and routed to its configured successor. Omitted, it falls back to
+        # "END" — and this, the only production caller, omitted it. So every HITL
+        # resume from the TUI closed the lane at the pause node and silently dropped
+        # whatever the operator had authored after it.
+        #
+        # The parameter's own docstring warns about exactly this failure, which makes
+        # it the `--smart` shape: a documented mechanism with no caller supplying it.
+        # Reading the CSV is sufficient here and no config overlay is needed, because
+        # a control node's `Next_Node` is baked into its auto-wrapped topology row by
+        # `_get_macronode` and hydrated into the CSV with the step suffix — the
+        # overlay carries the *other* config fields, not the successor.
         broker = LocalMessageBroker()
-        resumed = broker.resume_paused_task(job_id, str(hitl_payload_path))
+        resumed = broker.resume_paused_task(
+            job_id, str(hitl_payload_path), topology_engine=TopologyEngine()
+        )
 
         if resumed:
             self.write_agent_log(

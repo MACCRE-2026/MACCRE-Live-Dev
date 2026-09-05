@@ -38,6 +38,7 @@ from maccre_core.orchestration.deterministic_nodes import (
     resolve_primitive_node_id,
 )
 from maccre_core.orchestration.local_broker import LocalMessageBroker
+from maccre_core.orchestration.payload_modes import DEFAULT_PAYLOAD_MODE
 from maccre_core.orchestration.swarm_pool import DynamicSwarmPool
 from maccre_core.orchestration.topology_engine import TopologyEngine
 from maccre_core.orchestration.topology_graph import (
@@ -400,7 +401,7 @@ def total_sum_readout(
 
 class FlowStep:
     """A single step in a Linear Flow, pointing to a MacroNode."""
-    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger", custom_instructions: str = "", agent_tools_overrides: dict[str, str] | None = None, config: dict[str, Any] | None = None) -> None:
+    def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = DEFAULT_PAYLOAD_MODE.value, custom_instructions: str = "", agent_tools_overrides: dict[str, str] | None = None, config: dict[str, Any] | None = None) -> None:
         self.macronode_name = macronode_name
         self.agent_mapping = agent_mapping or {}
         self.payload_mode = payload_mode
@@ -418,7 +419,7 @@ class FlowStep:
         return cls(
             macronode_name=d.get("macronode_name", ""),
             agent_mapping=d.get("agent_mapping", {}),
-            payload_mode=d.get("payload_mode", "Unified Ledger"),
+            payload_mode=d.get("payload_mode", DEFAULT_PAYLOAD_MODE.value),
             custom_instructions=d.get("custom_instructions", ""),
             agent_tools_overrides=d.get("agent_tools_overrides", {}),
             config=d.get("config", {})
@@ -739,7 +740,7 @@ class FlowRunner:
                 hydrated_lists = self._hydrate_topology(
                     topo_rows,
                     step.agent_mapping,
-                    getattr(step, "payload_mode", "Unified Ledger"),
+                    getattr(step, "payload_mode", DEFAULT_PAYLOAD_MODE.value),
                     getattr(step, "custom_instructions", ""),
                     step_index=step_idx,
                     agent_tools_overrides=getattr(step, "agent_tools_overrides", {}),
@@ -804,7 +805,7 @@ class FlowRunner:
         )
         return report
 
-    def _hydrate_topology(self, topology_rows: list[dict[str, Any]], agent_mapping: dict[str, str], payload_mode: str = "Unified Ledger", custom_instructions: str = "", step_index: int = 0, agent_tools_overrides: dict[str, str] | None = None) -> list[list[str]]:
+    def _hydrate_topology(self, topology_rows: list[dict[str, Any]], agent_mapping: dict[str, str], payload_mode: str = DEFAULT_PAYLOAD_MODE.value, custom_instructions: str = "", step_index: int = 0, agent_tools_overrides: dict[str, str] | None = None) -> list[list[str]]:
         """Convert a list of topology dictionaries into lists of strings (for CSV) and inject agent overrides."""
         hydrated: list[list[str]] = []
         agent_tools_overrides = agent_tools_overrides or {}
@@ -1479,7 +1480,7 @@ class FlowRunner:
         start_idx = session["current_step_index"]
         
         steps_data = json.loads(topology_csv_str)
-        steps = [FlowStep(s.get("macronode", s.get("macro_name")), s.get("mapping", s.get("agent_mapping", {})), s.get("payload_mode", "Unified Ledger")) for s in steps_data]
+        steps = [FlowStep(s.get("macronode", s.get("macro_name")), s.get("mapping", s.get("agent_mapping", {})), s.get("payload_mode", DEFAULT_PAYLOAD_MODE.value)) for s in steps_data]
         
         logger.info(f"[FLOW_ENGINE] Resuming Flow (Job: {job_id}) from step {start_idx + 1}/{len(steps)}.")
         
@@ -1531,7 +1532,7 @@ class FlowRunner:
                 hydrated_lists = self._hydrate_topology(
                     topo_rows,
                     step.agent_mapping,
-                    getattr(step, "payload_mode", "Unified Ledger"),
+                    getattr(step, "payload_mode", DEFAULT_PAYLOAD_MODE.value),
                     getattr(step, "custom_instructions", ""),
                     step_index=idx,
                     agent_tools_overrides=getattr(step, "agent_tools_overrides", {}),
@@ -1769,7 +1770,7 @@ class FlowRunner:
                 
                 # 2. Hydrate Agent Slots
                 topo_rows = macro_def.get("topology_rows", [])
-                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, getattr(step, "payload_mode", "Unified Ledger"), getattr(step, "custom_instructions", ""), step_index=idx, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
+                hydrated_lists = self._hydrate_topology(topo_rows, step.agent_mapping, getattr(step, "payload_mode", DEFAULT_PAYLOAD_MODE.value), getattr(step, "custom_instructions", ""), step_index=idx, agent_tools_overrides=getattr(step, "agent_tools_overrides", {}))
             
                 # 3. Write to topology.csv
                 build_res = build_topology(hydrated_lists)

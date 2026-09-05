@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import logging
 
+from maccre_core.orchestration.payload_modes import PayloadMode
+
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -575,7 +577,11 @@ def _build_crucible_topology(
             "Fallback_Node": "FAILED",
             "Max_Retries": max_recursion,
             "Payload_Path": None,
-            "Payload_Mode": "Targeted Filter" if variation == "synthesis-blind" else "Unified Ledger",
+            "Payload_Mode": (
+                PayloadMode.TARGETED_FILTER.value
+                if variation == "synthesis-blind"
+                else PayloadMode.UNIFIED_LEDGER.value
+            ),
             "Is_End_Node": "FALSE",
             "Timeout_Sec": 0,
             "Dialogue_Partner": None,
