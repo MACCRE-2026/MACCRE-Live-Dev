@@ -87,33 +87,79 @@ _AVG_NODE_TOKENS: int = 20000
 
 
 def get_pricing_table() -> dict[str, dict[str, float]]:
-    """Return the live model pricing table from maccre_router.
+    """Return the project's model pricing, keyed by model id.
 
-    Falls back to a hardcoded minimal table if the router is unavailable.
+    **One pricing table, projected into this shape.** The single source of truth is
+    :data:`maccre_core.tools.finops_tools.PRICING_MATRIX`, which is what
+    ``calculate_actual_cost`` bills from. This function only reshapes it to the
+    ``{"input_mtok", "output_mtok"}`` form its existing callers expect.
+
+    .. note::
+       **What this replaced, and what it was costing (2026-09-04).**
+
+       This used to read ``UniversalRouter._PRICING_TABLE`` and fall back to a
+       hardcoded four-model table *"if the router is unavailable"*.
+
+       ``UniversalRouter`` has **no** ``_PRICING_TABLE`` — the string does not appear
+       anywhere in ``maccre_router.py``. So ``getattr`` returned ``{}`` on every call,
+       the truthy guard failed, and the fallback was not a fallback: **it was the only
+       code path that ever ran.** The docstring's "live model pricing table" described a
+       lookup that had never once succeeded.
+
+       And the stub disagreed with the real matrix. It priced ``gemini-2.5-flash`` at
+       ``input 0.15 / output 0.60`` while ``PRICING_MATRIX`` prices it at
+       ``0.075 / 0.30`` — **exactly 2× on both**. Every pre-flight estimate the system
+       has ever shown an operator was computed at double the real Flash rate, from a
+       table that claimed to be live. Two representations of one thing, drifted, with
+       the wrong one winning — Principle 4, in the surface whose whole job is to tell
+       the operator what a run will cost.
+
+       It also carried ``gemini-2.5-flash-8b``, which exists in **no** current pricing
+       matrix and which ``nexus_plex``'s budget modal hardcoded as its estimate model.
 
     Returns:
-        Dict keyed by model_id: {"input_mtok": float, "output_mtok": float}
+        Dict keyed by model_id: ``{"input_mtok": float, "output_mtok": float}``, using
+        the **short-context** rates. Callers here estimate per node and have never had a
+        context length to tier on; the long-context rates remain available to
+        ``calculate_actual_cost``, which does.
     """
-    try:
-        from maccre_core.maccre_router import UniversalRouter  # noqa: PLC0415
-        router = UniversalRouter()
-        raw: dict[str, Any] = getattr(router, "_PRICING_TABLE", {})
-        if raw:
-            return {k: {"input_mtok": v.get("in", 0.0), "output_mtok": v.get("out", 0.0)}
-                    for k, v in raw.items()}
-    except Exception:  # noqa: BLE001
-        pass
-    # Fallback minimal table
+    from maccre_core.tools.finops_tools import PRICING_MATRIX  # noqa: PLC0415
+
     return {
-        "gemini-2.5-flash":   {"input_mtok": 0.15,  "output_mtok": 0.60},
-        "gemini-2.5-pro":     {"input_mtok": 1.25,  "output_mtok": 5.00},
-        "gemini-2.5-flash-8b":{"input_mtok": 0.075, "output_mtok": 0.30},
-        "gemma3:9b":          {"input_mtok": 0.0,   "output_mtok": 0.0},
+        model_id: {
+            "input_mtok": rates.get("input_short", 0.0),
+            "output_mtok": rates.get("output_short", 0.0),
+        }
+        for model_id, rates in PRICING_MATRIX.items()
     }
 
 
 def _estimate_node_cost(model: str, pricing: dict[str, dict[str, float]]) -> float:
-    """Estimate API cost for one topology node using average token count."""
+    """Estimate API cost for one topology node from an assumed **output** token count.
+
+    .. warning::
+       **This is blind to input size, and that is a real limitation rather than a
+       simplification.** It reads ``output_mtok`` and multiplies by
+       :data:`_AVG_NODE_TOKENS`. ``input_mtok`` is fetched by
+       :func:`get_pricing_table` and never read by anything.
+
+       So the estimate is a pure function of ``(model, node count)``. Enlarging what a
+       step hands the next step — a bigger payload, an accompanying session ledger —
+       moves the real bill (``actual_cost`` derives from the provider's own
+       ``promptTokenCount``) and moves this number by **exactly zero**.
+
+       Making it input-aware requires knowing payload size before launch, which nothing
+       currently records. That is tracked as its own work rather than patched here with
+       a second guess.
+
+    Args:
+        model: Model id. Unknown ids fall back to Flash rates, which under-reports for
+            Pro-tier nodes — recorded rather than hidden.
+        pricing: A table from :func:`get_pricing_table`.
+
+    Returns:
+        Estimated USD for one node, rounded to 6 places.
+    """
     row = pricing.get(model) or pricing.get("gemini-2.5-flash", {})
     per_tok = row.get("output_mtok", 0.0) / 1_000_000
     return round(per_tok * _AVG_NODE_TOKENS, 6)

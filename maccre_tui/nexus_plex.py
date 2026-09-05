@@ -4720,6 +4720,10 @@ class NexusPlex(App[None]):
             runner = FlowRunner(self.active_project)
             report = runner.preflight_check(self.active_flow_steps)
             self.write_agent_log(report.render())
+            # Preflight already priced every model-bearing row in the flow. The budget
+            # modal used to throw that away and recompute from one hardcoded model id;
+            # carry it forward instead so the operator is shown one number, not two.
+            self._last_preflight_cost = report.estimated_cost
 
             if not report.is_ok:
                 # Hard-block - show Proceed Anyway button
@@ -4732,6 +4736,8 @@ class NexusPlex(App[None]):
                 return
         except Exception as e:  # noqa: BLE001
             self.write_agent_log(f"[yellow]Pre-flight check skipped: {e}[/yellow]")
+            # No estimate rather than a substituted one. The modal says so.
+            self._last_preflight_cost = None
 
         # ── Duplicate-Run Guard ───────────────────────────────────────────────
         if self._flow_loaded_from_history:
@@ -4795,24 +4801,61 @@ class NexusPlex(App[None]):
             pass
 
     def _do_budget_proposal(self) -> None:
-        """Calculate projection and show Budget Proposal modal."""
+        """Show the Budget Proposal modal using pre-flight's own model-aware estimate.
+
+        **What this replaced (2026-09-04).** It called ``_estimate_node_cost`` with a
+        single hardcoded Flash-Lite-era model id and multiplied by the node count. Two
+        things were wrong with that, and the modal then attributed the result to
+        historical metrics:
+
+        1. **The model was hardcoded**, so a flow of Pro-tier nodes was priced at Flash
+           rates regardless of what it would actually run — and the id it used is absent
+           from the real pricing matrix entirely.
+
+        Neither the old id nor the old wording is quoted here: tests forbid both strings
+        appearing in these files, and a historical note is not worth weakening a guard.
+        2. **No history was consulted.** The number was
+           ``node_count x output_rate x 20000``, an arithmetic projection wearing an
+           empirical label.
+
+        ``preflight_check`` has already priced every model-bearing row in the flow using
+        each row's declared model, moments earlier in ``action_launch_flow``. Reading its
+        result is both more accurate and one representation instead of two.
+
+        When pre-flight did not run, this shows **no figure** rather than a substituted
+        one — the same rule the payload path follows: a visibly missing number is better
+        than a confidently wrong one.
+        """
         from maccre_core.finops._finop_daemon_ import get_finop_daemon
         from maccre_tui.widgets.finops_modals import BudgetProposalModal, BudgetWarningModal
-        from maccre_core.tools.workbook_engine import _estimate_node_cost, get_pricing_table
-        
+
         daemon = get_finop_daemon()
         node_count = len(self.active_flow_steps)
-        pricing = get_pricing_table()
-        # Fallback to flash-8b for basic estimate if actual nodes aren't fully resolved
-        history_avg = _estimate_node_cost("gemini-2.5-flash-8b", pricing)
-        est_cost = daemon.calculate_topology_projection(node_count, history_avg)
+        est_cost: float | None = getattr(self, "_last_preflight_cost", None)
+        if est_cost is None:
+            self.write_agent_log(
+                "[yellow]No pre-flight cost estimate available — pre-flight did not "
+                "complete. Proceeding without a projected figure rather than showing a "
+                "guessed one.[/yellow]"
+            )
         
         def handle_warning(result: bool):
             if result:
                 # Log approval
                 import uuid
                 session_id = f"job_{uuid.uuid4().hex[:8]}"
-                daemon.log_budget_approval(self.active_project, session_id, est_cost)
+                if est_cost is None:
+                    # Deliberately NOT written as 0.0. `log_budget_approval` records what
+                    # was approved, and a 0.0 row would claim the operator approved
+                    # nothing — a false zero in a ledger, which is the same defect this
+                    # change removes from the embedding path. An absent row plus this
+                    # warning is the truthful record.
+                    self.write_agent_log(
+                        "[yellow]Approval recorded in the log only: no projection "
+                        "existed, so nothing is written to the budget ledger.[/yellow]"
+                    )
+                else:
+                    daemon.log_budget_approval(self.active_project, session_id, est_cost)
                 self._do_launch_flow()
             else:
                 self.write_agent_log("[red]Flow launch aborted by user at final warning.[/red]")

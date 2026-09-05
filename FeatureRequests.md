@@ -4801,3 +4801,78 @@ implement it, or delete the claim. There is no third.
   `sovereign_store.py:305` wraps the query as `f'"{query_text}"'`, a hard phrase quote,
   while `fts_search_memory`'s agent-facing docstring (`rag_tools.py:229-231`) promises
   `AND`, `OR`, `NOT`, `NEAR` and prefix `*`. Every one is inert.
+
+---
+
+### AMENDMENT to *Embeddings are billed and recorded as free — the cost surface lies*
+**Date:** 2026-09-05T00:45:00-04:00
+**Status change:** Unfulfilled → **COMPLETED.** Era 3 tracker #17.
+**Completion Metric:** `"gemini-embedding"` removed from `_FREE_MODEL_KEYWORDS`;
+`gemini-embedding-001` and `gemini-embedding-2` added to `PRICING_MATRIX` at $0.15/M input
+and $0 output; `estimate_tokens`, `estimate_embedding_cost` and
+`EMBEDDING_INPUT_TOKEN_LIMIT` added; `get_pricing_table` rewritten to derive from
+`PRICING_MATRIX`; the budget modals and the launch path corrected.
+`tests/test_embedding_cost.py` — **38 tests**. **Revert-to-red:** restoring the free
+keyword reddened three tests including `assert 0.0 > 0` — the false zero itself. Gate
+2026-09-05: `omni clean` 23:59, `omni qa` **PASS whole project** 00:33, pytest **986
+collected / 976 passed / 10 xfailed / 0 failed** in 240.49s, `omni smoke` **ALL CHECKS
+PASSED**. Collected 948 → 986 is +38 exactly, and the pass count moved by the same 38.
+
+**What the task found that the original entry did not, and it is bigger than the entry
+was.** `get_pricing_table()` read `UniversalRouter._PRICING_TABLE` and fell back to a
+hardcoded four-model table *"if the router is unavailable"*. **`UniversalRouter` has no
+`_PRICING_TABLE`** — the string appears nowhere in `maccre_router.py` — so `getattr`
+returned `{}` on every call, the truthy guard failed, and **the fallback was the only code
+path that had ever run.** Verified empirically, not inferred: the function returned exactly
+4 keys.
+
+**And the stub disagreed with the real matrix by exactly 2×.** It priced
+`gemini-2.5-flash` at `input 0.15 / output 0.60`; `PRICING_MATRIX` prices it at
+`0.075 / 0.30`. **Every pre-flight cost estimate ever shown to an operator was double the
+real Flash rate**, from a table whose docstring called itself live. Two representations of
+one thing, drifted, with the wrong one winning — Principle 4 in the surface whose entire
+job is to say what a run will cost.
+
+**Consequence to expect, stated because it is a visible behaviour change:** pre-flight
+estimates will now read roughly **half** what they did. The old number was wrong and the
+new one is right, but an operator comparing against a remembered figure should know why it
+moved. `get_pricing_table()` now returns **34** entries rather than 4.
+
+**Why the estimator is a separate function from the receipt.** `EmbeddingResponse` carries
+only `.values` — there is **no `usage_metadata` on an embedding response at all**, so
+unlike a generation call there is no `promptTokenCount` to bill from. The cost must be
+estimated from character length. `estimate_embedding_cost` is therefore deliberately
+**not** routed into `calculate_actual_cost`, whose name and docstring promise a receipt
+derived from provider metadata. A heuristic reaching a field that means *measured* is the
+laundering shape Doctrine 1 exists to prevent, applied to money instead of trust. The
+return dict carries `is_estimate: True` so a consumer reading only the number cannot lose
+that fact.
+
+**Billing is clamped to the 2,048-token input window**, because the API truncates rather
+than rejecting — so a 68 KB ledger bills at 2,048 tokens, $0.000307. Estimating the full
+17,000 tokens would over-report, and an over-reported cost is still a wrong one. The clamp
+also sets `truncated: True`, which is the *retrieval* half of the same fact and is recorded
+as Era 4 work.
+
+**Three false operator-facing claims corrected, and one refused.** The proposal modal no
+longer attributes its figure to historical metrics (none were consulted); the warning modal
+no longer says *authorizing up to* a figure (nothing enforces it and the estimate excludes
+input tokens, so an unbounded commitment was being stated as a bound); and the launch path
+no longer recomputes from a hardcoded model id absent from the pricing matrix — it carries
+forward `preflight_check`'s own model-aware `estimated_cost`, which was already computed
+moments earlier and thrown away. **Refused:** writing `0.0` to the budget ledger when no
+projection exists. A `0.0` row would claim the operator approved nothing, which is the same
+false-zero defect this task removes; the approval is logged and the ledger row is omitted.
+
+**Two of my own historical notes had to be reworded**, because they quoted the forbidden
+strings verbatim and reddened the guards written to forbid them. Same shape as the registry
+docstring incident on 2026-09-04: the guard was right and the prose changed. Recorded
+because it is now the second occurrence and it is a real authoring hazard — a historical
+note is not worth weakening a guard for.
+
+**Still not true.** `_estimate_node_cost` remains **blind to input size**: it reads
+`output_mtok` × a fixed 20,000-token constant, and `input_mtok` is fetched and never read.
+So enlarging a payload moves the real bill and moves the estimate by zero. Fixing that
+needs payload size recorded before launch, which is tracker #18. The limitation is now
+stated in the docstring and pinned by a test rather than left for the next reader to
+discover.

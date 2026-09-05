@@ -234,22 +234,96 @@ PRICING_MATRIX: dict[str, dict[str, float]] = {
         "cache_read": 0.0, "cache_write": 0.0,
     },
 
+    # ── Embeddings ────────────────────────────────────────────────────────────
+    # Added 2026-09-04. These were previously listed as FREE — see the note on
+    # _FREE_MODEL_KEYWORDS below. $0.15/M input, and no billable output: an embedding
+    # returns a vector, not tokens.
+    #
+    # There is no long-context tier because the model's input window is 2,048 tokens.
+    # Longer input is truncated server-side rather than charged at a higher rate, so
+    # input_long is set equal to input_short rather than doubled — a tier that cannot
+    # be reached would be a number describing nothing.
+    "gemini-embedding-001": {
+        "input_short": 0.15, "input_long": 0.15,
+        "output_short": 0.0, "output_long": 0.0,
+        "cache_read": 0.0, "cache_write": 0.0,
+    },
+    "gemini-embedding-2": {  # used by nexus_agent's MCP surface
+        "input_short": 0.15, "input_long": 0.15,
+        "output_short": 0.0, "output_long": 0.0,
+        "cache_read": 0.0, "cache_write": 0.0,
+    },
+
     # ── Anthropic (external) ──────────────────────────────────────────────────
     "claude-3-5-sonnet-20241022": {"input_short": 3.00, "input_long": 3.00,
                                     "output_short": 15.00, "output_long": 15.00,
                                     "cache_read": 0.0, "cache_write": 0.0},
 }
 
+#: The input window of ``gemini-embedding-001``. Input beyond this is **truncated by
+#: the API**, not rejected and not charged — which is why it bounds the cost estimate
+#: and also why a long document's vector represents only its opening. The second
+#: consequence is a retrieval defect and is recorded as Era 4 work; only the billing
+#: consequence is handled here.
+EMBEDDING_INPUT_TOKEN_LIMIT: int = 2048
+
 # ── Context length threshold for the long-context pricing tier ───────────────
 _LONG_CTX_THRESHOLD: int = 200_000  # tokens
 
 # ── Free models (always return $0.00) ────────────────────────────────────────
+#
+# ``"gemini-embedding"`` WAS IN THIS TUPLE, with the comment "embedding models are
+# free". It was removed on 2026-09-04. Embedding models are **not** free on the paid
+# tier — ``gemini-embedding-001`` is $0.15 per 1M input tokens — and the entry was a
+# preview-era fact frozen as a permanent one. Because ``calculate_actual_cost``
+# short-circuits on a keyword match *before* consulting any rate, every embedding the
+# system ever issued was billed and recorded as $0.00.
+#
+# Only genuinely-free surfaces belong here: models served at no cost, and local
+# inference. When adding an entry, the test in ``tests/test_embedding_cost.py``
+# requires a reason, because "free" is a claim about someone else's billing.
 _FREE_MODEL_KEYWORDS: tuple[str, ...] = (
-    "gemma",          # all Gemma models are free via Gemini API
-    "llama",          # local Ollama
-    "gemini-embedding",  # embedding models are free
+    "gemma",          # free via the Gemini API's Gemma surface
+    "llama",          # local Ollama — no provider bills for this
     "aqa",            # legacy QA model
 )
+
+# ── Local token estimation ────────────────────────────────────────────────────
+#
+#: Characters per token, for the **estimate** used where no provider count exists.
+#:
+#: This is a heuristic and not a tokenizer. There is no tokenizer in this repository,
+#: and the only exact answer available is the ``countTokens`` endpoint, which is a
+#: network round-trip and is not on the execution path. A ratio of 4 is the
+#: conventional rule of thumb for English prose and will be wrong — by a little for
+#: prose, and by more for code, tables, JSON and non-Latin scripts.
+_CHARS_PER_TOKEN_ESTIMATE: int = 4
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate a token count from character length. **Not a measurement.**
+
+    Exists for exactly one reason: embedding responses carry **no usage metadata**.
+    ``EmbeddingResponse`` has only ``.values``, so unlike a generation call there is no
+    ``promptTokenCount`` to bill from — and the alternative to estimating is what this
+    module did before, which was to report ``$0.00`` for a billed operation.
+
+    The name says ``estimate`` and every caller is expected to keep saying so. An
+    estimate that reaches a field meaning *measured* is the trust-laundering shape from
+    Doctrine 1 in a cost column, so :func:`estimate_embedding_cost` is deliberately
+    **separate** from :func:`calculate_actual_cost` rather than feeding it.
+
+    Args:
+        text: The text that was or will be sent.
+
+    Returns:
+        An estimated token count, minimum 1 for any non-empty input. ``0`` only for
+        genuinely empty text, so a caller can distinguish "nothing" from "something
+        small".
+    """
+    if not text:
+        return 0
+    return max(1, len(text) // _CHARS_PER_TOKEN_ESTIMATE)
 
 # ── Grounding pricing ─────────────────────────────────────────────────────────
 GROUNDING_PRICE_PER_1K_QUERIES: float = 14.00  # USD per 1000 search queries
@@ -322,6 +396,53 @@ def calculate_actual_cost(
 
     grounding_cost = (grounding_queries / 1_000.0) * GROUNDING_PRICE_PER_1K_QUERIES
     return base_cost + grounding_cost
+
+
+def estimate_embedding_cost(
+    text: str,
+    model_id: str = "gemini-embedding-001",
+) -> dict[str, float | int | bool]:
+    """Estimate what one embedding call costs. **An estimate, and it says so.**
+
+    Kept separate from :func:`calculate_actual_cost` on purpose. That function's name and
+    docstring promise a receipt derived from provider usage metadata; embeddings have no
+    usage metadata to derive one from. Routing a character-count heuristic into it would
+    make an estimate indistinguishable from a measurement in the same field — which is
+    the laundering shape Doctrine 1 exists to prevent, applied to money instead of trust.
+
+    Args:
+        text: The text being embedded.
+        model_id: The embedding model. Defaults to the one ``get_gemini_embedding`` uses.
+
+    Returns:
+        A dict that is explicit about its own reliability:
+
+        - ``estimated_tokens`` — after the input-window clamp
+        - ``estimated_cost`` — USD
+        - ``is_estimate`` — always ``True``, so a consumer cannot lose that fact by
+          reading only the number
+        - ``truncated`` — ``True`` when the text exceeds
+          :data:`EMBEDDING_INPUT_TOKEN_LIMIT`, meaning the API embedded only its opening
+
+    Note:
+        **Billing is clamped to the input window.** The API truncates rather than
+        rejecting, so a 17,000-token document is billed at 2,048. Estimating the full
+        length would over-report — and over-reporting a cost is still reporting a wrong
+        one.
+    """
+    raw_tokens = estimate_tokens(text)
+    truncated = raw_tokens > EMBEDDING_INPUT_TOKEN_LIMIT
+    billable = min(raw_tokens, EMBEDDING_INPUT_TOKEN_LIMIT)
+
+    rates = _get_rates(model_id, billable)
+    cost = (billable / 1_000_000.0) * rates["input"]
+
+    return {
+        "estimated_tokens": billable,
+        "estimated_cost": cost,
+        "is_estimate": True,
+        "truncated": truncated,
+    }
 
 
 def calculate_predicted_cost(
