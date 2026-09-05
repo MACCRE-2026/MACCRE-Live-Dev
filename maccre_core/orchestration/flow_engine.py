@@ -32,6 +32,8 @@ from typing import Any, Callable, Sequence
 from maccre_core.macronode_registry import get_macronode_store
 from maccre_core.orchestration.concurrency import atomic_write_text, file_lock
 from maccre_core.orchestration.deterministic_nodes import (
+    DeterministicNodeType,
+    GatherStrategy,
     is_deterministic_node,
     resolve_primitive_node_id,
 )
@@ -114,6 +116,171 @@ def _hydrate_config_targets(config: dict[str, Any], step_index: int) -> dict[str
                 f"{name}_S{step_index}" for name in parse_targets(value)
             )
     return hydrated
+
+
+#: The one ordering a step's output set is ever in. Named rather than left implicit
+#: because the alternative is what defect E2 actually did: order by mtime, and hand
+#: the next step a 59-byte stub over a 426 KB merge, every single time, because the
+#: stub happened to be written last.
+DECLARED_TOPOLOGY_POSITION = "declared_topology_position"
+
+
+@dataclass
+class StepOutputSet:
+    """A step's output: an **ordered set** of ``(node_id, output_path)`` pairs. Req 30.
+
+    A step used to produce *an artifact*. That was true only while every step had one
+    endpoint, and it stopped being true the moment a scatter was allowed to leave its
+    lanes ungathered (Req 29). Modelling the output as a set makes the multi-lane case
+    **normal** rather than an anomaly to warn about, and moves the error from "there
+    are several" to **"something chose between them without being told to"**.
+
+    Ordering is by declared topology position and **never by completion time**.
+    Completion order is a race; declaration order is a fact about the topology. The
+    register records what the other choice cost — see :meth:`FlowRunner._capture_step_output`.
+    """
+
+    #: ``(node_id, output_path)`` in declared topology order.
+    pairs: list[tuple[str, str]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Copy rather than alias. A caller handing us its own list and later finding it
+        # reordered is the shared-mutable-list defect pattern, and this object exists
+        # precisely to be a stable record of what a step produced.
+        self.pairs = list(self.pairs)
+
+    @property
+    def ordered_by(self) -> str:
+        """Always :data:`DECLARED_TOPOLOGY_POSITION`.
+
+        A **property, not a field**, deliberately. As a field with a default it could
+        be constructed as ``StepOutputSet(pairs=..., ordered_by="completion_time")`` —
+        a caller able to *declare* an ordering it did not perform. The ordering is a
+        property of how this object is built, so it is not the constructor's to state.
+        """
+        return DECLARED_TOPOLOGY_POSITION
+
+    def is_empty(self) -> bool:
+        """Req 30.5 — no output at all, which is an ERROR condition and not a value."""
+        return not self.pairs
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def nodes(self) -> list[str]:
+        """The terminal node ids, in declared order."""
+        return [node for node, _path in self.pairs]
+
+    def paths(self) -> list[str]:
+        """The output paths, in declared order."""
+        return [path for _node, path in self.pairs]
+
+    def single(self) -> str:
+        """The one output, when there is exactly one. Req 30.2 and Req 30.4.
+
+        Returns:
+            The single output path.
+
+        Raises:
+            ValueError: If the set holds **more than one** output (Req 30.4 — the
+                load-bearing clause: choosing between several is the error), or if it
+                is empty. The two messages are deliberately different, because
+                "several outputs and no instruction" and "no output at all" call for
+                different responses and a caller matching on the message must be able
+                to tell them apart.
+        """
+        if not self.pairs:
+            raise ValueError(
+                "this step recorded no output, so there is no single output to take"
+            )
+        if len(self.pairs) > 1:
+            raise ValueError(
+                f"this step recorded more than one output ({len(self.pairs)}: "
+                f"{self.nodes()}); selecting one would represent a fraction of the "
+                f"work as the whole. Declare a Gather Strategy of Merge or Concat, or "
+                f"read the set."
+            )
+        return self.pairs[0][1]
+
+    def substitute_guess(self) -> None:
+        """Always ``None``. There is no fallback, and that is the point. Req 30.5.
+
+        This looks like a method that does nothing, and it is closer to a **canary**.
+        Defect E2's whole failure mode was a helper that, asked for a step's output,
+        produced a plausible one rather than nothing. The no-fallback rule is otherwise
+        an absence, and an absence cannot be asserted; this gives it a name that a test
+        can pin, so a future change that adds a fallback has to come through here and
+        redden that test rather than slipping in as an innocuous default.
+        """
+        return None
+
+    def as_record(self) -> dict[str, Any]:
+        """A JSON-able record of the set, for Req 30.6's audit trail."""
+        return {
+            "ordered_by": self.ordered_by,
+            "count": len(self.pairs),
+            "outputs": [{"node_id": node, "output_path": path} for node, path in self.pairs],
+        }
+
+
+def resolve_gather_strategy(step_config: dict[str, Any] | None) -> str:
+    """The Gather Strategy a step declares, defaulting to ``Merge``. Req 29.6.
+
+    **Why the default is ``Merge`` and not ``Ungathered``.** Every topology already
+    saved to disk was authored under Requirement 19.4, which *required* a merge per
+    scatter branch. Those topologies say nothing about Gather Strategy because the
+    concept did not exist when they were written, and the behaviour they were authored
+    against is exactly ``Merge``. Defaulting to anything else would silently change
+    what a saved MacroNode does — which is why hard replacement was rejected in favour
+    of a default (Req 29.6).
+
+    Args:
+        step_config: The step's config from the authoring surface. ``None`` and ``{}``
+            both mean "declares nothing", which is the pre-amendment case.
+
+    Returns:
+        A :class:`GatherStrategy` **value** (``"Merge"``, ``"Concat"``, ``"Ungathered"``).
+
+    Raises:
+        ValueError: If a strategy is declared but is not one of the three. An
+            unrecognised strategy is **not** defaulted: quietly treating
+            ``"ungatherd"`` as ``Merge`` would gather lanes the author explicitly
+            asked to be left alone, which is the approximately-correct-value failure
+            in its most expensive form. The launch-time refusal this deserves belongs
+            with Req 29.3's validator; until that exists, callers at runtime must
+            catch this and refuse the step rather than proceed on a guess.
+    """
+    declared = str((step_config or {}).get("gather_strategy", "") or "").strip()
+    if not declared:
+        return GatherStrategy.MERGE.value
+
+    for strategy in GatherStrategy:
+        if declared.casefold() == strategy.value.casefold():
+            return strategy.value
+
+    raise ValueError(
+        f"unrecognised Gather Strategy {declared!r}; expected one of "
+        f"{[s.value for s in GatherStrategy]}"
+    )
+
+
+def step_declares_a_gather_strategy(topology_rows: list[dict[str, Any]]) -> bool:
+    """Whether a Gather Strategy applies to this step at all.
+
+    A Gather Strategy is a **scatter's** declaration about its own lanes. A step with
+    no ``CTRL_SCATTER`` has no lanes, so it has no Gather Strategy — and applying one
+    anyway would be a category error with teeth: a plain divergent DAG would inherit
+    the ``Merge`` default (Req 29.6) and then be refused for having no merge node,
+    breaking topologies that Requirement 30 says nothing about.
+
+    Detection is by **prefix**, matching how :func:`_resolve_node_type` classifies
+    control nodes, so ``CTRL_SCATTER_WIDE`` counts.
+    """
+    for row in topology_rows or []:
+        node_id = str(row.get("Node_ID", "") or "").strip().upper()
+        if node_id.startswith(DeterministicNodeType.SCATTER.value):
+            return True
+    return False
 
 
 def total_sum_readout(
@@ -302,6 +469,12 @@ class FlowRunner:
         self.macronode_store = get_macronode_store(self.project_name)
         # Verify fallback to GLOBAL registry if needed.
         self.global_store = get_macronode_store("GLOBAL")
+
+        #: Req 30.6 — every step's output set, keyed by step index, kept for the run.
+        #: Owned here and mutated only by :meth:`_capture_step_output`; readers get the
+        #: whole run's sets, including the ones a step refused to choose from, which is
+        #: the only place that refusal is legible after the fact.
+        self._step_output_sets: dict[int, StepOutputSet] = {}
 
     def _get_macronode(self, name: str, step_config: dict[str, Any] | None = None) -> dict[str, Any]:
         """Fetch MacroNode definition from Project, fallback to GLOBAL, fallback to agent/CTRL auto-wrap."""
@@ -763,12 +936,38 @@ class FlowRunner:
         topology_rows: list[dict[str, Any]],
         step_index: int,
         broker: LocalMessageBroker,
+        step_config: dict[str, Any] | None = None,
     ) -> str | None:
         """The artifact this step's terminal node recorded, for the next step to read.
 
         Returns ``None`` when no terminal node has a recorded output. The caller
         must **not** substitute a guess: leaving the previous payload in place is
         wrong but visible, whereas any fabricated path is wrong and acted upon.
+
+        .. note::
+           **Requirement 30 — the output is a set, and this returns one element of it.**
+
+           The full set is built by :meth:`_collect_step_output_set` and kept in
+           ``self._step_output_sets`` for the whole run (Req 30.6). What this method
+           does is answer the *narrower* question the current payload contract can
+           carry: "which single path does the next step read?" — and, increasingly,
+           refuse to answer it.
+
+           - **one output** → that path (Req 30.2, the degenerate case, E2's behaviour).
+           - **several, no scatter in the step** → first in declared order, with the
+             warning that has always been there. No scatter means no Gather Strategy,
+             so Req 30.3/30.4 do not reach this shape, and extending them to it would
+             change the behaviour of topologies the amendment does not describe.
+           - **several, Gather Strategy ``Merge``/``Concat``** → the gather node's
+             output (Req 30.3). If no gather produced anything, or if two did, this
+             **refuses** rather than picking.
+           - **several, Gather Strategy ``Ungathered``** → ``None``, deliberately
+             (Req 30.4). The set is recorded and nothing is chosen from it.
+
+           ``None`` therefore now means one of several things, all of them "the engine
+           declined to invent a single output", and each logged with which one it was.
+           Handing the set itself to the next step is the payload contract's job and is
+           not built.
 
         .. note::
            **What this replaces, and why (defect E2).**
@@ -799,6 +998,117 @@ class FlowRunner:
            ``lock_status = 'completed'`` — so a node that failed, stalled or was
            cancelled contributes nothing rather than a stale path.
         """
+        output_set = self._collect_step_output_set(
+            job_id, topology_rows, step_index, broker
+        )
+        self._step_output_sets[step_index] = output_set
+
+        if output_set.is_empty():
+            # Already logged by the collector, which knows *which* of the two empty
+            # cases this is. Req 30.5: no substitute.
+            return output_set.substitute_guess()
+
+        if len(output_set) == 1:
+            return output_set.single()  # Req 30.2 — the degenerate case.
+
+        # ── More than one output. Whether that is fine depends on what was declared ──
+        if not step_declares_a_gather_strategy(topology_rows):
+            # No scatter, so no Gather Strategy, so Req 30.3/30.4 do not reach here.
+            # This is a plain divergent DAG, and the pre-amendment behaviour stands:
+            # first in declared order, stated as a choice. Recorded as an open question
+            # rather than silently extended — see the register entry.
+            logger.warning(
+                "[FLOW_ENGINE] Step %d has %d terminal nodes with output (%s). "
+                "Handing the next step the first in declared order (%s). A DAG with "
+                "divergent endpoints has no single output, so this is a choice, not "
+                "a fact — author a CTRL_MERGE if the next step needs all of them.",
+                step_index + 1, len(output_set), output_set.nodes(),
+                output_set.nodes()[0],
+            )
+            return output_set.paths()[0]
+
+        try:
+            strategy = resolve_gather_strategy(step_config)
+        except ValueError as exc:
+            # An unrecognised declaration is refused, not defaulted. Proceeding on a
+            # guess here would gather lanes the author may have asked to leave alone.
+            logger.error(
+                "[FLOW_ENGINE] Step %d declares a Gather Strategy that cannot be "
+                "resolved (%s). Refusing to select an output from %s. The next step "
+                "will NOT be handed a substitute.",
+                step_index + 1, exc, output_set.nodes(),
+            )
+            return output_set.substitute_guess()
+
+        if strategy == GatherStrategy.UNGATHERED.value:
+            # Req 30.4 — the load-bearing clause. The set is recorded; nothing is
+            # chosen from it. Passing the set forward is the payload contract's job.
+            logger.error(
+                "[FLOW_ENGINE] Step %d declares Gather Strategy 'Ungathered' and "
+                "recorded %d outputs (%s). NOT selecting one as the step's output: "
+                "one of several would represent a fraction of the work as the whole. "
+                "The set is recorded for audit; the next step keeps the previous "
+                "payload until a step can be handed a set.",
+                step_index + 1, len(output_set), output_set.nodes(),
+            )
+            return output_set.substitute_guess()
+
+        # Req 30.3 — Merge/Concat: the gather node's output *is* the step's output.
+        gather_prefixes = (
+            DeterministicNodeType.MERGE.value
+            if strategy == GatherStrategy.MERGE.value
+            else DeterministicNodeType.CONCAT.value
+        )
+        gathered = [
+            (node, path)
+            for node, path in output_set.pairs
+            if node.upper().startswith(gather_prefixes)
+        ]
+        if len(gathered) == 1:
+            return gathered[0][1]
+
+        if not gathered:
+            # Declared Merge/Concat, and no such node produced anything. This is the
+            # unreachable-gather authoring error that Req 29.3 exists to refuse
+            # *before* launch; reached at runtime, refusing is still the answer,
+            # because the alternative is handing the next step one lane of several.
+            logger.error(
+                "[FLOW_ENGINE] Step %d declares Gather Strategy %r, but none of its "
+                "%d recorded outputs (%s) comes from a %s node. Refusing to select "
+                "one. A declared gather that never happened is an authoring error, "
+                "and the next step will NOT be handed a substitute.",
+                step_index + 1, strategy, len(output_set), output_set.nodes(),
+                gather_prefixes,
+            )
+            return output_set.substitute_guess()
+
+        logger.error(
+            "[FLOW_ENGINE] Step %d declares Gather Strategy %r and has %d %s nodes "
+            "with output (%s). Refusing to select between gathers — two gathers of "
+            "one lane set is an authoring error, not a choice for the engine.",
+            step_index + 1, strategy, len(gathered), gather_prefixes,
+            [node for node, _ in gathered],
+        )
+        return output_set.substitute_guess()
+
+    def _collect_step_output_set(
+        self,
+        job_id: str,
+        topology_rows: list[dict[str, Any]],
+        step_index: int,
+        broker: LocalMessageBroker,
+    ) -> StepOutputSet:
+        """This step's recorded outputs as an ordered set. Req 30.1 and Req 30.6.
+
+        Ordered by declared topology position, never completion time — the queue can
+        answer *what* each terminal recorded but has no standing to say what order the
+        author put them in.
+
+        An empty set is returned for both empty cases, each logged distinctly: a
+        topology that declares no terminal at all, and terminals that declare
+        themselves but recorded nothing. They need different fixes, so they get
+        different messages.
+        """
         terminals = self._find_terminal_nodes(topology_rows, step_index)
         if not terminals:
             logger.warning(
@@ -806,7 +1116,7 @@ class FlowRunner:
                 "identify this step's output.",
                 step_index + 1,
             )
-            return None
+            return StepOutputSet()
 
         found = broker.get_completed_payload_paths(job_id, terminals)
         if not found:
@@ -817,20 +1127,17 @@ class FlowRunner:
                 "than a visibly missing one.",
                 step_index + 1, terminals,
             )
-            return None
+            return StepOutputSet()
 
-        # Order by the topology's own declaration, never by completion time or
-        # mtime, so a divergent-lane DAG resolves to the same artifact on every run.
-        ordered = [node for node in terminals if node in found]
-        if len(ordered) > 1:
-            logger.warning(
-                "[FLOW_ENGINE] Step %d has %d terminal nodes with output (%s). "
-                "Handing the next step the first in declared order (%s). A DAG with "
-                "divergent endpoints has no single output, so this is a choice, not "
-                "a fact — author a CTRL_MERGE if the next step needs all of them.",
-                step_index + 1, len(ordered), ordered, ordered[0],
-            )
-        return found[ordered[0]]
+        # `terminals` is the declared order; `found` is a lookup. Iterating the former
+        # and filtering by the latter is what makes the ordering a topology fact.
+        output_set = StepOutputSet(
+            pairs=[(node, found[node]) for node in terminals if node in found]
+        )
+        logger.info(
+            "[FLOW_ENGINE] Step %d output set: %s", step_index + 1, output_set.as_record()
+        )
+        return output_set
 
 
     # ── Phase 6.12B: shared worker-pool driver ─────────────────────────────────
@@ -1249,7 +1556,7 @@ class FlowRunner:
                 if total_tasks > 0 and completed_tasks == total_tasks:
                     # All tasks for this step already finished — skip it
                     logger.info(f"[FLOW_ENGINE] Step {idx+1} ('{step.macronode_name}') already completed ({completed_tasks} task(s)). Skipping.")
-                    step_output = self._capture_step_output(job_id, topo_rows, idx, broker)
+                    step_output = self._capture_step_output(job_id, topo_rows, idx, broker, step.config)
                     if step_output:
                         current_payload = step_output
                     else:
@@ -1308,7 +1615,7 @@ class FlowRunner:
                     unfinished_as = pool_status
                     break
 
-                step_output = self._capture_step_output(job_id, topo_rows, idx, broker)
+                step_output = self._capture_step_output(job_id, topo_rows, idx, broker, step.config)
                 if step_output:
                     current_payload = step_output
                 else:
@@ -1530,7 +1837,7 @@ class FlowRunner:
                 # Read from the step's terminal node in the queue, not from whichever
                 # file in the job directory happens to have the newest mtime. See
                 # _capture_step_output for what that cost (defect E2).
-                step_output = self._capture_step_output(job_id, topo_rows, idx, broker)
+                step_output = self._capture_step_output(job_id, topo_rows, idx, broker, step.config)
                 if step_output:
                     current_payload = step_output
                     logger.info(f"[FLOW_ENGINE] Output captured: {current_payload}")

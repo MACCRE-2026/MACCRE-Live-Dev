@@ -81,6 +81,41 @@ class DeterministicNodeType(Enum):
     PAYLOAD_INJECT = "CTRL_PAYLOAD_INJECT"
 
 
+class GatherStrategy(Enum):
+    """What a ``CTRL_SCATTER`` declares about the fate of its own lanes. Req 29.2.
+
+    This exists because **Requirement 19.4 was superseded.** 19.4 required every
+    scatter branch to have a corresponding ``CTRL_MERGE`` before execution was
+    allowed, which forbade the central case of the design it was written to serve: a
+    Flow Lane that terminates on its own, with something collecting from it later or
+    nothing collecting at all.
+
+    19.4's instinct was sound, though, and is preserved here. An *unintended* missing
+    merge is a real authoring error, and running a flow whose author expected a gather
+    is worse than refusing it. So the check survives as a **declaration** rather than
+    a prohibition: the author states what should happen to the lanes, and the engine
+    enforces what was declared instead of enforcing one shape for everyone.
+
+    ``Merge`` and ``Concat`` name the two existing nodes rather than replacing them.
+    Both remain first-class and usable anywhere downstream or out of band — a
+    strategy is the scatter's statement about *its own* lanes, not a claim on where
+    merges may appear in a flow.
+    """
+
+    #: Lanes converge on a ``CTRL_MERGE``. The pre-amendment behaviour, and the
+    #: default for every topology authored before this amendment — see
+    #: :func:`~maccre_core.orchestration.flow_engine.resolve_gather_strategy`.
+    MERGE = "Merge"
+
+    #: Lanes converge on a ``CTRL_CONCAT``.
+    CONCAT = "Concat"
+
+    #: **Lanes are not collected.** Each terminates independently and records its own
+    #: output. This is the case 19.4 made impossible, and the reason a step's output
+    #: had to become a set (Req 30) rather than a single artifact.
+    UNGATHERED = "Ungathered"
+
+
 #: Authoring-level control node names that are *aliases* for a runtime primitive.
 #:
 #: ``CTRL_REVIEW`` is a Human-in-the-Loop affordance in the node catalogue, but at

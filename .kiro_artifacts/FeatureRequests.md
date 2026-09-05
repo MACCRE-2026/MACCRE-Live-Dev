@@ -4239,3 +4239,134 @@ given, not a guarantee the flow will succeed.
 the registry self-counts entry, whose derived constants absorbed `CTRL_WAIT` with zero count edits;
 defect F3, whose 3600-second unreleasable hold is the runtime failure 32.4–32.5 exist to detect
 before launch instead.
+
+---
+
+### Feature Name: A step's output is a set — and choosing between several became the error
+**Abstract:** Requirement 30 implemented, with Requirement 29's `GatherStrategy` enum pulled forward because 30.3 and 30.4 branch on it. `StepOutputSet` models the output as an ordered set; `Ungathered` with several outputs now **refuses to select one** rather than handing the next step a fraction of the work. A step with no scatter is deliberately left alone.
+**Date/Time Entered:** 2026-09-04T21:40:00-04:00
+**Status:** COMPLETED — *the mechanism.* **Nothing authors a Gather Strategy, so no live flow reaches the new branches.**
+**Completed:** 2026-09-04T21:40:00-04:00
+**Completion Metric:** `GatherStrategy` in `maccre_core/orchestration/deterministic_nodes.py`;
+`DECLARED_TOPOLOGY_POSITION`, `StepOutputSet`, `resolve_gather_strategy`,
+`step_declares_a_gather_strategy`, `FlowRunner._collect_step_output_set` and
+`FlowRunner._step_output_sets` in `maccre_core/orchestration/flow_engine.py`.
+`tests/test_step_output_set.py` — **44 tests**. **6** `xfail(strict=True)` markers removed
+(29.2, 29.6, 30.1, 30.2, 30.4, 30.5) after all six XPASSed. **Revert-to-red proof**: the
+`Ungathered` branch changed to `paths()[0]` reddened two tests with the production
+signature `assert '/dc/Agent1_S0.md' is None`. Gate 2026-09-04: `omni clean` 21:24,
+`omni qa` **PASS whole project** 21:25, pytest **913 collected / 903 passed / 10 xfailed /
+0 failed** in 205.34s, `omni smoke` **ALL CHECKS PASSED**. Collected 869 → 913 reconciles
+exactly: `903 = 853 + 6 + 44`.
+**Prior art:** modelling a fan-out result as a collection rather than a scalar is ordinary
+dataflow practice, and refusing an ambiguous reduction rather than picking arbitrarily is
+the same instinct as a database aggregate requiring an explicit function. No novelty
+claimed.
+
+**Description:**
+
+**Why the enum came with it.** 30.3 and 30.4 are both phrased *"AND the step's Gather
+Strategy is ..."*. There is no honest way to implement 30.4 — the clause the whole
+amendment turns on — without the thing it branches on. So `GatherStrategy` (29.2) and
+`resolve_gather_strategy`'s `Merge` default (29.6) came forward, and **nothing else did**:
+29.3's launch-time validator and 29.4's per-lane recording stay red for tracker #11,
+because half-building a validator leaves a mechanism nobody can tell is incomplete.
+
+**Three decisions where the obvious version was wrong:**
+
+- **`ordered_by` is a property, not a field.** As a field with a default it could be
+  constructed as `StepOutputSet(pairs=..., ordered_by="completion_time")` — a caller able
+  to *state* an ordering it did not perform. That is the shape of every label defect in
+  this register: `is_stalled = True` for a timeout, `payload_path` naming the shared
+  ledger. The ordering is a property of how the object is built, not the constructor's to
+  declare.
+- **An unrecognised Gather Strategy is refused, never defaulted.** `Merge` is the default
+  for *absent or blank* only. Reading `"ungatherd"` as `Merge` would gather lanes the
+  author explicitly asked to leave alone — and the wrong behaviour would be
+  indistinguishable from the right one until somebody read the merged document.
+- **`substitute_guess()` always returns `None`, and is a canary rather than a method.**
+  E2's failure mode was a helper that, asked for a step's output, produced a *plausible*
+  one. A no-fallback rule is otherwise an absence, and an absence cannot be asserted.
+  Naming it forces a future fallback to redden a test instead of arriving as a default.
+
+**What the refusal costs, stated plainly.** `_capture_step_output` still returns
+`str | None`, and `None` now covers five conditions — no terminal declared, no terminal
+recorded, `Ungathered` with several, a declared gather that never happened or happened
+twice, and an unresolvable declaration. Each is logged with which one it was, but callers
+treat `None` uniformly as "carry the previous payload forward", so the distinction lives
+only in the log. Accepted, because carrying the previous payload is conservative and
+visible while a fabricated one propagates. Handing the *set* to the next step is the
+payload contract's job (tracker #9); widening the return type before that design exists
+would produce the second representation the payload work is meant to eliminate.
+
+**Not true today.** `step_config["gather_strategy"]` has **no producer** — the TUI does
+not offer the field, which the amendment left deliberately unspecified pending the Era 2
+authoring-ownership decision. Every declaration in the tests is hand-constructed, every
+real flow resolves to the `Merge` default, and **the runtime behaviour of every existing
+topology is unchanged.** `Ungathered` has never executed against a real scatter. Req 30.6's
+audit trail is `_step_output_sets` in-process plus `as_record()` logged at INFO, not
+persisted to the queue or telemetry, so "auditable after the run" holds only as far as
+`maccre_system.log` does.
+
+**One finding from the revert-to-red worth keeping.** With the refusal reverted,
+`test_the_refusal_is_logged_at_error_with_the_count` **still passed** — the ERROR line was
+emitted while the value was returned anyway. Log-says-one-thing-code-does-another, in a
+test written to cover the refusal. The two value assertions are what carry the claim; the
+log test covers a different property (that the refusal is *visible*) and cannot substitute
+for them.
+
+**Related:** the Requirements 29–33 amendment, which wrote these markers red; defect E2,
+whose no-silent-fallback rule the empty case preserves; defect E1, whose `output_path`
+column is what makes the set readable at all; the boundary entry immediately below.
+
+---
+
+### Feature Name: A plain divergent DAG still picks the first endpoint — deliberate, guarded, and open
+**Abstract:** Requirement 30's refusal to choose is conditioned on Gather Strategy, and a Gather Strategy is a scatter's declaration. A step with **no scatter** and two endpoints therefore keeps the pre-amendment behaviour: first in declared order, with a warning that says it is a choice. Whether it *should* is a real question the amendment does not answer.
+**Date/Time Entered:** 2026-09-04T21:40:00-04:00
+**Status:** Deferred (needs decision) — the current behaviour is deliberate and test-guarded, not accidental.
+**Blocks:** nothing. The flows that reach this shape work today exactly as they did before.
+**Prior art:** not applicable — this is a scoping decision about this codebase, not a general
+principle.
+
+**Description:**
+
+**The shape.** `ROOT → L1,L2`, both terminating. Two endpoints, no `CTRL_SCATTER`, no
+lanes. `_capture_step_output` hands the next step `L1`'s output and logs that a DAG with
+divergent endpoints has no single output, *"so this is a choice, not a fact"*.
+
+**Why Requirement 30 was not extended to cover it.** `resolve_gather_strategy` defaults to
+`Merge` (Req 29.6, so saved MacroNodes keep their behaviour). Applied unconditionally, that
+default reaches this DAG, resolves to `Merge`, finds no merge node, and refuses — changing
+the behaviour of topologies Requirement 30 says nothing about, **in the name of
+implementing Requirement 30.** So `step_declares_a_gather_strategy` gates the whole
+strategy branch on the presence of a scatter.
+
+**The argument for changing it later.** 30.4's *reasoning* does apply here: picking one of
+two endpoints is a plausible artifact representing half the work, which downstream logic
+then acts on. The clause is narrower than its rationale, and that gap is real rather than
+an oversight in this implementation.
+
+**The argument against changing it now.** Nothing in the amendment authorises it, no
+operator asked for it, and the change would break authored topologies with no migration
+path and no authoring surface to declare intent through — there is no field to say
+"Ungathered" in. Refusing a flow that has run correctly for months, on the strength of a
+principle the spec did not extend, is the kind of unilateral widening this register exists
+to prevent.
+
+**How it is protected in the meantime.** `TestAPlainDivergentDagIsUntouched` in
+`tests/test_step_output_set.py` asserts all three properties — resolves by declared order,
+still states the choice, and does **not** inherit a `Merge` declaration even when one is
+handed to it. The two pre-existing tests in `tests/test_payload_lineage.py`
+(`test_divergent_terminals_resolve_by_declared_order`,
+`test_divergent_terminals_are_reported`) pass untouched, which is what evidences that the
+Req 30 work did not reach behaviour it was not meant to reach.
+
+**What a decision would need.** Either a spec amendment extending 30.4 to steps without a
+declared strategy, together with a migration position for existing topologies; or an
+explicit statement that a divergent DAG without a scatter is an authoring shape MACCRE
+supports with first-in-declared-order semantics, at which point the warning should probably
+be downgraded and the test comment rewritten to stop describing it as open.
+
+**Related:** the Req 30 entry above; the Era 2 authoring-ownership decision, which is what
+blocks there being a field to declare a strategy in.

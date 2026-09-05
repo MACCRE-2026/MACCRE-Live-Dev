@@ -46,7 +46,6 @@ import pytest
 class TestReq29LanesMayTerminateUnmerged:
     """Supersedes Requirement 19.4, which made a merge mandatory per branch."""
 
-    @pytest.mark.xfail(strict=True, reason="Req 29.2: Gather Strategy does not exist yet")
     def test_scatter_carries_a_declared_gather_strategy(self) -> None:
         """29.2 — `Merge` / `Concat` / `Ungathered`, declared on the scatter."""
         from maccre_core.orchestration.deterministic_nodes import GatherStrategy
@@ -79,7 +78,6 @@ class TestReq29LanesMayTerminateUnmerged:
         assert len(outputs) > 1
         assert len({path for _node, path in outputs}) == len(outputs)
 
-    @pytest.mark.xfail(strict=True, reason="Req 29.6: schema-version default not built")
     def test_pre_amendment_topologies_default_to_merge(self) -> None:
         """29.6 — saved MacroNodes keep their current behaviour.
 
@@ -97,7 +95,6 @@ class TestReq29LanesMayTerminateUnmerged:
 class TestReq30StepOutputIsASet:
     """The generalisation of defect E2's fix."""
 
-    @pytest.mark.xfail(strict=True, reason="Req 30.1: output set not modelled")
     def test_a_steps_output_is_an_ordered_set_of_node_path_pairs(self) -> None:
         """30.1 — ordered by declared topology position, never completion time.
 
@@ -110,7 +107,6 @@ class TestReq30StepOutputIsASet:
         s = StepOutputSet(pairs=[("B_S0", "/b.md"), ("A_S0", "/a.md")])
         assert s.ordered_by == "declared_topology_position"
 
-    @pytest.mark.xfail(strict=True, reason="Req 30.2: single-terminal degenerate case not modelled")
     def test_a_single_terminal_step_is_the_degenerate_case(self) -> None:
         """30.2 — E2's behaviour preserved, not special-cased."""
         from maccre_core.orchestration.flow_engine import StepOutputSet
@@ -118,7 +114,6 @@ class TestReq30StepOutputIsASet:
         s = StepOutputSet(pairs=[("CTRL_MERGE_S0", "/merged.md")])
         assert s.single() == "/merged.md"
 
-    @pytest.mark.xfail(strict=True, reason="Req 30.4: refusal to choose not implemented")
     def test_an_ungathered_multi_output_step_refuses_to_pick_one(self) -> None:
         """30.4 — the load-bearing clause of the whole amendment.
 
@@ -131,7 +126,6 @@ class TestReq30StepOutputIsASet:
         with pytest.raises(ValueError, match="more than one"):
             s.single()
 
-    @pytest.mark.xfail(strict=True, reason="Req 30.5: empty-set ERROR path not implemented")
     def test_an_empty_output_set_logs_error_and_changes_nothing(self) -> None:
         """30.5 — no silent fallback, exactly as E2's fix established."""
         from maccre_core.orchestration.flow_engine import StepOutputSet
