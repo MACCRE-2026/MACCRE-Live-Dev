@@ -40,6 +40,11 @@ Node Types
 ``CTRL_CONDITIONAL_ROUTE``  4-vector fallback routing: structured → keyword → score → fuzzy.
 ``CTRL_END``           Terminal node — marks flow completion.
 ``CTRL_PAYLOAD_INJECT`` Injects static content as payload.
+``CTRL_WAIT``          **Declared, not executable.** Requirement 32. ``evaluate_wait`` is
+                       implemented and tested; the handler refuses, because the dispatch
+                       contract carries no lane state. Listed here rather than omitted so
+                       this docstring is not the third place claiming a capability that
+                       does not exist.
 """
 from __future__ import annotations
 
@@ -49,10 +54,15 @@ import logging
 import re
 import shutil
 import time
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Sequence
 
+from maccre_core.orchestration.topology_graph import (
+    TetherRefError,
+    parse_tether_qualified_ref,
+)
 from maccre_core.utils.path_resolver import get_datacenter_path
 
 logger = logging.getLogger(__name__)
@@ -79,6 +89,16 @@ class DeterministicNodeType(Enum):
     CONDITIONAL_ROUTE = "CTRL_CONDITIONAL_ROUTE"
     END = "CTRL_END"
     PAYLOAD_INJECT = "CTRL_PAYLOAD_INJECT"
+
+    #: Requirement 32. **Present so that a ``CTRL_WAIT`` node cannot silently no-op.**
+    #: Until 2026-09-05 this member did not exist, so ``_resolve_node_type`` returned
+    #: ``None`` for ``CTRL_WAIT`` and :func:`execute_deterministic_node` fell back to
+    #: :func:`_handle_anchor` — the node passed its payload through and the task reported
+    #: ``completed``. The ``NODE_ALIASES`` docstring below names that exact hazard for
+    #: ``CTRL_REVIEW``; ``CTRL_WAIT`` had it too, from the moment the registry declared it.
+    #: :func:`_handle_wait` refuses instead. The registry still lists the node as
+    #: ``ComingSoon``, which remains the truth: it has a guard, not a capability.
+    WAIT = "CTRL_WAIT"
 
 
 class GatherStrategy(Enum):
@@ -171,8 +191,13 @@ def _resolve_node_type(node_id: str) -> DeterministicNodeType | None:
     # Normalize legacy DET_ prefix to CTRL_ for enum matching
     if upper.startswith(DET_PREFIX):
         upper = CTRL_PREFIX + upper[len(DET_PREFIX):]
-    # Match longest prefix first to avoid DET_GATE matching DET_GATEWAY etc.
-    for ntype in DeterministicNodeType:
+    # Longest prefix first. This comment claimed as much since Phase 4 while the loop
+    # iterated **enum declaration order** and returned the first match — the two agree
+    # today only because no member's value is a prefix of another's, which was luck
+    # rather than design and is now asserted by
+    # `test_no_node_type_value_is_a_prefix_of_another`. Sorting makes the claim true, so
+    # a future `CTRL_MERGE_ALL` cannot be quietly swallowed by `CTRL_MERGE`.
+    for ntype in sorted(DeterministicNodeType, key=lambda t: len(t.value), reverse=True):
         if upper.startswith(ntype.value):
             return ntype
     return None
@@ -1148,6 +1173,201 @@ def _handle_payload_inject(
 # ── Handler Registry ─────────────────────────────────────────────────────────
 
 # Type alias for handler functions
+# ── Requirement 32: CTRL_WAIT ────────────────────────────────────────────────
+#
+# Added 2026-09-05. `CTRL_WAIT` collects from a named agent on a named lane at a point the
+# author chooses, rather than at the scatter's boundary.
+#
+# THE DECISION IS SEPARATED FROM THE WAITING, AND THAT IS THE REQUIREMENT
+# ----------------------------------------------------------------------
+# Requirement 32.5 says an unsatisfiable wait must be found by **observing lane state**,
+# never by waiting out a wall clock. That is not a preference; defect F3 was a hold nobody
+# could release, which burned a 3600-second budget and then reported `completed`. A wait
+# whose target lane has already finished without producing is knowable *now* — the queue
+# already contains the fact. `pause_owner_alive` established the pattern: ask, rather than
+# wait and guess.
+#
+# So `evaluate_wait` is a pure function over (targets, lane states, recorded outputs) and
+# holds no clock, no connection and no thread. It returns three outcomes rather than two,
+# because "not yet" and "never" require different responses and folding them together is
+# how F3 reported success over work that never happened.
+
+
+@dataclass(frozen=True)
+class WaitOutcome:
+    """What a ``CTRL_WAIT`` should do, decided from state rather than elapsed time.
+
+    Attributes:
+        status: ``"released"``, ``"waiting"`` or ``"unsatisfiable"``. **Never
+            ``"timeout"``, and never ``"completed"``** — Requirement 32.4. A distinct
+            terminal status is the whole point: the operator has to be able to tell "your
+            target lane ended without producing" from "this node is slow".
+        decided_immediately: True when the outcome followed from the state supplied,
+            without any need to wait. False only for ``"waiting"``, which is the one
+            outcome that genuinely needs another look later.
+        satisfied_by: The targets that released the wait, **in declared order** so the
+            record is reproducible (Requirement 32.6).
+        outstanding: Targets that have not produced yet and whose lanes are still live.
+        unsatisfiable_because: ``(target, reason)`` for each target that can never be
+            satisfied.
+    """
+
+    status: str
+    decided_immediately: bool
+    satisfied_by: list[str] = field(default_factory=list)
+    outstanding: list[str] = field(default_factory=list)
+    unsatisfiable_because: list[tuple[str, str]] = field(default_factory=list)
+
+    def message(self) -> str:
+        """A line an operator can act on. A method, matching the reports in `topology_graph`."""
+        if self.status == "released":
+            return "wait released by: " + ", ".join(self.satisfied_by)
+        if self.status == "waiting":
+            return "waiting on: " + ", ".join(self.outstanding)
+        return "; ".join(f"{target} {reason}" for target, reason in self.unsatisfiable_because)
+
+
+#: Lane states that mean the lane will produce nothing further.
+#:
+#: Deliberately explicit rather than "anything that is not running", because a state this
+#: function has never heard of must not be read as *finished* — that would turn an unknown
+#: into a refusal, which is the same guessing 32.5 forbids in the other direction.
+TERMINAL_LANE_STATES: frozenset[str] = frozenset({
+    "abandoned", "cancelled", "completed", "failed", "stalled", "timeout",
+})
+
+
+def evaluate_wait(
+    targets: Sequence[str],
+    lane_states: Mapping[str, str],
+    recorded_outputs: Mapping[str, str],
+) -> WaitOutcome:
+    """Decide a ``CTRL_WAIT`` from observed state. Requirements 32.4, 32.5 and 32.6.
+
+    Args:
+        targets: Tether-qualified references (``"AGENT_A@X.2"``), in declared order.
+            Parsed through ``topology_graph.parse_tether_qualified_ref`` so there is one
+            reading of the syntax.
+        lane_states: ``{tether_id: state}`` for the lanes this job has.
+        recorded_outputs: ``{tether_qualified_ref: output_path}`` as recorded by the queue.
+            A ref present with an empty path counts as **not produced**, because an empty
+            path is not an artifact.
+
+    Returns:
+        A :class:`WaitOutcome`. ``"unsatisfiable"`` takes precedence over ``"waiting"``:
+        once any target can never arrive, waiting for the others is waiting for a release
+        that cannot come.
+    """
+    ordered = [str(t).strip() for t in targets if str(t).strip()]
+    if not ordered:
+        # A wait on nothing. Releasing would be a success over no work; refusing names it.
+        return WaitOutcome(
+            status="unsatisfiable",
+            decided_immediately=True,
+            unsatisfiable_because=[("(no targets)", "was declared with no wait targets")],
+        )
+
+    satisfied: list[str] = []
+    outstanding: list[str] = []
+    impossible: list[tuple[str, str]] = []
+
+    for target in ordered:
+        try:
+            ref = parse_tether_qualified_ref(target)
+        except TetherRefError as exc:
+            impossible.append((target, exc.reason))
+            continue
+
+        if str(recorded_outputs.get(target, "") or "").strip():
+            satisfied.append(target)
+            continue
+
+        state = str(lane_states.get(ref.tether_id, "") or "").strip().lower()
+        if not state:
+            impossible.append(
+                (target, f"names lane {ref.tether_id!r}, which this job does not have")
+            )
+        elif state in TERMINAL_LANE_STATES:
+            impossible.append(
+                (
+                    target,
+                    f"is on lane {ref.tether_id!r}, which reached {state!r} without it "
+                    "producing an output",
+                )
+            )
+        else:
+            outstanding.append(target)
+
+    if impossible:
+        logger.error(
+            "[CTRL_WAIT] Unsatisfiable: %s. Detected from lane state, not a timeout.",
+            "; ".join(f"{t} {r}" for t, r in impossible),
+        )
+        return WaitOutcome(
+            status="unsatisfiable",
+            decided_immediately=True,
+            satisfied_by=satisfied,
+            outstanding=outstanding,
+            unsatisfiable_because=impossible,
+        )
+
+    if outstanding:
+        return WaitOutcome(
+            status="waiting", decided_immediately=False,
+            satisfied_by=satisfied, outstanding=outstanding,
+        )
+
+    return WaitOutcome(status="released", decided_immediately=True, satisfied_by=satisfied)
+
+
+def _handle_wait(
+    node_id: str,
+    payload_path: str,
+    job_id: str,
+    config: dict[str, Any],
+    predecessor_payloads: list[str],
+) -> DeterministicNodeResult:
+    """Refuse a ``CTRL_WAIT`` that cannot be evaluated. Requirement 32, partial.
+
+    **This handler exists to remove a silent success, not to provide the capability.**
+
+    Before it, ``CTRL_WAIT`` resolved to no node type and
+    :func:`execute_deterministic_node` fell through to :func:`_handle_anchor`: the payload
+    passed straight through, the wait never happened, and the task reported ``completed``.
+    That is Principle 3 — success reported over work that was not performed — and the
+    register already carries two instances of this same dispatch hole, one of which spent
+    real inference on a node named ``FAILED``.
+
+    The handler contract is ``(node_id, payload_path, job_id, config,
+    predecessor_payloads)`` and carries **no broker and no queue access**, so lane states
+    and recorded outputs are not reachable from here. :func:`evaluate_wait` is the decision
+    and is complete; supplying it with live state needs a state provider on this contract,
+    which is a change to how every deterministic node is dispatched and is not made here.
+
+    So this raises. An unevaluable wait must not pass its payload on, because the node's
+    entire purpose is that the payload should *not* move yet.
+
+    Raises:
+        NotImplementedError: Always. Caught by ``swarm_worker``'s cycle handler, which
+            marks the task failed — a loud stop rather than a quiet passthrough.
+    """
+    declared = config.get("wait_for_targets") or config.get("Wait_Targets") or ""
+    logger.error(
+        "[CTRL_WAIT] %s (job %s): CTRL_WAIT is declared but not executable — the "
+        "deterministic-node contract carries no lane state, so this wait cannot be "
+        "evaluated. Declared targets: %s. Refusing rather than passing the payload "
+        "through, which is what happened before this handler existed.",
+        node_id, job_id, declared or "(none declared)",
+    )
+    raise NotImplementedError(
+        f"{node_id}: CTRL_WAIT is declared in the control-node registry as ComingSoon and "
+        "has no state provider, so its release condition cannot be observed. Requirement "
+        "32's decision function `evaluate_wait` is implemented and tested; wiring it needs "
+        "lane state on the deterministic-node dispatch contract. This node refuses instead "
+        "of passing its payload through."
+    )
+
+
 _HandlerFn = Callable[[str, str, str, dict[str, Any], list[str]], DeterministicNodeResult]
 
 _NODE_HANDLERS: dict[DeterministicNodeType, _HandlerFn] = {
@@ -1167,4 +1387,5 @@ _NODE_HANDLERS: dict[DeterministicNodeType, _HandlerFn] = {
     DeterministicNodeType.CONDITIONAL_ROUTE: _handle_conditional_route,
     DeterministicNodeType.END: _handle_end,
     DeterministicNodeType.PAYLOAD_INJECT: _handle_payload_inject,
+    DeterministicNodeType.WAIT: _handle_wait,
 }

@@ -54,7 +54,6 @@ class TestReq29LanesMayTerminateUnmerged:
 
         assert {s.value for s in GatherStrategy} >= {"Merge", "Concat", "Ungathered"}
 
-    @pytest.mark.xfail(strict=True, reason="Req 29.3: unreachable-gather refusal not built")
     def test_declared_merge_with_an_unreachable_gather_is_refused_by_name(self) -> None:
         """29.3 — refuse before launch, and *name every unreachable lane*.
 
@@ -71,14 +70,32 @@ class TestReq29LanesMayTerminateUnmerged:
         assert report.refused is True
         assert set(report.unreachable_lanes) == {"X.1", "X.2"}
 
-    @pytest.mark.xfail(strict=True, reason="Req 29.4: Ungathered lane recording not built")
     def test_ungathered_lanes_record_their_outputs_separately(self) -> None:
-        """29.4 — each lane's terminal output recorded on its own."""
+        """29.4 — each lane's terminal output recorded on its own.
+
+        **This marker's signature was corrected, and the reason is the criterion itself.**
+        As authored it called `terminal_outputs_for_step(step_index=0,
+        gather_strategy="Ungathered")` and asserted `len(outputs) > 1` — with no lanes, no
+        topology and no outputs passed in. `topology_graph` is a pure module with no I/O
+        and no global state, so there was nowhere for two outputs to come from: the only
+        way to satisfy that call was to **fabricate** them. A test that can only pass
+        against invented data is Principle 3 in test form, and the invented paths would be
+        Principle 2 besides.
+
+        So the call now supplies the lanes and what the queue recorded, and the assertion
+        is that each lane's own terminal output is recorded separately — which is what
+        29.4 actually says. The criterion is unchanged; the signature was unimplementable.
+        """
         from maccre_core.orchestration.topology_graph import terminal_outputs_for_step
 
-        outputs = terminal_outputs_for_step(step_index=0, gather_strategy="Ungathered")
-        assert len(outputs) > 1
-        assert len({path for _node, path in outputs}) == len(outputs)
+        outputs = terminal_outputs_for_step(
+            lanes={"X.1": ["A"], "X.2": ["B"]},
+            recorded_outputs={"A@X.1": "/a.md", "B@X.2": "/b.md"},
+            gather_strategy="Ungathered",
+        )
+        assert len(outputs.pairs) > 1
+        assert len({path for _ref, path in outputs.pairs}) == len(outputs.pairs)
+        assert outputs.complete is True
 
     def test_pre_amendment_topologies_default_to_merge(self) -> None:
         """29.6 — saved MacroNodes keep their current behaviour.
@@ -240,13 +257,35 @@ class TestReq32CtrlWait:
             "now `active`, the implementation-half tests below should be un-xfailed."
         )
 
-    @pytest.mark.xfail(strict=True, reason="Req 32.1: CTRL_WAIT handler does not exist")
     def test_ctrl_wait_has_a_handler(self) -> None:
+        """32.1, dispatch half. **The handler refuses; it does not wait.**
+
+        It exists to close a silent success, not to provide the capability. Before it,
+        `CTRL_WAIT` was absent from `DeterministicNodeType`, so `_resolve_node_type`
+        returned `None` and `execute_deterministic_node` fell through to `_handle_anchor`:
+        the payload passed straight through, the wait never happened, and the task
+        reported `completed`. The `NODE_ALIASES` docstring names that exact hazard for
+        `CTRL_REVIEW` — `CTRL_WAIT` had it too, from the moment the registry declared it.
+        """
         from maccre_core.orchestration import deterministic_nodes
 
         assert hasattr(deterministic_nodes, "_handle_wait")
+        assert deterministic_nodes._resolve_node_type("CTRL_WAIT") is not None, (
+            "CTRL_WAIT must resolve to a node type, or dispatch falls back to "
+            "_handle_anchor and the node silently passes its payload through"
+        )
 
-    @pytest.mark.xfail(strict=True, reason="Req 32.4: unsatisfiable-wait status not built")
+    def test_the_wait_handler_refuses_rather_than_passing_the_payload_through(self) -> None:
+        """The guard itself. A wait that cannot be evaluated must not let the flow move on.
+
+        This is the assertion that would fail if someone made `_handle_wait` a
+        passthrough to get a flow running.
+        """
+        from maccre_core.orchestration.deterministic_nodes import _handle_wait
+
+        with pytest.raises(NotImplementedError, match="CTRL_WAIT"):
+            _handle_wait("CTRL_WAIT_1", "/payload.md", "job_1", {}, [])
+
     def test_a_wait_whose_target_lane_finished_without_producing_is_unsatisfiable(
         self,
     ) -> None:
@@ -266,7 +305,6 @@ class TestReq32CtrlWait:
         assert outcome.status == "unsatisfiable"
         assert outcome.status != "timeout"
 
-    @pytest.mark.xfail(strict=True, reason="Req 32.5: state-observed detection not built")
     def test_an_unsatisfiable_wait_is_detected_without_waiting_out_a_timeout(self) -> None:
         """32.5 — ask, rather than wait and guess. The `pause_owner_alive` pattern."""
         from maccre_core.orchestration.deterministic_nodes import evaluate_wait
@@ -278,7 +316,6 @@ class TestReq32CtrlWait:
         )
         assert outcome.decided_immediately is True
 
-    @pytest.mark.xfail(strict=True, reason="Req 32.6: satisfying-target record not built")
     def test_a_released_wait_records_which_targets_satisfied_it(self) -> None:
         """32.6 — in declared order, so the record is reproducible."""
         from maccre_core.orchestration.deterministic_nodes import evaluate_wait

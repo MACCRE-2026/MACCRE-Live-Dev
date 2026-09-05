@@ -85,6 +85,8 @@ __all__ = [
     "TERMINAL_SENTINELS",
     "TETHER_SEPARATOR",
     "CrossLaneRouteReport",
+    "GatherReachabilityReport",
+    "TerminalOutputSet",
     "RoutedNode",
     "TetherQualifiedRef",
     "TetherRefError",
@@ -98,8 +100,10 @@ __all__ = [
     "parse_tether_qualified_ref",
     "record_crossing",
     "terminal_nodes",
+    "terminal_outputs_for_step",
     "unreachable_nodes",
     "validate_cross_lane_routes",
+    "validate_gather_reachability",
 ]
 
 #: Values that may appear as a routing target without naming a real node.
@@ -673,6 +677,12 @@ class ParadoxReport:
             tether-qualified node references.
         unresolvable: References that name a lane or node the topology does not
             contain, as ``(waiter, bad_target, reason)``.
+        unresolvable_waiters: **Waiter** references that cannot be resolved, as
+            ``(waiter, reason)``. Separate from :attr:`unresolvable` because there is no
+            target to blame — the party doing the waiting is the one that does not exist.
+            Added 2026-09-05: the keys were previously never validated, so a malformed
+            waiter silently became a precedence-graph node and could take part in a cycle
+            under a name no lane contained.
         participants: Every node reference implicated in any finding. Requirement
             33.3 — a refusal must name them rather than report a generic failure,
             because a generic failure sends the author searching eight lanes for the
@@ -683,6 +693,7 @@ class ParadoxReport:
     cycles: list[list[str]] = field(default_factory=list)
     unresolvable: list[tuple[str, str, str]] = field(default_factory=list)
     participants: list[str] = field(default_factory=list)
+    unresolvable_waiters: list[tuple[str, str]] = field(default_factory=list)
 
     def message(self) -> str:
         """A refusal a human can act on."""
@@ -693,6 +704,8 @@ class ParadoxReport:
             parts.append("unsatisfiable wait cycle: " + " -> ".join([*cycle, cycle[0]]))
         for waiter, target, reason in self.unresolvable:
             parts.append(f"{waiter} waits on {target}, which {reason}")
+        for waiter, reason in self.unresolvable_waiters:
+            parts.append(f"the waiter {waiter} {reason}")
         return "; ".join(parts)
 
 
@@ -725,7 +738,15 @@ def detect_temporal_paradox(
     # strings; the copies are why Requirement 31 found this detector accepting `"@X.1"`
     # while `_qualify` could not produce it.
     unresolvable: list[tuple[str, str, str]] = []
+    unresolvable_waiters: list[tuple[str, str]] = []
     for waiter, targets in waits.items():
+        # The waiter itself, which went unchecked until 2026-09-05. An unresolvable waiter
+        # was still `setdefault`-ed into the precedence graph below, so a typo'd name
+        # became a real vertex and could sit in a reported cycle under a name no lane
+        # contains — a refusal naming a node the author cannot find.
+        waiter_reason = _lane_fault(waiter, known)
+        if waiter_reason:
+            unresolvable_waiters.append((waiter, waiter_reason))
         for target in targets:
             reason = _lane_fault(target, known)
             if reason:
@@ -746,7 +767,13 @@ def detect_temporal_paradox(
             _edge(_qualify(earlier, tether_id), _qualify(later, tether_id))
 
     resolvable_bad = {(w, t) for w, t, _ in unresolvable}
+    bad_waiters = {w for w, _ in unresolvable_waiters}
     for waiter, targets in waits.items():
+        if waiter in bad_waiters:
+            # An unresolvable waiter is not a vertex. Adding it anyway is what let a
+            # typo'd name appear in a reported cycle, which is a refusal naming a node
+            # the author cannot go and look at.
+            continue
         precedence.setdefault(waiter, set())
         for target in targets:
             if (waiter, target) in resolvable_bad:
@@ -760,6 +787,8 @@ def detect_temporal_paradox(
         participants.extend(cycle)
     for waiter, target, _reason in unresolvable:
         participants.extend((waiter, target))
+    for waiter, _reason in unresolvable_waiters:
+        participants.append(waiter)
 
     # Preserve first-seen order while de-duplicating, so a refusal reads the same way
     # twice. A set here would make the message non-deterministic.
@@ -767,10 +796,11 @@ def detect_temporal_paradox(
     ordered_participants = [p for p in participants if not (p in seen or seen.add(p))]
 
     return ParadoxReport(
-        paradox=bool(cycles or unresolvable),
+        paradox=bool(cycles or unresolvable or unresolvable_waiters),
         cycles=cycles,
         unresolvable=unresolvable,
         participants=ordered_participants,
+        unresolvable_waiters=unresolvable_waiters,
     )
 
 
@@ -817,3 +847,244 @@ def _find_cycles(graph: Mapping[str, set[str]]) -> list[list[str]]:
                 stack.append((target, False))
 
     return found
+
+
+# ── Requirement 29: lanes may terminate without merging ──────────────────────
+#
+# Added 2026-09-05. Requirement 19.4 made a `CTRL_MERGE` mandatory per scatter branch,
+# which forbade the central case of the design it was written to serve: a lane that ends
+# on its own. 19.4's instinct was still right — an *unintended* missing merge is a real
+# authoring error — so the check survives as enforcement of a **declaration** rather than
+# one mandatory shape. `GatherStrategy` is the declaration; these two functions are the
+# enforcement.
+#
+# WHY REACHABILITY NEEDS THE EDGES, AND WHAT HAPPENS WHEN THEY ARE ABSENT
+# ----------------------------------------------------------------------
+# "Does this lane reach a gather" is a question about paths, not about names. With no
+# gather nodes at all the answer is knowable without any edges — nothing can reach a node
+# that does not exist. With gather nodes present it is **not** knowable from names alone,
+# so `validate_gather_reachability` raises rather than returning a plausible answer. A
+# validator that guesses is worse than one that says it cannot tell: this one gates
+# launch, and a wrong "reachable" would let exactly the flow 19.4 existed to catch
+# through.
+
+
+@dataclass(frozen=True)
+class GatherReachabilityReport:
+    """Whether every lane can reach the gather its scatter declared. Requirement 29.3.
+
+    Attributes:
+        refused: True when the declared strategy needs a gather and some lane cannot
+            reach one.
+        unreachable_lanes: Tether IDs of the offending lanes. **Naming them is half the
+            requirement** — a generic validation failure sends the author through eight
+            lanes looking for the one that is wrong.
+        strategy: The declared strategy, normalised.
+    """
+
+    refused: bool
+    unreachable_lanes: list[str] = field(default_factory=list)
+    strategy: str = ""
+
+    def message(self) -> str:
+        """A refusal a human can act on. A method, matching the other reports here."""
+        if not self.refused:
+            return f"Gather strategy {self.strategy!r}: every lane accounted for."
+        lanes = ", ".join(self.unreachable_lanes)
+        return (
+            f"gather strategy {self.strategy!r} requires every lane to reach a gather node, "
+            f"but these cannot: {lanes}"
+        )
+
+
+@dataclass(frozen=True)
+class TerminalOutputSet:
+    """Each lane's own terminal output, recorded separately. Requirement 29.4.
+
+    Attributes:
+        pairs: ``(tether_qualified_ref, output_path)`` per lane, in declared lane order.
+            **Declared order, never completion order** — the register records what
+            ordering by mtime cost: a 59-byte stub chosen over a 426 KB merge, every
+            time, because the stub was written last.
+        lanes_without_output: Lanes whose terminal node recorded nothing. Reported rather
+            than omitted, because a silently shorter list reads as a smaller scatter.
+        duplicated_paths: Paths reported by more than one lane. This is defect E1's exact
+            signature — eight lanes all naming `unified_session_ledger.md` — so it is
+            surfaced rather than de-duplicated into a plausible-looking set.
+    """
+
+    pairs: list[tuple[str, str]] = field(default_factory=list)
+    lanes_without_output: list[str] = field(default_factory=list)
+    duplicated_paths: list[str] = field(default_factory=list)
+
+    @property
+    def complete(self) -> bool:
+        """True when every lane recorded an output. Not a claim that they are good."""
+        return not self.lanes_without_output
+
+    @property
+    def distinct(self) -> bool:
+        """True when no two lanes named the same artifact."""
+        return not self.duplicated_paths
+
+    def message(self) -> str:
+        """What this set does and does not account for."""
+        parts = [f"{len(self.pairs)} lane output(s) recorded separately"]
+        if self.lanes_without_output:
+            parts.append("no output from lane(s): " + ", ".join(self.lanes_without_output))
+        if self.duplicated_paths:
+            parts.append(
+                "the same artifact was reported by more than one lane: "
+                + ", ".join(self.duplicated_paths)
+            )
+        return "; ".join(parts)
+
+
+def _normalise_strategy(gather_strategy: str) -> str:
+    """Title-case a declared strategy so ``"merge"`` and ``"Merge"`` mean one thing."""
+    return str(gather_strategy or "").strip().title()
+
+
+def validate_gather_reachability(
+    lanes: Mapping[str, Sequence[str]],
+    gather_strategy: str,
+    gather_nodes: Sequence[str],
+    edges: Mapping[str, Sequence[str]] | None = None,
+) -> GatherReachabilityReport:
+    """Refuse a declared gather that some lane cannot reach. Requirement 29.3.
+
+    Args:
+        lanes: ``{tether_id: [node_id, ...]}`` in declared execution order.
+        gather_strategy: ``"Merge"``, ``"Concat"`` or ``"Ungathered"``, matching
+            ``deterministic_nodes.GatherStrategy``. Compared case-insensitively so a
+            hand-authored ``"merge"`` is not read as an unknown strategy.
+        gather_nodes: Node IDs of the gather nodes present in the topology.
+        edges: ``{node_id: [successor, ...]}`` as produced by :func:`build_edges`.
+            Required **only** when *gather_nodes* is non-empty.
+
+    Returns:
+        A :class:`GatherReachabilityReport`. ``Ungathered`` is never refused — that is
+        the whole point of Requirement 29.
+
+    Raises:
+        ValueError: *gather_nodes* is non-empty and *edges* is ``None``. Reachability
+            past the first hop is not derivable from names, and this gates launch, so it
+            refuses to answer rather than guessing.
+    """
+    strategy = _normalise_strategy(gather_strategy)
+
+    if strategy == "Ungathered":
+        return GatherReachabilityReport(refused=False, strategy=strategy)
+
+    if not lanes:
+        return GatherReachabilityReport(refused=False, strategy=strategy)
+
+    targets = [str(n).strip() for n in gather_nodes if str(n).strip()]
+
+    # No gather node exists, so no lane can reach one. Knowable without any edges.
+    if not targets:
+        return GatherReachabilityReport(
+            refused=True, unreachable_lanes=list(lanes), strategy=strategy
+        )
+
+    if edges is None:
+        raise ValueError(
+            f"gather strategy {strategy!r} names {len(targets)} gather node(s), so lane "
+            "reachability depends on the routing edges. Pass `edges` (see build_edges); "
+            "answering without them would be a guess, and this check gates launch."
+        )
+
+    wanted = set(targets)
+    unreachable: list[str] = []
+    for tether_id, nodes in lanes.items():
+        reached: set[str] = set()
+        stack = [str(n).strip() for n in nodes if str(n).strip()]
+        found = False
+        while stack:
+            node = stack.pop()
+            if node in reached:
+                continue
+            reached.add(node)
+            if node in wanted:
+                found = True
+                break
+            stack.extend(str(t).strip() for t in edges.get(node, ()))
+        if not found:
+            unreachable.append(tether_id)
+
+    return GatherReachabilityReport(
+        refused=bool(unreachable), unreachable_lanes=unreachable, strategy=strategy
+    )
+
+
+def terminal_outputs_for_step(
+    lanes: Mapping[str, Sequence[str]],
+    recorded_outputs: Mapping[str, str],
+    gather_strategy: str,
+) -> TerminalOutputSet:
+    """Each ungathered lane's own terminal output. Requirement 29.4.
+
+    Args:
+        lanes: ``{tether_id: [node_id, ...]}`` in declared execution order. The **last**
+            node of each lane is its terminal, which is why an ordered ``Sequence`` is
+            required rather than a set.
+        recorded_outputs: ``{tether_qualified_ref: output_path}`` as recorded by the
+            queue. Refs are matched exactly, through the Requirement 31 render, so a lane
+            whose output was filed under a bare node name reads as *no output* rather
+            than being matched approximately.
+        gather_strategy: Must normalise to ``"Ungathered"``.
+
+    Returns:
+        A :class:`TerminalOutputSet`. Lanes that recorded nothing and paths claimed by
+        more than one lane are **reported**, never dropped or de-duplicated into
+        something that looks complete.
+
+    Raises:
+        ValueError: *gather_strategy* is ``Merge`` or ``Concat``. For those the step's
+            output is the gather node's output (Requirement 30.3), and returning per-lane
+            outputs instead would hand the caller a different answer to the same
+            question.
+    """
+    strategy = _normalise_strategy(gather_strategy)
+    if strategy != "Ungathered":
+        raise ValueError(
+            f"gather strategy {strategy!r} collects its lanes, so the step's output is the "
+            "gather node's output (Requirement 30.3), not the per-lane terminals. This "
+            "function answers the Ungathered case only."
+        )
+
+    pairs: list[tuple[str, str]] = []
+    missing: list[str] = []
+    seen_paths: dict[str, int] = {}
+
+    for tether_id, nodes in lanes.items():
+        ordered = [str(n).strip() for n in nodes if str(n).strip()]
+        if not ordered:
+            missing.append(tether_id)
+            continue
+        ref = _qualify(ordered[-1], tether_id)
+        path = str(recorded_outputs.get(ref, "") or "").strip()
+        if not path:
+            missing.append(tether_id)
+            continue
+        pairs.append((ref, path))
+        seen_paths[path] = seen_paths.get(path, 0) + 1
+
+    duplicated = [p for p, count in seen_paths.items() if count > 1]
+
+    if missing:
+        logger.error(
+            "[TOPOLOGY_GRAPH] Ungathered step: %d of %d lane(s) recorded no terminal "
+            "output (%s). Recorded separately as missing rather than omitted.",
+            len(missing), len(lanes), ", ".join(missing),
+        )
+    if duplicated:
+        logger.error(
+            "[TOPOLOGY_GRAPH] Ungathered step: %d path(s) claimed by more than one lane "
+            "(%s). This is defect E1's signature; not de-duplicated.",
+            len(duplicated), ", ".join(duplicated),
+        )
+
+    return TerminalOutputSet(
+        pairs=pairs, lanes_without_output=missing, duplicated_paths=duplicated
+    )

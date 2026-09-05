@@ -587,6 +587,32 @@ predating this amendment, so existing saved MacroNodes retain their current beha
 > not remove the operator's ability to place a merge anywhere. This is why 29.2 is a strategy on
 > the scatter and not a replacement for the nodes.
 
+> **Design note — 29.3 refuses to answer rather than guessing.** "Does this lane reach a gather"
+> is a question about paths, not names. With no gather nodes present the answer needs no edges —
+> nothing reaches a node that does not exist — but with gather nodes present it is not derivable
+> from names, so `validate_gather_reachability` **raises** when the edges are withheld. This check
+> gates launch, and a wrong "reachable" passes exactly the flow 19.4 existed to catch.
+
+#### Implementation status (2026-09-05)
+
+| Criterion | State |
+|---|---|
+| 29.1, 29.2, 29.6 | Implemented and covered (`GatherStrategy`, `resolve_gather_strategy`) |
+| 29.3 | `validate_gather_reachability` implemented and covered — **no caller.** Its home is pre-flight validation |
+| 29.4 | `terminal_outputs_for_step` / `TerminalOutputSet` implemented and covered — **no caller.** Its home is the step-boundary output capture |
+| 29.5 | **Not started.** "SHALL still reach a terminal session status, and SHALL NOT report `completed` while any lane holds an unresolved task" is a flow-engine statement and belongs with the wiring |
+
+**Marker correction, recorded rather than quietly applied.** 29.4's spec marker was authored as
+`terminal_outputs_for_step(step_index=0, gather_strategy="Ungathered")` asserting more than one
+distinct output. `topology_graph` is a pure module with no I/O and no global state, so nothing in
+that call could produce an output — **the only way to satisfy it was to fabricate two.** A test
+that can only pass against invented data is Principle 3 in test form. The signature now takes the
+lanes and what the queue recorded; the criterion is unchanged.
+
+`TerminalOutputSet` reports, rather than hides, a lane that recorded nothing and a path claimed by
+more than one lane. The latter is defect E1's exact signature — eight lanes all naming
+`unified_session_ledger.md` — so de-duplicating it would manufacture a set that looks complete.
+
 ---
 
 ### Requirement 30: A Step's Output Is a Set
@@ -732,6 +758,36 @@ running and from paused
 > not in an hour. Waiting out a timeout to discover a fact the queue already contains is the same
 > mistake in a new place. `pause_owner_alive` established the pattern: **ask, rather than wait and
 > guess.**
+
+> **Design note — three outcomes, not two.** `evaluate_wait` returns `released`, `waiting` or
+> `unsatisfiable`, and holds **no clock**. "Not yet" and "never" call for different responses, and
+> folding them together is exactly how F3 came to report `completed`. `unsatisfiable` takes
+> precedence over `waiting`: once one target can never arrive, the others are being waited on for a
+> release that cannot come. `TERMINAL_LANE_STATES` is an explicit set rather than "anything that is
+> not running", because an unrecognised state must read as **live** — treating an unknown as
+> *finished* is 32.5's guessing pointed the other way.
+
+#### Implementation status (2026-09-05)
+
+| Criterion | State |
+|---|---|
+| 32.1 | **Split.** Declared in the registry (`ComingSoon`), and `CTRL_WAIT` now resolves to `DeterministicNodeType.WAIT` with a handler that **refuses**. Not a working node |
+| 32.3 | Satisfied by Requirement 31's validation, which 32.3 defers to. Also closed the `waits`-**key** gap Req 31 recorded: a malformed waiter used to become a precedence-graph vertex |
+| 32.4, 32.5, 32.6 | `evaluate_wait` / `WaitOutcome` implemented and covered — **no caller** |
+| 32.2, 32.7 | **Not built.** 32.2 needs the release path; 32.7 is a TUI state |
+
+**The part that waits is the part that is not built, and stating that plainly is the point.** The
+deterministic-node dispatch contract — `(node_id, payload_path, job_id, config,
+predecessor_payloads)` — carries **no broker and no queue**, so lane state is unreachable from
+inside a handler. `evaluate_wait` is the complete decision; giving it live state requires a state
+provider on that contract, which changes how every deterministic node is dispatched.
+
+**A defect closed on the way, worth more than the criteria above.** Because `CTRL_WAIT` was
+declared in the registry but absent from `DeterministicNodeType`, `_resolve_node_type` returned
+`None` and dispatch fell through to `_handle_anchor`: a `CTRL_WAIT` node **passed its payload
+through and reported `completed`**. The `NODE_ALIASES` docstring names that hazard for
+`CTRL_REVIEW`; `CTRL_WAIT` inherited it the moment it was declared. The handler now raises, so the
+task fails loudly instead.
 
 ---
 

@@ -5340,3 +5340,136 @@ three-minute block. Termination of the stalled process was corroborated on **thr
 creation time matching the launch, and the exact command line — per Principle 2, never PID alone.
 **Related:** the Req 34 entry carrying the original process note; `cache_clearing_protocol`, which
 names the genuine clean-versus-run hazard that is still real and still worth avoiding.
+---
+### Feature Name: CTRL_WAIT and ungathered lanes — and a declared control node that had been silently reporting success
+**Abstract:** Requirements 29.3, 29.4 and 32 implemented as mechanisms. Six red markers closed. **The most valuable outcome is not any of the six: `CTRL_WAIT` was declared in the control-node registry but absent from `DeterministicNodeType`, so a `CTRL_WAIT` node in a topology fell through to `_handle_anchor` — it passed its payload straight through and the task reported `completed`.** The `NODE_ALIASES` docstring in the same file names that exact hazard for `CTRL_REVIEW`; nobody noticed `CTRL_WAIT` inherited it the moment it was declared.
+**Date/Time Entered:** 2026-09-05T16:45:00-04:00
+**Status:** COMPLETED — *the mechanisms, and one live defect closed.* **Requirement 32's waiting is NOT built. Nothing calls the new functions.**
+**Completed:** 2026-09-05T16:45:00-04:00
+**Completion Metric:** `GatherReachabilityReport`, `TerminalOutputSet`, `_normalise_strategy`,
+`validate_gather_reachability`, `terminal_outputs_for_step` in
+`maccre_core/orchestration/topology_graph.py`, plus `ParadoxReport.unresolvable_waiters`;
+`DeterministicNodeType.WAIT`, `TERMINAL_LANE_STATES`, `WaitOutcome`, `evaluate_wait`,
+`_handle_wait` in `maccre_core/orchestration/deterministic_nodes.py`.
+`tests/test_ctrl_wait_and_ungathered_lanes.py` — **60 tests, seven groups**. The **six
+`xfail(strict=True)` markers** for Reqs 29.3, 29.4, 32.1, 32.4, 32.5 and 32.6 removed after all
+six XPASSed. Gate 2026-09-05: `omni clean` 15:46 (297 bytecode), `omni qa` **PASS whole project**
+15:47:23, pytest **1213 collected / 1211 passed / 2 xfailed / 0 failed** in 175.76 s, `omni smoke`
+**ALL CHECKS PASSED** ($0.00) — run because `deterministic_nodes.py` is a critical execution path.
+Reconciles against 1152/1144/8: `1152 + 60 + 1 = 1213`, `1144 + 60 + 1 + 6 = 1211`, xfailed
+`8 - 6 = 2`. The two remaining are Req 34.1 (blocked on an operator baseline run) and Req 31.6.
+
+**The dispatch hole, which is the real find.** `CTRL_WAIT` was added to the registry on
+2026-09-04 as `ComingSoon` — honestly. But dispatch does not consult the registry; it consults
+`DeterministicNodeType` via `_resolve_node_type`, which returned `None`, and
+`execute_deterministic_node` falls back to `_handle_anchor` on `None`. So the node **existed,
+executed, did nothing, and reported success.** That is Principle 3, and the register already
+carries two instances of this same hole — one of which claimed a node named `FAILED`, **ran real
+inference on it**, and fed the output to the next step. `_handle_wait` now raises
+`NotImplementedError`, which `swarm_worker` catches and turns into a failed task.
+
+**The handler refuses, and that is the deliverable rather than a stub.** The dispatch contract is
+`(node_id, payload_path, job_id, config, predecessor_payloads)` and carries **no broker and no
+queue**, so lane states and recorded outputs cannot be reached from inside a handler. An
+unevaluable wait must not pass its payload on — the node's entire purpose is that the payload
+should *not* move yet. The registry stays `ComingSoon`, which remains the truth: **it has a guard,
+not a capability.**
+
+**`evaluate_wait` holds no clock, and that is Requirement 32.5 rather than a preference.** Defect
+F3 was a hold nobody could release which burned a 3600-second budget and then reported
+`completed`. A wait whose target lane already finished without producing is knowable **now**,
+because the queue already contains the fact. Three outcomes — `released` / `waiting` /
+`unsatisfiable`, **never `timeout`, never `completed`** — because "not yet" and "never" need
+different responses, and folding them together is precisely how F3 reported success over work that
+never happened. `unsatisfiable` takes precedence over `waiting`. `TERMINAL_LANE_STATES` is an
+explicit set rather than "anything not running", because an unrecognised state must read as
+**live**: treating an unknown as *finished* turns ignorance into a refusal, which is the same
+guessing pointed the other way. The tests are parameterised over that constant, so a new terminal
+state cannot be added without the guard following.
+
+*** REQUIREMENT 29.4'S MARKER SIGNATURE WAS CORRECTED, AND THE REASON IS THE CRITERION ***
+As authored it called `terminal_outputs_for_step(step_index=0, gather_strategy="Ungathered")` and
+asserted more than one distinct output. No lanes, no topology, no outputs were passed in, and
+`topology_graph` is a pure module with no I/O and no global state — **there was nowhere for two
+outputs to come from, so the only way to satisfy the call was to fabricate them.** A test that can
+only pass against invented data is Principle 3 in test form, and the invented paths would be
+Principle 2 besides. The signature now takes the lanes and what the queue recorded; **the criterion
+is unchanged.** This is the second marker correction this phase — the first (31.3's
+`report.message`) was a calling convention, this one a signature that could not be honestly
+implemented — and both are recorded rather than quietly edited, because editing a red marker to
+make it pass is a suspicious shape by default.
+
+**`TerminalOutputSet` reports what a bare list would lose:** a lane that recorded nothing (a
+silently shorter list reads as a smaller scatter) and a path claimed by more than one lane, which
+is **defect E1's exact signature** — eight lanes all naming `unified_session_ledger.md`.
+De-duplicating there would produce a set that looks smaller but complete, which is how
+`Merged 8 sources` came to be literally true over one file. Refs are matched **exactly** through
+the Requirement 31 render, and a lane's terminal is the **tail** of its chain, not the head the
+scatter named.
+
+**Two older defects closed on the way.** (1) `detect_temporal_paradox` validated wait *targets*
+but never the *keys*, so a malformed waiter was inserted straight into the precedence graph and
+could appear in a reported cycle **under a name no lane contained** — a refusal naming a node the
+author cannot go and look at. Keys now go through the same resolver and are excluded from the
+graph. (2) `_resolve_node_type`'s comment has claimed longest-prefix matching since Phase 4 while
+the loop iterated **enum declaration order** and returned the first match; the two agreed only
+because no member's value is a prefix of another's, which was luck rather than design. Now sorted
+by length, with a test asserting the property so a future `CTRL_MERGE_ALL` cannot be quietly
+swallowed by `CTRL_MERGE`.
+
+**Rejected:** fabricating two outputs to satisfy 29.4 as written (shortest path, converts a
+Principle 3 violation into a passing test); widening the dispatch contract to carry lane state so
+the handler could really wait (the right eventual move, touches all 17 handlers and the worker call
+site, not a side effect of writing a decision function); flipping the registry row to `active` (it
+would be the third place in this codebase asserting a capability that does not exist); making
+`_handle_wait` a passthrough so a flow containing one keeps running (the defect restated as a
+feature); reading "not running" as terminal (fewer lines, converts every unknown state into a
+refusal); de-duplicating `TerminalOutputSet.pairs` (hides E1's signature).
+
+**LIMITS. Requirement 32's waiting is the part that is not built.** 32.2 (release and expose the
+outputs) and 32.7 (a distinct TUI state) are absent; 32.1 is delivered as *dispatch that refuses*.
+`evaluate_wait`, `validate_gather_reachability` and `terminal_outputs_for_step` **have no callers** —
+29.3's home is pre-flight validation, 29.4's is the step-boundary output capture. **29.5 is
+untouched** and is a flow-engine statement belonging with the wiring. **No `CTRL_WAIT` node has ever
+been authored or executed**, so the refusal path is proven by unit test, not by a live flow.
+**Related:** Req 31, whose reference parser this reuses and whose recorded `waits`-key gap this
+closes; Req 30, which owns the step-output-as-a-set model 29.4 feeds; defects E1 and F3, whose
+signatures are asserted here.
+---
+### Feature Name: OPEN — an intermittent full-suite hang in the demand over-provisioning guard, not root-caused
+**Abstract:** `tests/test_demand_overprovisioning.py::TestTheFixDoesNotCostConcurrency::test_a_real_burst_still_reaches_full_width` **hung 2 of 5 full-suite runs on 2026-09-05** while passing 8/8 in 3.6 s in isolation and passing in the 3 runs that completed. A concurrency test that hangs unboundedly rather than failing is defect F3's shape in the test suite: it would hold a CI run open indefinitely.
+**Date/Time Entered:** 2026-09-05T16:45:00-04:00
+**Status:** OPEN — **cause not found.** Recorded with its evidence and its instrument.
+**Completion Metric:** Not complete. Closing this requires either a captured mid-hang thread stack
+or a reproduction under controlled load.
+
+**Observed on both hangs.** The module printed 4 of its 8 dots and stopped. The worker process held
+**8 threads** and roughly 650 MB. CPU climbed steadily — 58.9 s to 117 s across 121 s of wall,
+about half a core — with **zero test progress for over four minutes**. Not memory pressure: 7 GB of
+15.9 GB free at the time. Terminated on three corroborating signals (PID, creation time matching
+the launch, exact command line), never PID alone.
+
+**Why this is a finding and not just a slow test: the path has an explicit ceiling.**
+`run_until_drained` is called with `timeout_seconds=60`, and its `finally` calls `_join_all`, which
+is bounded at 30 s. That is a **90-second maximum**, exceeded roughly fourfold. The stub worker's
+`execute_cycle` sleeps at most 0.02 s, so the usual suspect — a long cycle that never rechecks
+`_shutdown` — does not explain it either. Something is exceeding a bound the code appears to
+enforce.
+
+**What was tried and did not work.** A `faulthandler.dump_traceback_later` probe was built
+specifically to dump every thread's stack mid-hang and exit. **Both instrumented runs completed
+normally**, so no stack was captured. The instrument is the right one and should be reused the next
+time it hangs rather than rebuilt.
+
+**Consistent with the module's own account of itself.** Its docstring records that the defect it
+guards is **load-sensitive by construction** and surfaced only under full-suite load, because
+worker construction slows under load and widens the gap between *spawned* and *claimed*. An
+intermittent hang in this exact test is therefore consistent with pool behaviour under load rather
+than with a flaky assertion — which makes it more concerning, not less.
+
+**Recommended next step, not taken here:** give the test a hard per-test bound so it **fails loudly
+instead of hanging**. That is a strict improvement regardless of the root cause, and it converts an
+indefinite CI stall into a diagnosable failure.
+**Related:** defect F3 (a hold nobody could release, which ran out a 3600 s budget and then
+reported `completed`); defect F2 (the construction storm this module's guard was written for); the
+2026-09-05 correction withdrawing the earlier claim that `omni clean` caused a suite stall.
