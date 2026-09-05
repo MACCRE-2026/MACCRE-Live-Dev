@@ -4086,3 +4086,71 @@ broken.
 **Related:** the demand-estimator over-provisioning fix, which removed the other load-sensitive
 test; UT-1 test 3, whose speedup half this test stands in for; the barrier proof, which is the
 authority on width.
+
+***
+
+### AMENDMENT to *The wall-clock scatter test is the last load-sensitive test*
+**Amended:** 2026-09-04T19:25:00-04:00
+**Status:** **COMPLETED** — resolved by measurement, operator selected option 3.
+**Completion Metric:** `node_seconds` raised 0.25 → 1.0 in
+`test_eight_lane_scatter_beats_sequential_wall_clock`, chosen from in-suite telemetry rather than
+guessed. **Three consecutive clean full-suite runs: 822 passed / 21 xfailed / 0 failed**, at 177.01 s,
+198.69 s and 180.50 s — the slowest run implying the most load variance and still passing. `omni qa`
+PASS whole project 19:12. **The suite is now green without an asterisk for the first time in this
+sequence.**
+**Verified:** **Reproduced, measured, and re-verified three times.**
+
+**Description:**
+**Measured rather than guessed.** A temporary probe was added *inside the suite* — so it would
+experience real contention, since the flake only appears under full-suite load — running the same
+`run_scatter` harness at three durations. It always passed and asserted nothing; it was
+instrumentation. Deleted after use, and its deletion verified.
+
+| `node_seconds` | `elapsed` | implied overhead | peak concurrency |
+|---|---|---|---|
+| 0.25 | 0.813 | 0.563 | **7** |
+| 0.50 | 1.016 | 0.516 | 8 |
+| 1.00 | 1.547 | 0.547 | 8 |
+
+**The model held.** Because the baseline is *computed* rather than measured
+(`sequential = lane_count * node_seconds`), and eight lanes overlap:
+
+```
+elapsed  ≈  node_seconds + O
+passes   iff  O < 3.8 * node_seconds
+```
+
+**O is roughly constant at ~0.55 s**, independent of duration — exactly what the model predicts,
+and the reason raising the duration works. At 0.25 s the required minimum was ~0.15 s, leaving only
+1.8× margin, and the failing run implied O ≈ 1.08 s, which is past the limit. At 1.0 s the assertion
+tolerates O up to 3.8 s — about 7× the measured value and 2.6× the worst ever observed.
+
+**The finding that mattered more than the noise.** At 0.25 s peak concurrency reached only **7 of
+8**: the run finished before the pool could ramp to full width. So the old duration was not merely
+measuring noisily — **it was pricing a scenario that never achieved the concurrency the test exists
+to measure.** Raising the duration fixed the measurement *and* the thing being measured, which is
+why this was the right option rather than merely the cheapest.
+
+**Two improvements beyond the parameter change:**
+
+1. **`assert tracker.peak == lane_count` added.** Not redundant with the barrier proof — that one
+   *forces* eight lanes by construction, because `Barrier(8)` cannot release otherwise. This asserts
+   the pool arrives at eight **on its own** under demand scaling, which is a different claim and the
+   one that was quietly false at 0.25 s.
+2. **The failure message now reports implied overhead against its budget**, and says which way to
+   read it: if the overhead grew, raise `node_seconds`; if the peak is short, the pool stopped
+   reaching full width. A future failure is diagnosable rather than mysterious.
+
+**Cost:** about 1.5 s of suite time. Runs went 177–198 s against a previous ~178–212 s, so the change
+is inside existing variance.
+
+**Why option 3 and not the others.** Loosening the bound to 75% would have weakened the claim the
+test exists to make. Accepting the flake would have left every gate result carrying the unstated
+asterisk the analysis warned about. Splitting the claim — barrier for width, wall clock moved to a
+live run — remains the arguably-most-correct long-term answer and is **not foreclosed**: UT-1 test 3's
+speedup criterion is a live criterion, and the 4.99 document still records that it has no trustworthy
+automated proxy. This makes the automated proxy honest; it does not make it a substitute for the live
+measurement.
+
+**Related:** the demand-estimator over-provisioning fix, which removed the other load-sensitive test
+earlier the same day; UT-1 test 3; the barrier proof, which remains the authority on width.

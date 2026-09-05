@@ -359,18 +359,74 @@ class TestScatterReachesRealConcurrency:
         worker then builds its own ``TopologyEngine`` and broker — so a short
         simulated node spends a visible fraction of the run ramping. Real nodes
         take seconds, which dwarfs that.
+
+        ``node_seconds`` RAISED 0.25 → 1.0 ON 2026-09-04, FROM MEASUREMENT
+        -----------------------------------------------------------------
+        At 0.25 s this was the last load-sensitive test in the suite, failing under
+        full-suite load and passing in isolation. It was recorded in the 4.99 status
+        document §9 as an operator decision between loosening the bound, raising the
+        node time, or accepting the flake. Raising the node time was chosen because it
+        removes measurement noise **without weakening the assertion.**
+
+        The arithmetic, since the baseline is computed rather than measured
+        (``sequential = lane_count * node_seconds``). Eight lanes overlap, so::
+
+            elapsed  ≈  node_seconds + O           where O is fixed ramp-up
+            passes   iff  node_seconds + O < 0.6 * 8 * node_seconds
+                     iff  O < 3.8 * node_seconds
+                     iff  node_seconds > O / 3.8
+
+        Measured in-suite at three durations, so O was observed rather than assumed:
+
+        ===============  ==========  =================  ======
+        ``node_seconds``  ``elapsed``  implied O          peak
+        ===============  ==========  =================  ======
+        0.25              0.813       0.563              **7**
+        0.50              1.016       0.516              8
+        1.00              1.547       0.547              8
+        ===============  ==========  =================  ======
+
+        **O is roughly constant at ~0.55 s**, which is what the model predicts and
+        why the fix works: at 0.25 s the required minimum was ~0.15 s, leaving only
+        1.8× margin, and an earlier failing run implied O ≈ 1.08 s — past the limit.
+        At 1.0 s the assertion tolerates O up to 3.8 s, about 7× the measured value
+        and 2.6× the worst ever observed.
+
+        **And the second column mattered more than the first.** At 0.25 s peak
+        concurrency reached only **7** — the run finished before the pool could ramp
+        to 8. So the old duration was not merely measuring noisily, it was measuring a
+        scenario that never achieved the concurrency the test exists to price. Both 0.5
+        and 1.0 reach 8.
+
+        Cost: about 1.5 s of suite time.
         """
         lane_count = 8
-        node_seconds = 0.25
+        node_seconds = 1.0
         status, tracker, elapsed, _topo = run_scatter(
             lane_count=lane_count, node_seconds=node_seconds
         )
 
         assert status == "completed", f"pool returned {status}"
+
+        # Assert full width was reached NATURALLY, under demand scaling.
+        #
+        # Not redundant with the barrier proof above: that one *forces* eight lanes by
+        # construction, because a Barrier(8) cannot release otherwise. This asserts the
+        # pool arrives at eight on its own when the work justifies it — a different
+        # claim, and the one that was quietly false at node_seconds=0.25.
+        assert tracker.peak == lane_count, (
+            f"only {tracker.peak} of {lane_count} lanes ran concurrently, so the "
+            f"wall-clock ratio below is pricing a partially-ramped run"
+        )
+
         sequential = lane_count * node_seconds
+        overhead = elapsed - node_seconds
         assert elapsed < sequential * 0.6, (
             f"took {elapsed:.2f}s against a {sequential:.2f}s sequential baseline "
-            f"(peak concurrency {tracker.peak})"
+            f"(peak concurrency {tracker.peak}). Implied fixed overhead "
+            f"{overhead:.2f}s against a budget of {3.8 * node_seconds:.2f}s — if the "
+            f"overhead is what grew, raise node_seconds; if the peak is short, the "
+            f"pool stopped reaching full width"
         )
 
     def test_concurrency_does_not_collapse_with_fast_nodes(
