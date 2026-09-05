@@ -86,6 +86,7 @@ class MessageBroker(abc.ABC):
         flow_vector: str = "",
         tether_id: str = "",
         output_path: str = "",
+        payload_bytes: int = 0,
     ) -> None:
         """Mark a task completed and enqueue successor node(s).
 
@@ -111,6 +112,12 @@ class MessageBroker(abc.ABC):
                 fan-in gathering "what each predecessor produced" got the same path
                 N times. Implementations **must not** blank an existing value when
                 this is empty: absent is honest, overwritten is lost.
+            payload_bytes: Size in bytes of the payload the completed node **read**,
+                measured before it executed. ``0`` means *not measured* — an
+                unreadable path and a genuinely empty file both land there — so
+                implementations **must not** overwrite a non-zero value with ``0``,
+                for the same reason as ``output_path``: a later caller that did not
+                measure must not erase a measurement an earlier one took.
         """
 
     @abc.abstractmethod

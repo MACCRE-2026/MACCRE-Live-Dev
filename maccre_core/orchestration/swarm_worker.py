@@ -760,6 +760,28 @@ class UniversalSwarmWorker:
         payload_path: str = str(task["payload_path"])
         current_node: str = str(task.get("current_node", "START"))
 
+        # ── What this node was actually handed, in bytes ──────────────────────
+        # Measured from the file rather than estimated, and measured *before* the
+        # node runs, because this is the number that answers "did enlarging the
+        # payload contract cost anything". Recorded on the queue row at route time.
+        #
+        # Bytes, not an estimated token count: bytes are a fact obtainable from one
+        # stat() call, whereas tokens would be this number divided by a heuristic.
+        # Storing both would put a derived value beside its own input — two
+        # representations of one measurement, and the derivation belongs in
+        # finops_tools.estimate_tokens where it is already named an estimate.
+        payload_bytes: int = 0
+        try:
+            payload_bytes = Path(payload_path).stat().st_size
+        except OSError:
+            # A missing or unreadable payload leaves this at 0, which the schema
+            # comment defines as "not measured". It is not an error worth failing a
+            # node over, and _read_local_payload below reports the real problem.
+            logger.debug(
+                "[%s] Could not size payload %s; recording 0 bytes.",
+                self.worker_id, payload_path,
+            )
+
         # Boot dual-tier telemetry
         # job_id IS the session ID — unified format: job_{YYYYMMDD-HHMMSS-{4rand}}
         from maccre_core.logger import setup_session_loggers
@@ -811,6 +833,23 @@ class UniversalSwarmWorker:
             # Fired inside the try so it is always paired with the finish callback
             # in the finally below — no path can report a start without a finish.
             self._fire_lifecycle(self.on_node_start, current_node, "on_node_start")
+
+            # ── Cost attribution, set once for the whole cycle ────────────────
+            # Six router.generate(...) sites are reachable from this cycle — inline,
+            # plus _run_interactive_diamond_loop and _apply_triple_index_search.
+            # Setting attribution once here rather than at each of them means none can
+            # forget, and a forgotten one would be silent: a row with source_node=''
+            # is indistinguishable from a row written before attribution existed.
+            #
+            # **Inside the try, deliberately.** This was first placed above, next to
+            # where current_node is bound, which reads more naturally and was wrong:
+            # three tests in test_lock_lifecycle.py build a worker with __new__ and no
+            # `router` attribute precisely so the node raises on its own, and an
+            # AttributeError there escaped into the pool instead of landing in the
+            # outer except. That except is the A4 hardening — the guarantee that a
+            # claimed task always ends resolved — and bookkeeping that can raise has
+            # no business outside it. The tests caught it immediately.
+            self.router.set_call_attribution(session_id=job_id, source_node=current_node)
 
             logger.info(f"\n[{self.worker_id}] Lock Acquired: job={job_id} | row={row_id} | Node: [{current_node}]")
             logger.info(f"[{self.worker_id}] Ledger -> {ledger_path}")
@@ -1920,6 +1959,12 @@ All file paths must strictly resolve to these five silos:
                 flow_vector=flow_vector,
                 tether_id=_tether_id,
                 output_path=node_output_path,
+                # Measured at claim time, before this node ran. Deliberately not
+                # re-measured here: the question is what the node was *given*, and
+                # by now payload_path may have been rewritten by the Targeted Filter
+                # branch. Sizing it again would answer a different question with the
+                # same column name.
+                payload_bytes=payload_bytes,
             )
             
             # Update the session with the live ledger

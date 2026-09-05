@@ -198,6 +198,53 @@ class UniversalRouter:
         self.openai_client: object | None = None
         self.groq_client: object | None = None
 
+        # ── Cost attribution (Phase 6.13) ─────────────────────────────────────
+        # Which run and which node the next inference belongs to. Set by the caller
+        # through :meth:`set_call_attribution`; read only by the INFERENCE_COST
+        # telemetry writes in :meth:`generate`.
+        #
+        # **Safe as instance state because a router is per-worker, not shared.**
+        # ``swarm_worker`` does ``self.router = UniversalRouter()`` in its own
+        # ``__init__``, which is the same fact the rate-limiter comment below relies
+        # on in the opposite direction: the limiter had to be *process-wide*
+        # precisely because each of the eight threads owns a separate router. That
+        # makes these two fields thread-confined by construction rather than by
+        # convention, and a lock would be protecting nothing.
+        #
+        # Empty strings, not None: they are written to NOT NULL DEFAULT '' columns,
+        # and "" already means "unattributed" in every row written before this
+        # existed. Introducing None would add a second spelling of the same absence.
+        self._attr_session_id: str = ""
+        self._attr_source_node: str = ""
+
+    def set_call_attribution(self, session_id: str = "", source_node: str = "") -> None:
+        """Name the run and node that subsequent inference calls belong to.
+
+        Called once per worker cycle rather than once per call. ``swarm_worker`` has
+        **six** ``router.generate(...)`` sites on one node's execution path — the
+        Diamond Loop turn, the graceful close, two OSINT query builders, an entity
+        extractor and a macro-expansion loop — and every one of them should be
+        attributed to the same node. Threading two arguments through six call sites
+        would have made attribution a thing a caller can forget at one of them, and
+        the failure would be silent: a row with ``source_node = ''`` looks exactly
+        like a row written before attribution existed.
+
+        .. note::
+           **Why this is being added.** The two ``INFERENCE_COST`` telemetry writes
+           in :meth:`generate` have always recorded real provider token counts —
+           ``promptTokenCount`` and ``candidatesTokenCount`` — and have always passed
+           **neither** ``session_id`` nor ``source_node``. So the data needed to ask
+           "which node spent this, and on how much input" was being collected and
+           thrown into an unqueryable heap. Nothing was missing except the labels.
+
+        Args:
+            session_id: The ``job_id``. Named ``session_id`` to match the telemetry
+                column rather than introducing a third name for one identifier.
+            source_node: The hydrated node id, e.g. ``AGENT_A_S0``.
+        """
+        self._attr_session_id = session_id or ""
+        self._attr_source_node = source_node or ""
+
     def generate(
         self,
         model_name: str,
@@ -400,6 +447,11 @@ class UniversalRouter:
                                 model_id=_attempt_model,
                                 input_tokens=response.prompt_tokens,
                                 output_tokens=response.candidate_tokens,
+                                # Attribution. Without these the row records a real
+                                # token count against nothing, and the question
+                                # "which node spent this" is unanswerable.
+                                session_id=self._attr_session_id,
+                                source_node=self._attr_source_node,
                             )
                         except Exception:
                             pass  # Never let telemetry crash the inference path
@@ -659,6 +711,11 @@ class UniversalRouter:
                                 payload=f"model={_amodel} requested={model_name}",
                                 cost=_gc_cost, model_id=_amodel,
                                 input_tokens=_gr.prompt_tokens, output_tokens=_gr.candidate_tokens,
+                                # The API-Gemma path. Attributed identically to the
+                                # Gemini path above — two sites logging one event type
+                                # have drifted before, so they are kept symmetrical.
+                                session_id=self._attr_session_id,
+                                source_node=self._attr_source_node,
                             )
                         except Exception:
                             pass

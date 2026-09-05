@@ -4876,3 +4876,67 @@ So enlarging a payload moves the real bill and moves the estimate by zero. Fixin
 needs payload size recorded before launch, which is tracker #18. The limitation is now
 stated in the docstring and pinned by a test rather than left for the next reader to
 discover.
+
+---
+
+### AMENDMENT to *Nothing in the system can measure a payload*
+**Date:** 2026-09-05T09:45:00-04:00
+**Status change:** Unfulfilled → **COMPLETED.** Era 3 tracker #18. Unblocks #20.
+**Completion Metric:** `UniversalRouter.set_call_attribution` plus `_attr_session_id` /
+`_attr_source_node`, read by **both** `INFERENCE_COST` writes; `task_queue.payload_bytes`
+(CREATE TABLE body + idempotent ALTER) with the `CASE WHEN ? = 0` don't-blank rule at both
+UPDATE sites; `route_task` parameter added to the concrete broker, the `MessageBroker` ABC
+and `MockMessageBroker`; `get_payload_bytes_by_node` as the reader; the worker sizes the
+payload at claim time and sets attribution once per cycle.
+`tests/test_payload_measurement.py` — **26 tests**. **Revert-to-red twice:** a plain
+assignment instead of the `CASE WHEN` reddened `assert 0 == 1234`; dropping attribution from
+**one** of the two sites reddened `assert 1 == 2`. Gate 2026-09-05: `omni clean` 09:23,
+`omni qa` **PASS whole project** 09:32, pytest **1012 collected / 1002 passed / 10 xfailed /
+0 failed** in 189.29s, `omni smoke` **ALL CHECKS PASSED**. Collected 986 → 1012 is +26
+exactly and the pass count moved by the same 26.
+
+**The useful correction to the original entry: the token data was never missing, only the
+labels were.** Both `INFERENCE_COST` writes have always recorded real provider
+`input_tokens` and `output_tokens`. They passed neither identifier, so every row defaulted
+to `""` and genuine measurements accumulated in an unqueryable heap. Two arguments made
+per-node cost answerable without adding a single new measurement.
+
+**Attribution is set once per cycle, not passed per call**, because six
+`router.generate(...)` sites are reachable from one node's path. Passing it at each would
+make attribution forgettable at any one of them, and the failure would be silent — a row
+with `source_node=''` looks exactly like a row written before attribution existed. Instance
+state on the router is safe **by construction, not convention**: each worker builds its own
+router, which is the same fact the process-wide rate limiter relies on in the opposite
+direction.
+
+**Bytes stored, tokens not.** Bytes are one `stat()` call and a fact; tokens would be that
+number divided by a heuristic. Storing both would put a derived value beside its own input,
+and the derivation already exists — named `estimate_tokens`, in the module where estimates
+belong.
+
+**`0` means *not measured* and never overwrites a measurement.** Same rule as
+`output_path`, same reason: defect E1 was a real value destroyed by a caller that had
+nothing better to put there.
+
+**The column shipped with its reader**, because a schema column with no consumer is the
+`--smart` shape and that is now the **third** instance found in this register — the most
+recent being `resume_paused_task`'s `topology_engine` parameter, fixed the day before.
+
+**Two of my own errors, recorded because both lessons generalise.** First, the attribution
+call was placed *outside* the outer `except` that guarantees a claimed task always ends
+resolved; three `test_lock_lifecycle.py` tests build a worker with `__new__` and no `router`
+precisely so a real crash lands in that guard, and they caught it immediately. **Bookkeeping
+that can raise has no business outside the guard.** Second, one of my own new tests compared
+**textual position in the file** to assert execution order and failed, because four
+`generate` sites live in helper methods defined above `execute_cycle`; runtime order was
+correct all along. Rewritten against `execute_cycle`'s own body. A plausible premise that
+would have kept passing for the wrong reason had the code happened to satisfy it.
+
+**What this does NOT do.** It makes measurement *possible*; it is **not** the before-number.
+No run has happened since the change, so nobody has yet queried `system_logs` for a real
+run's per-node input tokens. **#20 needs an actual baseline run recorded first.** Also
+unchanged and recorded: the Stream-4 interactive branch still hard-zeroes `task_cost`, so
+its inference is now attributed in telemetry while `task_queue.actual_cost` and
+`system_logs.cost` disagree for those nodes; and `_estimate_node_cost` remains blind to
+input size — this change supplies the data that would let it stop being, and deliberately
+does not spend it.

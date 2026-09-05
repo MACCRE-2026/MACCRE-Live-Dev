@@ -90,6 +90,7 @@ class MockMessageBroker(MessageBroker):
         flow_vector: str = "",
         tether_id: str = "",
         output_path: str = "",
+        payload_bytes: int = 0,
     ) -> None:
         # Mark current task completed
         for task in self._tasks:
@@ -99,6 +100,12 @@ class MockMessageBroker(MessageBroker):
                 # existing value alone rather than blanking it.
                 if output_path:
                     task["output_path"] = output_path
+                # Same rule for payload_bytes, where 0 means "not measured". A mock
+                # that blanked it would let a test pass against behaviour the real
+                # broker does not have — which is the only thing a mock can get
+                # seriously wrong.
+                if payload_bytes:
+                    task["payload_bytes"] = payload_bytes
                 break
 
         self.route_calls.append({
@@ -112,6 +119,7 @@ class MockMessageBroker(MessageBroker):
             "flow_vector": flow_vector,
             "tether_id": tether_id,
             "output_path": output_path,
+            "payload_bytes": payload_bytes,
         })
 
         # Enqueue successor nodes

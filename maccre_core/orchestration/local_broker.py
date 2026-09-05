@@ -193,6 +193,7 @@ class LocalMessageBroker(MessageBroker):
                 flow_line_id         TEXT DEFAULT '',
                 tether_id            TEXT DEFAULT '',
                 flow_vector          TEXT DEFAULT '',
+                payload_bytes        INTEGER DEFAULT 0,
                 created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(job_id, current_node)
             )
@@ -227,6 +228,21 @@ class LocalMessageBroker(MessageBroker):
             # times. payload_path stays the routing record; output_path is the
             # production record, and nothing overwrites it.
             "ALTER TABLE task_queue ADD COLUMN output_path TEXT DEFAULT ''",
+            # Phase 6.13 #18: the size in bytes of the payload this node READ.
+            #
+            # Added because nothing in the system could measure a payload. No
+            # tokenizer, no size column in any telemetry silo, and the queue held
+            # paths without ever stat()-ing them. The step-boundary payload contract
+            # enlarges what crosses a boundary, and `actual_cost` derives from the
+            # provider's own promptTokenCount — so the bill would have moved with no
+            # way to say by how much or where. This is the before-number.
+            #
+            # **0 means "not measured", not "empty".** A payload that genuinely does
+            # not exist and one whose stat() failed both land here, and the worker
+            # logs which at DEBUG. An empty file is 0 bytes too; the distinction is
+            # not worth a second column, because a 0-byte payload and an unmeasured
+            # one call for the same investigation.
+            "ALTER TABLE task_queue ADD COLUMN payload_bytes INTEGER DEFAULT 0",
         ):
             try:
                 conn.execute(_col_sql)
@@ -644,6 +660,7 @@ class LocalMessageBroker(MessageBroker):
         flow_vector: str = "",
         tether_id: str = "",
         output_path: str = "",
+        payload_bytes: int = 0,
     ) -> None:
         """
         Mark the current task completed and enqueue successor nodes.
@@ -661,6 +678,12 @@ class LocalMessageBroker(MessageBroker):
         combined one file eight times. An empty ``output_path`` is honest — it
         means the caller had nothing authoritative to record — and readers fall
         back to ``payload_path``, which preserves behaviour for older rows.
+
+        ``payload_bytes`` is the size of the payload this node **read**, measured by
+        the worker before execution. It follows the same don't-blank rule as
+        ``output_path``: ``0`` leaves any existing value alone, because ``0`` means
+        *not measured* and a later caller that simply did not measure must not erase
+        a measurement an earlier one took.
 
         ``flow_line_id`` tracks scatter fan-out lineage so downstream nodes can
         identify which branch of a parallel scatter they belong to.
@@ -683,9 +706,11 @@ class LocalMessageBroker(MessageBroker):
                 "UPDATE task_queue "
                 "SET lock_status = 'awaiting_orders', payload_path = ?, actual_cost = ?, "
                 "locked_at = NULL, "
-                "output_path = CASE WHEN ? = '' THEN output_path ELSE ? END "
+                "output_path = CASE WHEN ? = '' THEN output_path ELSE ? END, "
+                "payload_bytes = CASE WHEN ? = 0 THEN payload_bytes ELSE ? END "
                 "WHERE id = ?",
-                (new_payload_path, actual_cost, output_path, output_path, row_id),
+                (new_payload_path, actual_cost, output_path, output_path,
+                 payload_bytes, payload_bytes, row_id),
             )
             conn.commit()
             return
@@ -705,9 +730,11 @@ class LocalMessageBroker(MessageBroker):
             "UPDATE task_queue "
             "SET lock_status = ?, payload_path = ?, actual_cost = ?, "
             "completed_at = CURRENT_TIMESTAMP, locked_at = NULL, "
-            "output_path = CASE WHEN ? = '' THEN output_path ELSE ? END "
+            "output_path = CASE WHEN ? = '' THEN output_path ELSE ? END, "
+            "payload_bytes = CASE WHEN ? = 0 THEN payload_bytes ELSE ? END "
             "WHERE id = ?",
-            (status, new_payload_path, actual_cost, output_path, output_path, row_id),
+            (status, new_payload_path, actual_cost, output_path, output_path,
+             payload_bytes, payload_bytes, row_id),
         )
         for node in next_nodes:
                 if node.upper() not in ("DONE", "FAILED", "STOP", "TERMINATE", "END"):
@@ -1152,6 +1179,38 @@ class LocalMessageBroker(MessageBroker):
             if node_id and path:
                 found[node_id] = path
         return found
+
+    def get_payload_bytes_by_node(self, job_id: str) -> dict[str, int]:
+        """What each node in a job was handed, in bytes. Phase 6.13 #18.
+
+        The reader half of ``payload_bytes``. It exists in the same change as the
+        column deliberately: a schema column with no consumer is the shape the
+        doctrine names after the ``--smart`` flag — accepted, documented, and read by
+        nothing — and this project has now found that shape three times.
+
+        This is the number the step-boundary payload contract is measured against. Run
+        a flow, record what each node received, change the contract, run it again, and
+        compare. Without it the change would move the real bill (``actual_cost``
+        derives from the provider's own ``promptTokenCount``) with no way to say by how
+        much or where.
+
+        Args:
+            job_id: The job to report on.
+
+        Returns:
+            ``{node_id: bytes}`` for every row of the job that carries a measurement.
+            **Nodes measured as 0 are omitted**, because ``0`` means *not measured*
+            and including them would put unmeasured nodes and empty payloads in the
+            same bucket as a real reading of zero. A caller wanting the full node list
+            should ask the topology, which is the thing that actually knows it.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT current_node, payload_bytes FROM task_queue "
+            "WHERE job_id = ? AND payload_bytes > 0 ORDER BY id ASC",
+            (job_id,),
+        ).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows if row[0]}
 
     # ── Tether-Scoped Queries ──────────────────────────────────────────────────
 
