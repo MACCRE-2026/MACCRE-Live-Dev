@@ -5473,3 +5473,95 @@ indefinite CI stall into a diagnosable failure.
 **Related:** defect F3 (a hold nobody could release, which ran out a 3600 s budget and then
 reported `completed`); defect F2 (the construction storm this module's guard was written for); the
 2026-09-05 correction withdrawing the earlier claim that `omni clean` caused a suite stall.
+---
+### Feature Name: Three representations of the tether ID — and one of them is documented as complete while existing in zero Python files
+**Abstract:** Era 3 task "nested scatter with depth and lane limits" was found **unbuildable as scoped**. Requirements 19 and 18.3 define nesting depth and the 64-lane limit in terms of a hierarchical tether ID (`X` → `X.1` → `X.1.1` with `parse_depth`) that **does not exist in the codebase**, while the engine writes one flat `scatter_<sha1[:8]>` per scatter *group* and the TUI mints `tether_a`/`tether_b` from a per-widget counter. `IMPLEMENTATION_STATUS.md` marks the hierarchy complete, with line counts and an import path.
+**Date/Time Entered:** 2026-09-05T17:10:00-04:00
+**Status:** OPEN — divergence recorded, task list revised, **no code changed yet.** Unification is tasks 4b–4f; Requirement 19 is 4g.
+**Completion Metric:** Not complete. Closes when one tether generator has one caller path,
+per-lane tether IDs are observable in `task_queue`, the gather gate is proven still to close
+on an 8-lane scatter, `total_sum_readout` reports 8 lanes and 8-way peak for an 8-agent
+scatter, and the design documents stop claiming a class that does not exist.
+Decision record: `.kiro_artifacts/2026-09-05_tether_model_divergence_and_task_revision.md`.
+
+**The three representations.**
+
+| Where | Format | Scope | Exists? |
+|---|---|---|---|
+| `design.md`, `tasks.md`, `IMPLEMENTATION_STATUS.md`, `Multi_Lane_Flow_Builder_Implementation_Plan.md` | `X`, `X.1`, `X.1.1` via `TetherIDGenerator` + `parse_depth` | one per **lane** | **No — zero Python files** |
+| `flow_engine._default_tether_id` | `scatter_<sha1[:8]>` | one per **scatter group**, written to the scatter, every lane, and the merge | Yes, this is what runs |
+| `maccre_tui/widgets/macronode_workshop.py` | `tether_a`, `tether_b` from `self._tether_counter` | one per scatter | Yes |
+
+**This is Doctrine 4's named incident repeated by the same two components.** The doctrine
+records a TUI building `NAME_{i}` while the engine built `NAME_S{i}` — *"harmless while the
+TUI only drew them; wrong the moment anything acted on what was drawn."* Tether IDs **are**
+acted on: the tether is what the fan-in gather gate scopes by. `topology_engine.py` already
+carries a comment about a fixed defect where a blank TUI tether field **overwrote the real
+tether the auto-wrap wrote into the CSV**; the blank case was fixed, the non-blank case
+still means `tether_a` wins over `scatter_<sha1>`.
+
+**Doctrine 5 — the documentation says it is done.** Not "planned": marked complete, sized,
+and located. `✅ Task 2.1: Implemented TetherIDGenerator (6h)`; `Supports X → X.1, X.2 →
+X.1.1`; `Depth parsing: parse_depth("X.1.2") → 2`; `TetherIDGenerator class (88 lines)`;
+`TetherIDGenerator integration (5 lines)`; `maccre_core.orchestration.flow_engine:
+TetherIDGenerator`. `grep TetherIDGenerator **/*.py` → **no matches.** A second copy of the
+claims sits in `.kiro/specs/phase-6-13-multi-flow-lane/IMPLEMENTATION_STATUS.md`. This is
+the `--smart` incident in a larger size: a reader planning work against a named 88-line
+class at a named import path designs against a fiction, which is exactly what happened.
+
+*** A DEFECT I AUTHORED, EXPOSED BY THIS ***
+`total_sum_readout` computes `lane_count = len(distinct Tether_ID)` and then
+`expected_peak_concurrency = min(lane_count, resolve_scatter_cap(max_workers))`. Because the
+engine writes one tether across the whole scatter group, reproduced against rows built the
+way the auto-wrap builds them (8-agent scatter + 8 lanes + merge):
+
+```
+lane_count            : 1     <-- Req 33.5 "the number of Flow Lanes"
+nodes_per_lane        : {'scatter_ef3031e2': 10}
+expected_peak_concurr : 1     <-- max_workers=8 was passed; the pool will open 8
+```
+
+**So the pre-launch readout tells the operator an 8-way scatter will peak at one thread.**
+My Requirement 33 entry records that I caught an *over*-promise here and fixed it; I left an
+*under*-promise, because the lane model underneath was wrong. Principle 3, in the one
+document the operator consults *instead of* watching the run. **Live corroboration:** run
+`job_20260901-205047-40sp` recorded `scatter_84fe89ba` on all eight lanes and the merge, so
+the flat model is observed behaviour and not a reading of the code. **No test caught it**
+because every test supplies one-tether-per-lane rows — the spec's model, not the engine's.
+Principle 6, in the seam between them.
+
+*** CORRECTION TO THE REQS 29/31/32 RECORD ***
+I recorded `validate_gather_reachability`, `terminal_outputs_for_step` and `evaluate_wait` as
+*implemented and covered, not wired*. **Too kind: they were unwireable.** All three take
+`lanes={tether_id: [node, ...]}`, one tether per lane, so under the live model they receive a
+single entry for an eight-lane scatter — `terminal_outputs_for_step` would report one lane
+output where there are eight, and `evaluate_wait` could not address a lane at all. The
+earlier entries stand as written per the append-only rule; this is the amendment.
+
+**Why unification is sequenced before Requirement 19.** Both of 19's limits are uncomputable
+from the live format: `scatter_ef3031e2` has no depth to count, and lanes are not
+individually identified so they cannot be counted across nesting. One change unblocks four
+requirements (19, 29, 31, 32); doing 19 first would create a fourth representation and
+deepen the divergence it is meant to measure.
+
+**The property that makes it safe, and it is the crux.** The flat tether **is** the fan-in
+scope, so naively giving each lane its own tether would break the gather gate — the named
+Principle 2 incident, *"a blanked tether id put a scatter and its merge in different scopes,
+so the gather gate could never open and an 8-lane run deadlocked."* The hierarchy supplies
+both facts the flat form could not: lane identity (`X.1` is this lane) and gather scope
+(`lane_group("X.1") == "X"` is this scatter). The gate moves from *tether equality* to *same
+lane group*, and the seam defines `lane_group(t)` as the **parent** for a hierarchical id and
+**`t` itself** for a flat/legacy one. So every topology already on disk keeps working
+unchanged, because "same lane group" degenerates to the equality the gate already performs.
+That is a migration rather than a break, and it is why the seam must land before the gate
+changes.
+
+**NOT CLAIMED:** no code has changed. The `lane_group` safety argument is **reasoning, not a
+test result** — it becomes a finding when an 8-lane gather is observed closing on a live run.
+The 64-lane number comes from Requirement 19.3 as authored and is **not** validated; it is
+unrelated to `MAX_SCATTER_AGENTS` (8) and `SCATTER_HARD_CAP` (12), which bound *threads*, and
+`flow_engine`'s docstring already draws that distinction correctly — it should survive
+unification.
+**Related:** Req 18.3 and Req 19 (which specify the hierarchy); Reqs 29/31/32 (unblocked by
+the same change); Req 33.5 (the readout defect); the `NAME_{i}` vs `NAME_S{i}` incident in
+Doctrine 4; the blanked-tether deadlock in Doctrine 2; the `--smart` flag in Doctrine 5.
