@@ -4499,3 +4499,305 @@ the change. It is the same honesty limit as defect F3's two-line `nexus_plex` wi
 **Related:** defect F3, which was also a HITL hold whose release path nobody could
 exercise; the `CTRL_REVIEW` accompany-not-replace decision, which touches the same
 function and is still open.
+
+---
+
+# ENTRIES ADDED 2026-09-04 (late) — the memory and cost measurement
+
+**Why these are together.** The operator asked four questions while deciding the
+step-boundary payload contract: is pin-only vectorisation better than full-ledger, what is
+the embedding cost difference, how far off is the breadcrumb-grounding design, and what
+would density-scaled memory pins cost. Answering them required reading the memory and
+embedding path rather than reasoning about it. **The reading falsified enough to change
+which era owns which work.** Full measurement:
+`.kiro_artifacts/2026-09-04_memory_embedding_and_cost_findings.md`. Era consequences
+recorded in the planning map's second revision.
+
+**The operator's own framing, recorded because it is the diagnosis and not an excuse:**
+FinOps was built in a period before it was understood that a coding assistant defaults to
+its training data when writing code *about the models themselves*. That is exactly the
+shape of the first entry below.
+
+***
+
+### Feature Name: Embeddings are billed and recorded as free — the cost surface lies
+**Abstract:** `_FREE_MODEL_KEYWORDS` contains `"gemini-embedding"` with the comment *"embedding models are free"*. `gemini-embedding-001` is **$0.15 per 1M input tokens**. `calculate_actual_cost` short-circuits to `0.0` on the keyword before any rate is consulted, so every embedding the system has ever issued was billed and recorded as zero.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Unfulfilled — **Era 3 tracker #17.** Immediate, because the operator asked the cost question directly and the answer was a false zero.
+**Verified:** Reproduced by inspection. `finops_tools.py:247-253` for the keyword tuple,
+`:310-312` for the short-circuit, `:339-341` for the same in `calculate_predicted_cost`.
+Rate confirmed against
+[Google's GA announcement for Gemini Embedding](https://developers.googleblog.com/gemini-embedding-available-gemini-api/)
+and an independent [pricing listing](https://futureagi.com/llm-cost-calculator/google/gemini-embedding-001).
+*(Content rephrased for compliance with licensing restrictions.)*
+**Prior art:** not applicable — a defect in this codebase.
+
+**Description:**
+**This is the training-data failure mode in one comment.** Embeddings *were* free during
+the preview period a 2024–2025-trained assistant would have learned from, and the comment
+froze that as a permanent fact next to a short-circuit that made it unfalsifiable.
+
+**The fix is harder than deleting the keyword, and the reason matters.**
+`EmbeddingResponse` (`gemini_client.py:155-160`) carries only `.values` — **there is no
+`usage_metadata` on an embedding response at all**, so no provider token count exists to
+bill from. Generation cost works precisely because `promptTokenCount` comes back from the
+API; embeddings have no such number. Correcting this therefore requires estimating tokens
+locally, which the repo cannot currently do (see the measurement entry below). Deleting the
+keyword without that would replace a false zero with a crash or a different false number.
+
+**Scale, so the fix is proportionate.** At $0.15/M with the model's 2,048-token input
+window, one embedding costs at most **$0.000307**. A thousand agent turns is about **31
+cents**. **The defect is the false zero, not the expense.** It matters because an
+accounting surface that reports zero for a billed operation cannot be trusted about
+anything else, and because `vectorize_ledger` fires on *every* agent turn
+(`maccre_router.py:771`) so the count is unbounded even if the unit is trivial.
+
+**Bundled with this task, because they are the same category of untrue operator-facing
+number:** the budget modal (`nexus_plex.py:4800-4826`) tells the operator *"Based on
+historical metrics, the projected API cost is…"* when **no history is consulted** — the
+number is `node_count × output_rate × 20000` — and it **hardcodes
+`gemini-2.5-flash-8b`** regardless of which models the flow will actually run.
+
+**Related:** the measurement entry below, which is its prerequisite; the FinOps engine's
+`_estimate_node_cost`, which reads `output_mtok` and ignores `input_mtok` entirely.
+
+***
+
+### Feature Name: Nothing in the system can measure a payload
+**Abstract:** No tokenizer, no size column in `task_queue` or any telemetry silo, and the two `INFERENCE_COST` rows that *do* carry real provider token counts pass neither `session_id` nor `source_node` — so they are unattributable to a node or a run. `countTokens` exists and its only caller is a burn-in test.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Unfulfilled — **Era 3 tracker #18. Prerequisite of the step-boundary contract (#20).**
+**Blocks:** #20. Also the Era 4 payload manager daemon, whose data layer this is.
+**Verified:** Reproduced by inspection. `telemetry_db.py:92-152` (no bytes/chars column in
+any of the four silos), `local_broker.py:182-231` (`task_queue` holds paths, no sizes),
+`maccre_router.py:396-403` and `:653-663` (the two `INFERENCE_COST` sites, both omitting
+`session_id` and `source_node`), `finops_tools.py:327-374` and
+`maccre_core/tests/story_synthesis_burn_in.py:259` (`countTokens` and its sole caller).
+No tokenizer or chars-per-token heuristic exists anywhere in first-party code.
+**Prior art:** not applicable.
+
+**Description:**
+**Why this must land before #20 rather than alongside it.** The 3b contract enlarges what
+crosses a step boundary. `actual_cost` derives from the provider's own `promptTokenCount`
+(`maccre_router.py:382-390`), so the real bill **will move on its own, with no code
+change** — and `_get_rates` has a long-context tier at 200,000 tokens, so past that the
+*rate* changes too. Landing #20 first would therefore raise the bill while leaving no way
+to say by how much or where. **That is a success claim over unmeasured work**, which is the
+one thing this project has spent Era 3 systematically removing.
+
+**The cheapest high-value piece is attribution, not new instrumentation.** The
+`INFERENCE_COST` rows already carry real `input_tokens` and `output_tokens` from the
+provider. They are simply anonymous. Threading `session_id` and `source_node` through makes
+existing data per-node queryable and costs nothing in new measurement.
+
+**One observation already exists and nothing reads it.**
+`flow_engine.py:2303-2306` logs the unified ledger's size — *"%d chars, %d turns, %d
+pins"* — on every regeneration. It is the only size observation in the codebase and it has
+no consumer.
+
+**Related:** the embedding entry above, whose fix needs a local token estimate this
+provides; the Era 4 payload manager daemon.
+
+***
+
+### Feature Name: The unified ledger's *Extracted Knowledge Triplets* section is permanently empty
+**Abstract:** `flow_engine.py:2188-2196` builds that section by globbing `pin_*_{job_id}*.json`. The only code that writes pin JSON writes `global_pin_{doc_id}.json`, which cannot match a glob anchored on `pin_*`. The section has therefore been a heading with a table header and no rows, for every swarm session, always.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Unfulfilled — **Era 3 tracker #19. Dependency of the step-boundary contract (#20).**
+**Verified:** Reproduced by inspection. Glob at `flow_engine.py:2191`; the three pin-JSON
+writers at `rag_tools.py:396`, `collection_ingest.py:190`, `antigravity_ingest.py:199`, all
+emitting `global_pin_*`. No writer anywhere produces a `pin_<something>_<job_id>.json`.
+**Prior art:** not applicable.
+
+**Description:**
+**Why it is a dependency and not a cosmetic bug.** The 3b contract hands the unified ledger
+forward *as the payload*. Shipping that while this section is permanently empty means
+shipping a payload with a decorative heading — **which is the Requirement 33 readout problem
+wearing different clothes.** Req 33 refused to let the readout assert `source =
+"hydrated_topology"` without checking; the same standard forbids a payload section that
+promises knowledge triplets and delivers a table header.
+
+**The decision is wire-it or remove-it, and it is not obvious.** Wiring it means reading
+the real pin table (`memory_engine.get_pins_by_job`), which is the vector-less table
+carrying `job_id` and `ledger_path` and nothing else. Removing it is honest and loses a
+section the operator may want back the moment Era 4 gives pins locators.
+
+**Found alongside, and worse in its own way.**
+`swarm_worker._load_memory_pins()` (`swarm_worker.py:221-236`) globs `*.json` in the same
+directory — **unfiltered by project and unfiltered by job** — takes the **10 most recently
+modified files**, and pastes their raw text into the system prompt
+(`swarm_worker.py:999-1001`). So what actually reaches an agent as "memory" is whichever
+ten JSON files were touched last, from any project.
+
+***
+
+### Feature Name: The embedding window is 2,048 tokens and nothing chunks — vectors misrepresent their documents
+**Abstract:** `get_gemini_embedding` sets no `outputDimensionality` and there is no chunking anywhere on the embed path. A 68 KB unified ledger is ~17,000 tokens; the API truncates at 2,048. The stored vector represents about **12%** of the document while the store returns **100%** of its text.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Deferred — **Era 4**, as part of the memory overhaul. Recorded in the planning map.
+**Verified:** Reproduced by inspection. `rag_tools.py:62-81` (the sole embedding entry
+point), `gemini_client.py:576-580` (request body: `model`, `content`, `taskType` only),
+`rag_tools.py:120-140` (`ingest_document` embeds a whole file in one call). Window size per
+the pricing listing cited in the embedding entry above. `rag_tools.py:224-227` already
+admits the consequence in a docstring.
+**Prior art:** chunking before embedding is standard RAG practice. No novelty claimed —
+this entry records that MACCRE does not do it.
+
+**Description:**
+**This is the answer to "is pin-only better than full-ledger vectorisation", and the
+reason is not the one anyone assumed.** A ~40-token pin fits inside the window, so its
+vector actually represents it. A 17,000-token ledger's vector does not. The advantage of
+pin-level granularity is **honesty of the index**, not storage or speed. Cost is
+irrelevant to the comparison: the difference is about **two hundredths of a cent per
+session**, and the truncated ledger costs *more* while indexing *less*.
+
+**Two further documentation falsifications found establishing this:**
+- **The "256-dim" claim is false.** `rag_tools.py:64`, `README.md:89` and
+  `MACCRE_Operator_Manual.md:132` all say 256. Nothing requests it; the in-repo RadonVec
+  measurement found the live vectors to be **3072**-dimensional. Storage is
+  dimension-agnostic — `_vec_to_blob` packs `<{len(vector)}f` — which is why the mismatch
+  never raised. Consequence: 12,288 bytes per vector and 4× the pure-Python cosine work on
+  a store that **full-scans the collection on every query**.
+- **Batching exists and has no caller.** `GeminiClient.batch_embed_contents`
+  (`gemini_client.py:593-628`) is unused; every embedding is one serial round-trip.
+
+***
+
+### Feature Name: Memory pins are not vectorised, not indexed, and no tool reads them — the breadcrumb design's retrieval half is absent
+**Abstract:** The operator's grounding design is: read the project's pins, then use a local memory search tool to treat them as breadcrumbs pointing to where a session artifact lives *and where inside it to look*. The `memory_pins` table has **no vector column and no FTS index**, no registered agent tool reads it, and its only locator is a `ledger_path` identical for every pin in a session. There is no node id, offset or anchor.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Deferred — **Era 4**, as one design. Recorded in the planning map with forced sequencing.
+**Verified:** Reproduced by inspection. Schema quoted verbatim at `memory_engine.py:60-75`.
+`get_pins_by_job` (`memory_engine.py:84-89`) has exactly one consumer,
+`project_canon_modal.py:118`. Tool registry (`tool_registry.py:147-199`) contains no
+pin-table reader. Meanwhile `vectorize_ledger` (`rag_tools.py:646-675`) embeds every
+agent's **full** response, wired at `maccre_router.py:771`.
+**Prior art:** treating extracted claims as citations into a source document is ordinary
+retrieval-augmentation practice. No novelty claimed.
+
+**Description:**
+**Both halves of the assumed arrangement are inverted.** The belief was "we stopped
+vectorising full ledgers and only vectorise pins." The code vectorises full agent
+responses on every turn and never vectorises a pin.
+
+**The intra-artifact locator does not merely need refining — it has no representation.**
+And the two things that could supply it are destroyed *before* the pin is written: the
+`### <node_name>` headers in the unified ledger are flattened, and the per-node files in
+`03_Agent_Ledgers/<job_id>/` have already been merged. Fixing this is not a column
+addition; it requires extraction to run **per node** rather than over the flattened
+ledger, which is a change to the extraction contract. That is why it is Era 4 and one
+design.
+
+**Also refuted while here: project memory is not only canonised session data.** Three
+paths write project vector stores without canonisation — `ingest_project`, the
+agent-callable `ingest_document` tool, and `import_foreign_vectors`. The *triplet table* is
+canonisation-only; the *vector corpus* is not.
+
+**And canonisation's own comment is wrong on both halves.** `rag_tools.py:685-687` claims
+*"This is the ONLY place thought-pins are vectorized, keeping per-session cost to zero"* —
+pins are not vectorised there at all, and per-session cost is not zero because
+`vectorize_ledger` embeds every agent output during the run.
+
+***
+
+### Feature Name: Density-scaled memory pins — the money is noise, and doing it now would scale the noise
+**Abstract:** Operator request: scale memory pins to the information density of what is being pinned. The predictive math says the cost delta is about **$0.0005 per canonised session** — five hundred canonisations to the dollar. The constraint is not money. It is that more pins without locators or an index makes recall *worse*.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Deferred — **Era 4**, and sequenced **last** within the memory overhaul.
+**Prior art:** not applicable — a sizing decision about this codebase.
+
+**Description:**
+**The math, with its assumption stated.** ~4 chars/token, because the repo has no
+tokenizer, so these are order-of-magnitude figures superseded the moment `countTokens`
+reaches the execution path. The cost driver is **not the pins** — it is the extraction
+call, `gemini-2.5-flash` over the **entire uncapped ledger**, at $0.075/M in and $0.30/M
+out:
+
+| Scenario | Input | Output | Cost |
+|---|---|---|---|
+| Today (~20 pins) | ~17,000 tok | ~800 tok | **$0.00151** |
+| Density-scaled, chunked, ~3× pins | ~17,000 tok | ~2,400 tok | **$0.00200** |
+
+**Why it is sequenced last rather than merely deferred.** What reaches an agent today is
+the 10 most-recently-modified JSON files in one directory, unfiltered by project. Tripling
+pin density triples the noise in an unfiltered paste. **Density scaling multiplies whatever
+the preceding steps established — signal or noise — so it is worth doing after locators and
+an index exist, and actively harmful before.**
+
+**Two invisible costs recorded while measuring.** The extraction call **bypasses the
+router** (`CognitiveMemoryEngine` holds its own `GeminiClient`), so `calculate_actual_cost`
+is never invoked and its `usage_metadata` is discarded — canonisation currently costs an
+**untracked** Flash call. And the extraction has **no input cap**, unlike
+`ingest_global_archive`'s `text[:30000]`; it is the one path that feeds an unbounded
+document to a model.
+
+***
+
+### Feature Name: A payload manager daemon — payload-as-git, feeding trust scoring
+**Abstract:** Operator design: a daemon monitoring the payload in real time for size, complexity, temporal morphology, Flow Lane version tracking, trust-artifact accumulation, compaction and embedding — *"basically a payload git that plays a role in our total trust scoring system"* — probably surfaced in the Flow Monitor.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Deferred — **Era 4**, with Era 5 consequences noted in the planning map.
+**Prior art:** content-addressed history over a mutating artifact is git's model, named as
+such by the operator. Provenance-carrying payloads are the subject of the agent-provenance
+literature already catalogued in `ATTRIBUTIONS.md`. No novelty claimed.
+
+**Description:**
+**Why Era 4 and not now, stated as a dependency rather than a preference.** Three of the
+daemon's named responsibilities — temporal morphology, lane version tracking, trust-artifact
+accumulation — presuppose that a payload has an **addressable identity across time**. That
+is precisely what Era 4 (*Sessions are addressable*) delivers and Era 3 does not. Building
+the observer before its subject can be addressed would produce a second representation of
+payload state alongside the queue's — the defect class Era 3 has spent its length removing.
+
+**The Era 3 down-payment is real and is tracker #18.** Payload size recorded, input tokens
+attributable to a node and a run. That is the daemon's data layer and it is useful standing
+alone.
+
+**Era 5 possibility, recorded and explicitly not committed.** The daemon's trust-artifact
+accumulation is the mechanism by which Doctrine 1's ceiling — an output's trust bounded
+above by the minimum trust of its inputs — could become **computed rather than asserted**.
+A payload carrying its own input set is a payload whose ceiling is derivable. That is also
+the surface the prior-art search identified as MACCRE's actual case study: fan-in
+aggregation, where a merge node takes eight lane outputs into one document carrying none of
+their trust. Era 5 remains gated on an event-sourced execution history and the gate has not
+moved.
+
+***
+
+### Feature Name: Documented-but-absent — RRF, and five more claims no code supports
+**Abstract:** Five documents describe reciprocal rank fusion in `hybrid_search`. The file is a concurrent vector-plus-Brave fetch joined by **string concatenation**, with no rank arithmetic and no BM25 side. Recorded together with five other claims measurement falsified, each with file and line so the correction is mechanical whenever scheduled.
+**Date/Time Entered:** 2026-09-04T23:30:00-04:00
+**Status:** Unfulfilled — **Era 4** for RRF itself (implement or strike); the documentation corrections are mechanical and unscheduled.
+**Verified:** `hybrid_search.py:103-108` is the whole fusion. Grep for `reciprocal|rrf|RRF`
+returns hits only in `README.md:89`, `MACCRE_Operator_Manual.md:135`,
+`Era3_architectural_roadmap.md:37,117`, `sovereign_agentic_evolution_report.md:70`.
+**Prior art:** RRF is Cormack, Clarke & Buettcher (SIGIR 2009). No novelty claimed — and
+nothing to claim, since it is not implemented.
+
+**Description:**
+**Principle 5 in its rawest form yet found in this repo: five documents assert a mechanism
+that no test covers and no code implements.** Principle 5 admits exactly two resolutions —
+implement it, or delete the claim. There is no third.
+
+**The full falsified set, for whoever schedules the corrections:**
+
+1. **RRF** — five documents, zero code.
+2. **"256-dim" embeddings** — `rag_tools.py:64`, `README.md:89`,
+   `MACCRE_Operator_Manual.md:132`. Actual width **3072**.
+3. **"embedding models are free"** — `finops_tools.py:250`. **$0.15/M.**
+4. **"the ONLY place thought-pins are vectorized… per-session cost to zero"** —
+   `rag_tools.py:685-687`. Wrong on both halves.
+5. **`canonize_session` merges "agent_thoughts and agent_ledgers"** — the loop handles
+   ledgers only.
+6. **`sovereign_store.py`'s module docstring names `thought_pins.db`** while the
+   constructor defaults to `memory_pins.db`.
+
+**Two structural hazards found in passing, both Era 4:**
+- **Two classes are named `SovereignPinStore`** — `memory/sovereign_store.py:126` and
+  `orchestration/memory_engine.py:54` — both defaulting to `memory_pins.db` in the same
+  directory, with **incompatible schemas**. They coexist only because
+  `CREATE TABLE IF NOT EXISTS` is per-table. Principle 4, live and load-bearing.
+- **`fts_query` disables every FTS5 operator it advertises.**
+  `sovereign_store.py:305` wraps the query as `f'"{query_text}"'`, a hard phrase quote,
+  while `fts_search_memory`'s agent-facing docstring (`rag_tools.py:229-231`) promises
+  `AND`, `OR`, `NOT`, `NEAR` and prefix `*`. Every one is inert.

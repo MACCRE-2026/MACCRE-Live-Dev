@@ -831,3 +831,178 @@ the size comes after it** — Principle 7 applied to scope rather than to defect
 - **It does not claim the epochs above were wrong.** They were written on 2026-08-31 from
   the register as it then stood, and the register did not contain the topological vision
   either. The map was accurate about a project whose spec was incomplete.
+
+---
+
+# REVISION — 2026-09-04 (evening): The payload contract narrows, and memory becomes Era 4
+
+**Both sections above are preserved as written.** This revision does not restate the era
+structure — it stands. What changed is the *content* of two eras, established by measuring
+the memory and cost path rather than by planning. Full findings:
+`.kiro_artifacts/2026-09-04_memory_embedding_and_cost_findings.md`.
+
+## 1. Why this revision exists
+
+Era 3's remaining work included *"the payload contract as one design"*, recorded above as
+**Decided, not built**. Implementing it required knowing what a step boundary should hand
+forward. The operator chose a **3b/3c hybrid**: the unified ledger *is* the payload with
+the immediate upstream output labelled inside it, until it exceeds a size ceiling, at which
+point the excess is truncated and semantically distilled back into the ledger.
+
+Answering the cost half of that question meant reading the memory and embedding path. That
+reading falsified enough to change what belongs in which era.
+
+## 2. What the measurement found, in one paragraph each
+
+**Embeddings are billed and recorded as free.** `_FREE_MODEL_KEYWORDS` contains
+`"gemini-embedding"` with the comment *"embedding models are free"*.
+`gemini-embedding-001` is **$0.15 per 1M input tokens**. This is the operator's own
+diagnosed failure mode — embeddings *were* free in the preview window a 2024-2025-trained
+assistant learned from — and the comment froze it as a permanent fact.
+
+**The embedding window is 2,048 tokens and there is no chunking.** A 68 KB ledger is
+~17,000 tokens, so its vector represents about **12%** of the document while the store
+returns 100% of the text. Not inefficiency — a vector that misrepresents what it indexes.
+
+**Memory pins are not vectorised at all.** The `memory_pins` table has no vector column
+and no FTS index; no agent tool reads it; its single consumer is a TUI modal. Meanwhile
+`vectorize_ledger` embeds every agent's full response on every turn. Both halves of the
+assumed arrangement were inverted.
+
+**The breadcrumb design's retrieval half does not exist.** Pins carry `job_id` and
+`ledger_path` — identical for every pin in a session — and no node id, offset or anchor.
+The two things that could supply an intra-artifact locator are destroyed before the pin is
+written. What actually reaches an agent is the **10 most-recently-modified JSON files** in
+one directory, unfiltered by project.
+
+**Nothing can measure a payload.** No tokenizer, no size column in any schema, and the
+`INFERENCE_COST` telemetry rows carry real token counts with **no `session_id` and no
+`source_node`**, so they are unattributable. `countTokens` exists and its only caller is a
+burn-in test.
+
+**Pin and embedding economics are noise.** Full-ledger vs pin embedding differs by about
+**two hundredths of a cent** per session. Density-scaled pins would add about **$0.0005**
+per canonisation — five hundred canonisations to the dollar. **Cost is not the constraint
+on any memory decision here.** Retrieval honesty is.
+
+## 3. Era 3 — the *"Still required"* table, revised
+
+The row *"The payload contract as one design"* is **split**. Part one landed on 2026-09-04
+(commit `9624878`): one seam names the payload modes, `Preceding Node Only` became a real
+branch, and two defects it exposed were fixed. What remains is the step boundary itself,
+plus three prerequisites the measurement surfaced.
+
+| Still required before the dev break | Status |
+|---|---|
+| Repeal Requirement 19.4; a step's output is a **set** | **DONE** 2026-09-04 (`76474c2`) — Reqs 29.2/29.6/30 built |
+| Pre-launch validation: paradox detection and total-sum readout | **DONE** 2026-09-04 (`e8746f3`) — Req 33 built, **not wired** |
+| Payload modes named once; `Preceding Node Only` real | **DONE** 2026-09-04 (`9624878`) — part one of the contract |
+| **Embeddings are billed, not free — correct the cost surface** | **NEW.** Prerequisite: the operator asked the cost question and the answer was a false zero |
+| **Make payload cost measurable before changing it** | **NEW.** Prerequisite: `INFERENCE_COST` attribution + payload size. Without it the 3b change is a success claim over unmeasured work |
+| **The ledger's *Extracted Knowledge Triplets* section is permanently empty** | **NEW.** Dependency: 3b hands this ledger forward; a decorative heading in a payload is the Req 33 readout problem in different clothes |
+| The step-boundary payload contract — **3b with a ceiling** | Specified by decision, not built. **Distillation deferred to Era 4** (§4) |
+| Cross-lane routing — containment tree to routing graph | Not built |
+| `CTRL_WAIT` | Declared `ComingSoon` in the registry; not built |
+| Nested scatter with enforced depth and lane limits | Partly specified |
+| Phase 4.99 certification of all of the above | UT-1 4/6, UT-0 unblocked and not begun |
+
+**The exit criterion is unchanged.** Nothing in this revision moves the dev break; it
+narrows what has to be true before it.
+
+**Why truncation stays in Era 3 and distillation does not.** Truncation is deterministic,
+cheap and measurable — a ceiling, a cut, and a marker stating plainly that content was
+dropped. Distillation is *an inference call per step boundary*, whose cost is currently
+unmeasurable (§2) and whose value is unquantifiable until the payload daemon exists. The
+Era 3 slice therefore builds the ceiling, the cut, and a **named, tested seam** where the
+distiller plugs in. Building the expensive half before it can be measured is how the FinOps
+engine came to contain a hand-rolled cost calculator next to a response object that
+already held the real numbers.
+
+## 4. Era 4 — *Sessions are addressable* — gains the memory overhaul
+
+Era 4 begins after the dev break. Its defining capability is unchanged: an external
+process can enumerate, address and read any session. The following is **added** to it, at
+the operator's direction, as **one design rather than a list of fixes** — the same
+discipline that the payload contract itself required.
+
+### 4.1 The memory overhaul
+
+| Item | Why it belongs here and not earlier |
+|---|---|
+| **Pin locators** — node id, section anchor, character span | Requires extraction to run **per node** rather than over the flattened ledger. Changes the extraction contract, not a field |
+| **Pin vectorisation and indexing** | A pin cannot be a breadcrumb until something can find it. Needs a vector column and an FTS table on `memory_pins` |
+| **An agent tool that reads the pin table** | Today zero tools do. The breadcrumb design has no entry point without one |
+| **Chunking on the embed path** | The 2,048-token truncation makes every long-document vector a claim about its first 12%. This is the single highest-value retrieval fix in the system |
+| **One `SovereignPinStore`** | Two classes share a name, a default filename and a directory, with incompatible schemas. Principle 4, live |
+| **RRF: implement or strike** | Five documents describe reciprocal rank fusion; the code is string concatenation. Either build it or delete the claim — Principle 5 admits no third option |
+| **Density-scaled memory pins** | The operator's request. Costs ~$0.0005/session, so **money is not the blocker** — it is strictly harmful before locators and an index exist, because it scales the noise in an unfiltered 10-file paste |
+| **`fts_query`'s phrase-quote bug** | It disables every FTS5 operator the agent-facing docstring advertises |
+
+**Sequencing inside 4.1 is forced, not chosen.** Chunking and locators come first because
+they change what a stored record *is*; vectorisation and the tool come second because they
+are how it is found; density scaling comes last because it multiplies whatever the previous
+steps established, noise included.
+
+### 4.2 The payload manager daemon
+
+The operator's description: a daemon monitoring the payload in real time — size,
+complexity, temporal morphology, Flow Lane version tracking, trust-artifact accumulation,
+compaction and embedding — *"basically a payload git that plays a role in our total trust
+scoring system"*, probably surfaced in the Flow Monitor.
+
+**Recorded here rather than in Era 3, with the reason stated.** The daemon is an *observer
+of addressable payload history*. Three of its named responsibilities — temporal
+morphology, lane version tracking, trust-artifact accumulation — presuppose that a payload
+has an addressable identity across time, which is exactly what Era 4 delivers and Era 3
+does not. Building the observer before the thing it observes can be addressed would produce
+a second representation of payload state alongside the queue's, which is the defect class
+this project has spent Era 3 removing.
+
+**The Era 3 down-payment on it is the measurement**, listed in §3: payload size recorded,
+input tokens attributable to a node and a run. That is the daemon's data layer, and it is
+useful on its own.
+
+### 4.3 What Era 4 inherits from Era 3's deferral
+
+The **distillation half of the 3b/3c hybrid.** The seam will exist, tested and empty. Era 4
+fills it, and can then answer the question Era 3 cannot: *what did the distillation save,
+and did the receiving agent do better or worse for it?*
+
+## 5. Era 5 — *Knowledge carries its origin* — possibilities noted, not scheduled
+
+Era 5 remains gated on an event-sourced execution history. The memory findings bear on it,
+so they are recorded here as **possibilities rather than plans**, explicitly unsized:
+
+- **Trust scoring has a natural home in the payload daemon.** The daemon's
+  trust-artifact accumulation tracking is the mechanism by which Doctrine 1's ceiling —
+  an output's trust bounded above by the minimum trust of its inputs — could become
+  *computed* rather than asserted. A payload that carries its own input set is a payload
+  whose ceiling is derivable.
+- **Fan-in aggregation is the surface the register already names.** The prior-art search
+  established that the laundering threat model is thoroughly covered in the literature for
+  agent memory and tool-call boundaries, and that MACCRE's instance — a merge node taking
+  eight lane outputs into one document carrying none of their trust — is a different
+  *place*, not a different idea. The payload daemon is where that place gets instrumented.
+- **Pin locators are a provenance primitive, not just a retrieval convenience.** A pin that
+  can name the node and span it came from is a citation. A pin that names only the session
+  is a claim. Era 4's locator work is therefore a precondition for Era 5 having anything
+  to attach a warrant to.
+- **Chunking changes what provenance can even mean.** While one vector represents a
+  document's first 12%, a retrieval hit cannot honestly cite the document. Era 4's chunking
+  is what makes a citation checkable.
+
+**None of the above is a commitment.** Era 5 is gated, and the gate has not moved.
+
+## 6. What this revision does not do
+
+- **It does not fix any of the six false documentation claims it records** (§7.3 of the
+  findings artifact). They are recorded with file and line so the fix is mechanical
+  whenever it is scheduled; three of them sit in documents this revision does not own.
+- **It does not size Era 4.** Same reason as Era 3: the memory overhaul's parts are
+  unspecified in exactly the places that matter, and sizing unspecified capability is how
+  the untracked Era 3 items happened.
+- **It does not move the dev break.** Era 3's exit criterion is unchanged.
+- **It does not re-derive the cost figures.** Every dollar amount rests on a ~4 chars/token
+  estimate, because the repo has no tokenizer. They are order-of-magnitude claims and are
+  superseded the moment `countTokens` reaches the execution path — which is itself an Era 3
+  item now.
