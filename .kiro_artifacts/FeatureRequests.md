@@ -5565,3 +5565,131 @@ unification.
 **Related:** Req 18.3 and Req 19 (which specify the hierarchy); Reqs 29/31/32 (unblocked by
 the same change); Req 33.5 (the readout defect); the `NAME_{i}` vs `NAME_S{i}` incident in
 Doctrine 4; the blanked-tether deadlock in Doctrine 2; the `--smart` flag in Doctrine 5.
+---
+### Feature Name: The one tether seam — and the `lane_group` property that turns a breaking change into a migration
+**Abstract:** New pure module `maccre_core/orchestration/tether.py` owns the tether ID: what a lane is called, how deep it is nested, and **which gather scope it belongs to**. Built to collapse three representations into one. The load-bearing design is `lane_group(t)`, which returns the **parent** for a hierarchical id and **`t` itself** for a flat one — so for every tether ID already on disk `lane_group(t) == t`, and moving the fan-in gate from *tether equality* to *same lane group* is provably a no-op for every saved topology.
+**Date/Time Entered:** 2026-09-05T17:25:00-04:00
+**Status:** COMPLETED — *the seam.* **Zero importers, deliberately.** Nothing calls it; 4c wires the gate.
+**Completed:** 2026-09-05T17:25:00-04:00
+**Completion Metric:** `TETHER_LEVEL_SEPARATOR`, `FORBIDDEN_IN_TETHER_ID`,
+`NESTING_DEPTH_WARN_AT`, `MAX_CONCURRENT_LANES`, `ROOT_TETHER_IDS`, `TetherIdError`,
+`validate_tether_id`, `is_hierarchical`, `depth`, `level_count`, `lane_group`,
+`is_descendant_of`, `root_tether_id`, `child_tether_ids`, `count_lanes`, `lanes_by_group`
+in `maccre_core/orchestration/tether.py`. `tests/test_tether.py` — **101 tests, eleven
+groups**. Gate 2026-09-05: `omni clean` 17:05 (299 bytecode), `omni qa` **PASS whole
+project** 17:06:24, pytest **1314 collected / 1312 passed / 2 xfailed / 0 failed** in
+172.28 s. Reconciles against 1213/1211/2: `1213 + 101 = 1314`, `1211 + 101 = 1312`, xfailed
+unchanged at 2. **`omni smoke` NOT run** — nothing on an execution path changed; the module
+has zero importers outside its test, and the last smoke passed after the most recent
+execution-path change (`deterministic_nodes.py`). **4c is the change that needs smoke.**
+
+**`lane_group` is the whole design, and its legacy case is not a fallback.** The flat
+tether *is* the gather scope — one value on the scatter, every lane and the merge, matched
+by equality — so it can express "same scatter" but not "which lane". Per-lane *flat* ids
+would express identity and destroy the scope, which is the measured 8-lane deadlock. A
+hierarchy carries both:
+
+| Input | `lane_group` | Meaning |
+|---|---|---|
+| `X.1` | `X` | lane 1 gathers at scatter X |
+| `X.1.2` | `X.1` | nested lane gathers one level up |
+| `X` | `X` | a root scatter is its own scope |
+| `scatter_84fe89ba` | `scatter_84fe89ba` | legacy flat, unchanged |
+| `tether_a` | `tether_a` | legacy flat, unchanged |
+
+**A root returning itself and a flat id returning itself are the SAME case, not two.** A
+top-level scatter *is* its own gather scope — exactly what the flat scheme encoded for
+everything — so there is **no legacy branch to keep correct**, just one
+`if separator in text`. The migration property falls out of it, and
+`test_equality_and_same_lane_group_agree_on_a_legacy_scatter` asserts it by collecting the
+ten rows of a legacy 8-lane scatter both ways and comparing.
+
+**Generation is pure — a deliberate deviation from `design.md`,** which specifies a
+stateful `TetherIDGenerator` with counters and a `threading.Lock`. The argument is already
+in this repo: `_default_tether_id`'s docstring records that its predecessor was keyed on a
+CPython object address and that **the auto-wrap runs twice per step, so the tether
+validated was not necessarily the tether executed.** A locked counter reintroduces that in
+milder form — the id depends on how many times the generator has been called. Derivation
+needs no counter and no lock.
+
+*** A DEFECT MY OWN TEST CAUGHT ***
+`root_tether_id`'s first bijective base-26 started at 1, emitting single letters `A`–`Z` for
+indices 3–28 — and **index 26 produced `X`, colliding with root index 0.** Two different
+roots sharing one tether ID is precisely the defect class this module exists to remove. It
+was caught by `test_no_two_indices_collide`, not by review. Offset now starts at 27 (`AA`),
+with the reason at the line and the guard kept as a permanent test.
+
+**`FORBIDDEN_IN_TETHER_ID` = {`@`, `>`, `,`, `|`} is derived from existing seams, not
+invented tidiness.** `@` would make a lane unaddressable through
+`parse_tether_qualified_ref`; `>` would forge a `flow_vector` lineage hop; `,` and `|` are
+both accepted by `parse_targets`, so either would split one lane into two names in
+`Wait_For`. Asserted **against the other module's constants**, then every valid tether form
+is round-tripped through `parse_tether_qualified_ref` — the real invariant being that a
+lane this module accepts can be named in a cross-lane route.
+
+**Requirement 19.2's prose contradicts its own worked example, reconciled explicitly rather
+than chosen between.** 19.2 says "3 levels (root → child → grandchild)"; `design.md` says
+`parse_depth("X.1.2") → 2`. Same tether, counted as 3 *levels* or 2 *separators*. `depth()`
+counts separators (the spec's only precise statement), `NESTING_DEPTH_WARN_AT = 2` is in
+that reading, and `level_count()` exists for the prose reading. Two tests pin
+`level_count == depth + 1` and that both describe the same tether — so the readings cannot
+drift into independent definitions, which is how this divergence began.
+
+**`is_descendant_of` compares levels, never prefixes.** `"X.10".startswith("X.1")` is True;
+a prefix test would fold lane 10 into lane 1's gather scope on any scatter wider than nine
+lanes. The test asserts the trap is real *and* that the function is not fooled.
+
+**Rejected:** the stateful generator (validate-then-execute mismatch, plus a lock);
+per-lane flat ids (destroys the scope); a schema-version flag (the separator is
+self-identifying, and a flag is a second representation of a fact the id already carries);
+a migration pass rewriting saved tether IDs (irreversible, touches operator data, and
+unnecessary — `child_tether_ids` works on a flat parent, so a saved topology gains per-lane
+tethers **in place** whose `lane_group` is the value the merge row already carries);
+refusing interior spaces (would refuse ids on disk); putting this in `topology_graph` (that
+owns the *graph*, this owns an *identifier*, and the TUI needs one without the other).
+
+**LIMITS. Nothing calls it, and that is this task's design.** 4c moves the gather gate onto
+`lane_group` separately, so the riskiest edit in the repository is reviewable and
+smoke-gated on its own. **The migration property is proven in unit tests, not a live run** —
+asserted over the id *formats* observed on disk; it becomes a finding when an 8-lane gather
+is observed closing after 4c. **No per-lane tether has ever existed at runtime**; every
+hierarchical id in these tests is hand-built. **`MAX_CONCURRENT_LANES = 64` is Req 19.3 as
+authored and is not validated** — the test pins that it differs from the thread caps, not
+that 64 is right. **`NESTING_DEPTH_WARN_AT` has no consumer** — 19.2's warning is a TUI
+affordance; this only fixes what the number means.
+**Related:** the tether-model divergence record; Req 18.3/18.4 and Req 19 (which specify
+the hierarchy); Reqs 29/31/32 (whose one-tether-per-lane contract this makes reachable);
+Req 33.5 (the readout defect, task 4e).
+---
+### Feature Name: OPEN — the demand over-provisioning hang, third occurrence, caught live and still not root-caused
+**Abstract:** `test_a_real_burst_still_reaches_full_width` hung a third time (3 of 8 full-suite runs on 2026-09-05). This occurrence was observed live for 7 minutes: 4 of 8 dots, 8 threads held, CPU climbing 158.5 s → 181.8 s across 30 s of wall, against a code path whose own ceiling is 90 s. One new observation, deliberately under-claimed.
+**Date/Time Entered:** 2026-09-05T17:25:00-04:00
+**Status:** OPEN — **cause still not found.** Amends the earlier entry with a third data point and one weak signal.
+**Completion Metric:** Not complete. Needs a captured mid-hang thread stack or a controlled
+reproduction.
+
+**This occurrence, measured.** Suite started 17:06:45. Stalled at 4 of 8 dots. Still stalled
+at 17:13:48 — **7 minutes** — with 8 threads held and CPU climbing 158.5 s → 181.8 s across
+30 s of wall, about two-thirds of a core. `run_until_drained` is called with
+`timeout_seconds=60` and its `finally` calls `_join_all`, bounded at 30 s, so the path
+exceeded its own **90 s ceiling roughly fivefold**. Terminated on three corroborating
+signals.
+
+**The new observation, and I am NOT claiming it is the cause.** All **three** runs launched
+under the `faulthandler.dump_traceback_later` instrument have completed healthily, while
+**three of five** uninstrumented runs hung. That is either coincidence at n=8, or a sign
+that running via `pytest.main()` in-process rather than `python -m pytest` perturbs timing
+enough to hide it. With this sample size it is a hypothesis, not a finding — recorded so
+the next attempt does not mistake three healthy instrumented runs for evidence the hang is
+gone.
+
+**Fuse calibration, for whoever picks this up:** a healthy run is ~172–180 s and the hang
+manifests 80–110 s in, so a 300 s fuse fires only when hung. An earlier 150 s fuse killed a
+healthy run at 80%.
+
+**Unchanged recommendation, still not done:** give the test a hard per-test bound so it
+**fails loudly instead of hanging**. Strictly better regardless of cause, and it converts an
+indefinite CI stall into a diagnosable failure.
+**Related:** the first two occurrences and the withdrawn `omni clean` attribution; defect F3
+(a hold nobody could release that ran out a 3600 s budget and then reported `completed`);
+defect F2 (the construction storm this test's module guards).
