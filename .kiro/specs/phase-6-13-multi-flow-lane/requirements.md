@@ -745,6 +745,76 @@ undescribed
 
 ---
 
+### Requirement 34: The Step-Boundary Payload Contract
+
+**User Story:** As a flow author, I want a step to hand the next step the session context it was
+authored to expect **alongside** the immediate upstream output rather than instead of it, and I want
+that document bounded so a long run cannot make every later hop progressively more expensive.
+
+**Operator's decision, recorded verbatim in intent:** the unified ledger *is* the payload, with the
+immediate upstream output identified inside it (option **3b**), until it grows too large, at which
+point the excess is truncated and — eventually — semantically distilled back into the ledger
+(option **3c**). *"Basically 3b, until it gets too big and it turns 3c."*
+
+#### Acceptance Criteria
+
+34.1. THE Flow_Engine SHALL compose a step-boundary payload by **extending the existing dual-payload
+composition** in `swarm_worker` — the `[SOURCE DOCUMENT]` / `[PREVIOUS NODE OUTPUT]` block — with a
+third labelled section, and SHALL NOT introduce a second concatenation site
+
+34.2. WHEN a successor's Payload_Mode resolves to `Unified Ledger`, THE Flow_Engine SHALL identify
+the immediate upstream output **within** the accompanying context rather than passing it as a
+separate duplicate copy of the same text
+
+34.3. THE Flow_Engine SHALL NOT exceed a declared character ceiling for the accompanying context,
+and the ceiling SHALL be a named constant rather than a literal at the point of use
+
+34.4. WHEN the accompanying context exceeds the ceiling, THE Flow_Engine SHALL truncate it and
+SHALL state in the payload itself that content was removed, how much, and that it was **not**
+distilled
+
+34.5. THE Flow_Engine SHALL retain the **most recent** turns when truncating, and SHALL state that
+ordering choice in the payload, because a reader cannot otherwise know which end was dropped
+
+34.6. THE Flow_Engine SHALL expose a **named seam** for semantic distillation of truncated content,
+SHALL leave it unimplemented, and SHALL NOT silently substitute truncation for distillation in any
+message describing the payload
+
+34.7. FOR ALL step boundaries, THE Flow_Engine SHALL record the composed payload's size through the
+existing `payload_bytes` measurement so a before-and-after comparison is possible
+
+> **Design note — 34.1 is a Principle 4 constraint, not a style preference.** `swarm_worker` already
+> composes two documents into one payload with labelled sections, for the source-versus-previous
+> case. That block *is* accompany-not-replace, already written, already exercised on every multi-hop
+> flow. A second concatenation elsewhere would be a second representation of "how a payload is
+> assembled", and the two would drift — which is precisely how the TUI and the engine came to
+> disagree about node ids.
+
+> **Design note — 34.2 exists because the ledger already contains the upstream output.** The unified
+> session ledger is assembled from every agent ledger in the job, so "terminal output **plus** the
+> session ledger" would send the upstream output **twice**: once alone and once inside the ledger,
+> at every hop. Across a multi-step flow that is not linear growth. Identifying the section rather
+> than duplicating the text preserves lineage as an *assertion* at a fraction of the tokens.
+
+> **Design note — 34.4 and 34.6 are the honesty clauses, and they are separable on purpose.**
+> Truncation is deterministic, cheap, and measurable. Distillation is an inference call **per step
+> boundary**, whose cost cannot currently be measured and whose value cannot be quantified until the
+> payload manager daemon exists (Era 4). So Era 3 builds the ceiling, the cut, and a marker that says
+> plainly *"content was removed and not distilled"* — and stops. A payload claiming to be distilled
+> when it was merely cut would be Principle 3 inside the document the next agent reasons from, which
+> is the worst available place for it. Building the expensive half before it can be measured is how
+> the FinOps engine came to hold a hand-rolled cost calculator beside a response object that already
+> carried the real numbers.
+
+> **Known limitation, recorded before the work rather than after.** The *before* number for this
+> change was **never captured and cannot be captured retroactively.** `payload_bytes` and
+> per-node `INFERENCE_COST` attribution both landed on 2026-09-05 (tracker #18) and no live flow has
+> run since. Once 34.1–34.5 are implemented, "what did the new contract cost" is answerable only
+> against a baseline taken *first*. Any cost claim made without one is a claim about unmeasured
+> work.
+
+---
+
 ## Traceability
 
 | Amendment | Supersedes | Depends on | Blocks |
@@ -754,6 +824,7 @@ undescribed
 | Req 31 — cross-lane routing | — | Req 18 | Req 32 |
 | Req 32 — `CTRL_WAIT` | — | Req 29, 30, 31 | Phase 4.99 |
 | Req 33 — pre-launch validation and readout | — | Req 29, 31, 32 | Phase 4.99, Req 19.1–19.3 enforcement |
+| Req 34 — step-boundary payload contract | — | Req 30, the payload mode seam, `payload_bytes` | Phase 4.99, Era 4 distillation |
 
 **Not specified here, deliberately:** the *authoring surface* for Gather Strategy, cross-lane route
 targets and `CTRL_WAIT` configuration. Those belong with the authoring-ownership decision (Era 2),

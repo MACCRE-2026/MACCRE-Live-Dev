@@ -5122,3 +5122,83 @@ sits inside an active Drive sync (a recorded Doctrine 8 finding).
 project-wide convention set by the 2026-09-02 exposure audit is that user-profile paths do
 not appear in tracked files even in redacted form. The scanner flags the pattern itself,
 which is the correct behaviour and caught this on the first pass.)*
+
+---
+
+### Feature Name: The step-boundary payload contract — 3b with a ceiling, built and deliberately unwired
+**Abstract:** Requirement 34 specified and **six of its seven criteria implemented**. The unified session ledger *is* the payload, with the immediate upstream output identified **inside** it rather than sent as a second copy, bounded at 120,000 characters, truncated beyond that with a notice stating it was **not** distilled. The seventh criterion is the wiring, and its red marker is the record that it is outstanding.
+**Date/Time Entered:** 2026-09-05T13:55:00-04:00
+**Status:** COMPLETED — *the mechanism.* **Not wired: no live flow composes payloads this way.**
+**Completed:** 2026-09-05T13:55:00-04:00
+**Completion Metric:** Requirement 34 in
+`.kiro/specs/phase-6-13-multi-flow-lane/requirements.md` (7 criteria, 3 design notes, a
+stated limitation, traceability row). New
+`maccre_core/orchestration/payload_contract.py` — `compose_step_payload`,
+`describe_step_payload`, `distil_truncated_context`, `ACCOMPANYING_CONTEXT_CHAR_CEILING`,
+`TRUNCATION_NOTICE`. `tests/test_payload_contract.py` — **31 tests**. **6 of 7**
+`xfail(strict=True)` markers removed after XPASS; **34.1 retained red**. **Revert-to-red:**
+changing the notice to claim distillation reddened **two** tests — the real coverage and the
+spec marker. Gate 2026-09-05: `omni clean` 13:12, `omni qa` **PASS whole project** 13:50,
+pytest **1096 collected / 1085 passed / 11 xfailed / 0 failed** in 168.84s. `omni smoke` not
+run, reason stated: nothing on an execution path changed and this module has no importer.
+Collected 1058 → 1096 reconciles exactly.
+**Prior art:** bounding a context window and keeping the most recent turns is standard
+practice in conversational agents, and this repo already has a turn-window helper
+(`text_tools.truncate_history`). No novelty claimed. What is recorded here is the *honesty*
+requirement — that a cut must not describe itself as a summary — and the decision to reuse an
+existing threshold rather than invent a second one.
+
+**Description:**
+
+**Why 3b rather than 3a, and it is measured rather than preferred.** Option 3a — the session
+ledger accompanying the terminal output as its own section — was rejected because **the
+ledger already contains the upstream output.** It is assembled from every agent ledger in
+the job, so sending both would carry the same prose twice at every hop; across a multi-step
+flow that is not linear growth. 3b identifies the upstream section instead, so lineage
+survives as an **assertion** at a fraction of the tokens.
+
+**The ceiling is in characters, deliberately.** There is no tokenizer in this repository and
+the only exact count is a `countTokens` network call that is not on the execution path. A
+token-denominated ceiling would be a character count divided by a heuristic and *called* a
+token count — a worse claim than the plain measurement. **120,000 reuses the threshold
+`maccre_router`'s context-cache heuristic already uses**, so the system holds **one** notion
+of "this context is big" rather than two free to drift. At ~4 chars/token that is near 30k
+tokens, an order of magnitude below the 200,000-token long-context tier, so the contract
+cannot silently move a flow onto a higher input *rate* — asserted against
+`_LONG_CTX_THRESHOLD` rather than a literal.
+
+**Truncation states that it did not distil, and that is the load-bearing clause.** A payload
+merely cut while implying it had been summarised would be a success claim over work that did
+not happen, **inside the one document the next agent reasons from** — the worst available
+place for it. The phrase lives in a module constant so it cannot be softened at one call
+site.
+
+**The distillation seam returns `None`, and that is the implementation rather than a stub.**
+Distillation is an inference call *per step boundary*, whose cost cannot be measured today
+and whose value cannot be quantified until the Era 4 payload daemon can say what a smaller
+payload bought. It **deliberately does not fall back to returning its input**: a seam that
+quietly handed back the removed text would make "distilled" true by redefinition and every
+message describing the payload would go false at the same moment. The call site is real —
+`compose_step_payload` offers the removed text and branches on `None`, so Era 4's
+implementation is a change to one line plus the notice.
+
+**What is NOT true today, and why stopping here is a measurement decision rather than
+caution.** Requirement **34.1** — `swarm_worker` delegating to this module — is not
+implemented. `test_the_worker_composes_through_the_one_seam` asserts that delegation and is
+still `xfail(strict=True)`, so it breaks the gate the moment wiring lands.
+
+The reason: **`payload_bytes` and per-node `INFERENCE_COST` attribution landed on
+2026-09-05 and no live flow has run since, so the *before* number for this contract does not
+exist and cannot be obtained retroactively.** Once the contract changes, "what did it cost"
+is answerable only against a baseline taken first. **A baseline run is an operator action,
+and it is the one thing blocking 34.1.**
+
+**Also unvalidated: the ceiling has never met a real ledger.** 120,000 characters is
+justified by reuse and by the billing tier, not by evidence about what a receiving agent
+does better or worse with. The 68 KB ledger observed on the live `tjrd` run sits comfortably
+under it — meaning **truncation would not have fired on that run at all**, and the
+truncation path is entirely unexercised outside tests.
+
+**Related:** Req 30 (a step's output is a set), which this consumes; the payload mode seam,
+which made `Preceding Node Only` conditionable; tracker #18, which supplies the measurement
+this is waiting on; the Era 4 payload manager daemon, which inherits the distillation seam.

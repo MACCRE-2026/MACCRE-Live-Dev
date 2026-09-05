@@ -38,6 +38,8 @@ graph came to be proposed.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 # ── Requirement 29 — lanes may terminate without merging ─────────────────────
@@ -330,3 +332,132 @@ class TestReq33PreLaunchValidation:
 
         readout = total_sum_readout(topology_rows=[], step_index=0)
         assert readout["source"] == "hydrated_topology"
+
+
+# ── Requirement 34 — the step-boundary payload contract ──────────────────────
+
+
+class TestReq34StepBoundaryPayloadContract:
+    """3b with a ceiling: the ledger *is* the payload, bounded, honestly marked.
+
+    Written red on 2026-09-05, before implementation, so each criterion has a test that
+    fails until the capability exists — and `strict=True` so the moment one starts
+    passing the marker itself breaks the gate and has to be removed deliberately.
+
+    **The limitation these markers carry, recorded before the work rather than after:**
+    the *before* number for this change was never captured and cannot be captured
+    retroactively. `payload_bytes` and per-node `INFERENCE_COST` attribution both landed
+    on 2026-09-05 and no live flow has run since. Once this is implemented, "what did the
+    new contract cost" is answerable only against a baseline taken first.
+    """
+
+    @pytest.mark.xfail(strict=True, reason="Req 34.1: not wired — see the module docstring")
+    def test_the_worker_composes_through_the_one_seam(self) -> None:
+        """34.1 — extend the existing dual-payload block, do not add a second.
+
+        Principle 4. `swarm_worker` already composes two documents into one payload with
+        labelled sections; that block *is* accompany-not-replace, already exercised on
+        every multi-hop flow. A second concatenation would be a second representation of
+        "how a payload is assembled", and the two would drift.
+
+        **This marker is deliberately the last to fall, and it is doing a job while red.**
+        34.1 is the only criterion that cannot be satisfied by a pure module — it is a
+        statement about the *worker delegating*, which means changing what a live flow
+        sends. And that change is irreversible in one specific way: `payload_bytes` and
+        per-node `INFERENCE_COST` attribution landed on 2026-09-05 with no live run since,
+        so the **before** number does not exist and cannot be obtained once the contract
+        changes.
+
+        So this red marker *is* the "not wired yet" record, enforced mechanically rather
+        than written in a comment somebody has to trust. It falls when a baseline run has
+        been taken and the wiring is done deliberately.
+        """
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "maccre_core" / "orchestration" / "swarm_worker.py"
+        ).read_text(encoding="utf-8")
+        assert "compose_step_payload(" in source
+
+    def test_the_upstream_output_is_identified_not_duplicated(self) -> None:
+        """34.2 — the ledger already contains it; sending it twice is the whole cost.
+
+        The unified session ledger is assembled from every agent ledger in the job, so
+        "terminal output plus the session ledger" would carry the upstream output twice
+        at every hop.
+        """
+        from maccre_core.orchestration.payload_contract import compose_step_payload
+
+        ledger = "## AGENT_A_S0\nupstream prose here\n\n## AGENT_B_S0\nlater prose\n"
+        composed = compose_step_payload(
+            session_context=ledger, upstream_node="AGENT_A_S0", source_document="",
+        )
+        assert composed.count("upstream prose here") == 1
+        assert "AGENT_A_S0" in composed
+
+    def test_the_ceiling_is_a_named_constant(self) -> None:
+        """34.3 — not a literal at the point of use."""
+        from maccre_core.orchestration.payload_contract import (
+            ACCOMPANYING_CONTEXT_CHAR_CEILING,
+        )
+
+        assert isinstance(ACCOMPANYING_CONTEXT_CHAR_CEILING, int)
+        assert ACCOMPANYING_CONTEXT_CHAR_CEILING > 0
+
+    def test_truncation_says_it_truncated_and_did_not_distil(self) -> None:
+        """34.4 — the honesty clause.
+
+        A payload claiming to be distilled when it was merely cut would be Principle 3
+        inside the document the next agent reasons from.
+        """
+        from maccre_core.orchestration.payload_contract import (
+            ACCOMPANYING_CONTEXT_CHAR_CEILING,
+            compose_step_payload,
+        )
+
+        oversized = "x" * (ACCOMPANYING_CONTEXT_CHAR_CEILING * 3)
+        composed = compose_step_payload(
+            session_context=oversized, upstream_node="A_S0", source_document="",
+        )
+        lowered = composed.lower()
+        assert "truncated" in lowered
+        assert "not distilled" in lowered
+
+    def test_the_most_recent_turns_are_kept_and_it_says_so(self) -> None:
+        """34.5 — a reader cannot otherwise know which end was dropped."""
+        from maccre_core.orchestration.payload_contract import (
+            ACCOMPANYING_CONTEXT_CHAR_CEILING,
+            compose_step_payload,
+        )
+
+        oldest = "OLDEST_MARKER"
+        newest = "NEWEST_MARKER"
+        filler = "y" * (ACCOMPANYING_CONTEXT_CHAR_CEILING * 2)
+        composed = compose_step_payload(
+            session_context=f"{oldest}\n{filler}\n{newest}",
+            upstream_node="A_S0", source_document="",
+        )
+        assert newest in composed
+        assert oldest not in composed
+        assert "most recent" in composed.lower()
+
+    def test_the_distillation_seam_exists_and_is_honestly_empty(self) -> None:
+        """34.6 — named, unimplemented, and never conflated with truncation.
+
+        Deliberately asserts that the seam returns ``None``: Era 3 builds the place, and
+        Era 4 fills it. A seam that quietly returned the truncated text would make
+        "distilled" true by redefinition.
+        """
+        from maccre_core.orchestration.payload_contract import distil_truncated_context
+
+        assert distil_truncated_context("some removed prose") is None
+
+    def test_the_composed_payload_size_is_reported(self) -> None:
+        """34.7 — so a before-and-after comparison is possible at all."""
+        from maccre_core.orchestration.payload_contract import describe_step_payload
+
+        report = describe_step_payload(
+            session_context="short", upstream_node="A_S0", source_document="",
+        )
+        for field in ("composed_chars", "context_chars", "truncated", "distilled"):
+            assert field in report
+        assert report["distilled"] is False
