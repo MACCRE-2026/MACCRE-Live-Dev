@@ -276,7 +276,6 @@ class TestReq32CtrlWait:
 class TestReq33PreLaunchValidation:
     """Refuse the impossible, and describe the rest, before launch."""
 
-    @pytest.mark.xfail(strict=True, reason="Req 33.1: paradox detection not built")
     def test_a_wait_on_a_downstream_node_in_the_same_lane_is_a_paradox(self) -> None:
         """33.2 case 1 — the simplest impossible configuration."""
         from maccre_core.orchestration.topology_graph import detect_temporal_paradox
@@ -287,7 +286,6 @@ class TestReq33PreLaunchValidation:
         )
         assert report.paradox is True
 
-    @pytest.mark.xfail(strict=True, reason="Req 33.2: cross-lane wait cycle detection not built")
     def test_a_cycle_of_waits_across_lanes_is_a_paradox(self) -> None:
         """33.2 case 2 — two lanes each waiting on the other."""
         from maccre_core.orchestration.topology_graph import detect_temporal_paradox
@@ -298,7 +296,6 @@ class TestReq33PreLaunchValidation:
         )
         assert report.paradox is True
 
-    @pytest.mark.xfail(strict=True, reason="Req 33.3: participant naming not built")
     def test_a_paradox_refusal_names_its_participants(self) -> None:
         """33.3 — never a generic validation failure."""
         from maccre_core.orchestration.topology_graph import detect_temporal_paradox
@@ -310,7 +307,6 @@ class TestReq33PreLaunchValidation:
         assert "A@X.1" in report.participants
         assert "B@X.2" in report.participants
 
-    @pytest.mark.xfail(strict=True, reason="Req 33.5: total-sum readout not built")
     def test_the_readout_states_the_whole_configuration(self) -> None:
         """33.5 — lanes, nodes per lane, strategies, waits, routes, terminals, peak."""
         from maccre_core.orchestration.flow_engine import total_sum_readout
@@ -328,7 +324,6 @@ class TestReq33PreLaunchValidation:
         ):
             assert field in readout
 
-    @pytest.mark.xfail(strict=True, reason="Req 33.6: hydrated-source guarantee not built")
     def test_the_readout_is_derived_from_the_hydrated_topology(self) -> None:
         """33.6 — not from the authoring surface.
 

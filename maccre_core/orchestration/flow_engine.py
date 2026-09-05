@@ -116,6 +116,121 @@ def _hydrate_config_targets(config: dict[str, Any], step_index: int) -> dict[str
     return hydrated
 
 
+def total_sum_readout(
+    topology_rows: list[dict[str, Any]],
+    step_index: int,
+    max_workers: int | None = None,
+) -> dict[str, Any]:
+    """Describe the whole Active Flow before launch. Requirement 33.4–33.7.
+
+    The operator's requirement was a *total-sum* view — the flow expressed in better
+    terms than node-by-node, so a configuration can be understood before the launch
+    button is pressed rather than inferred from a run.
+
+    **Derived from the hydrated topology, never from the authoring surface (33.6).**
+    That constraint is not stylistic. The TUI once built node ids as ``NAME_{i}``
+    while the engine built ``NAME_S{i}``, which was harmless only while the TUI merely
+    drew them. A readout generated from what was *drawn* would be a second
+    representation of the topology and would drift from the one that executes —
+    Principle 4, in the one place whose entire job is to tell the operator the truth
+    before they commit.
+
+    So ``source`` is **checked, not asserted**: hydrated rows carry the
+    ``_S{step_index}`` suffix that :meth:`FlowRunner._hydrate_topology` applies, and
+    if the rows do not carry it this function says so instead of labelling them
+    hydrated. A constant string would have made 33.6 decorative.
+
+    Fields absent from the data model are reported **empty rather than fabricated.**
+    Gather Strategy (Req 29), cross-lane routes (Req 31) and ``CTRL_WAIT`` targets
+    (Req 32) are specified and unbuilt; the keys exist so consumers have a stable
+    shape, and they stay empty until there is something true to put in them.
+
+    ``expected_peak_concurrency`` is derived from **the same input the pool is given,
+    not from the lane count.** :meth:`FlowRunner.execute_step` passes
+    ``max_workers=len(scatter_agents)`` when agents are slotted and ``None`` otherwise,
+    and :class:`DynamicSwarmPool` then clamps that through
+    :func:`resolve_scatter_cap` — so an unconfigured run peaks at
+    ``MAX_SCATTER_AGENTS`` (8), not at ``SCATTER_HARD_CAP`` (12). Passing the lane
+    count as the request would have made a 64-lane topology read as 12-way when the
+    run would actually have opened 8 threads: a readout over-promising concurrency the
+    engine was never going to deliver, which is Principle 3 in the one place the
+    operator consults instead of watching the run.
+
+    Args:
+        topology_rows: The **hydrated** topology rows the engine will execute.
+        step_index: The step these rows were hydrated for.
+        max_workers: The value that will be handed to :class:`DynamicSwarmPool` for
+            this step — ``len(scatter_agents)`` where agents are slotted, ``None``
+            where the engine will fall back to its default. Left ``None``, the readout
+            reports the default the pool would resolve, which is what an unconfigured
+            launch does.
+
+    Returns:
+        A readout dict. Always contains every documented key, so a caller never has
+        to test for their presence — an absent key and an empty one mean different
+        things and only one of them is ever returned.
+    """
+    from maccre_core.orchestration.concurrency import resolve_scatter_cap  # noqa: PLC0415
+
+    rows = list(topology_rows or [])
+    suffix = f"_S{step_index}"
+
+    node_id_values = [str(r.get("Node_ID", "")).strip() for r in rows]
+    node_id_values = [n for n in node_id_values if n]
+
+    if not node_id_values:
+        source = "hydrated_topology"
+    elif all(n.endswith(suffix) for n in node_id_values):
+        source = "hydrated_topology"
+    else:
+        unhydrated = [n for n in node_id_values if not n.endswith(suffix)]
+        source = "unhydrated_topology_rows"
+        logger.warning(
+            "[READOUT] %d of %d node ids lack the %s suffix (%s). The readout is "
+            "describing rows that are not the ones the engine will execute; treat "
+            "its counts as unverified.",
+            len(unhydrated), len(node_id_values), suffix, unhydrated[:5],
+        )
+
+    # Lanes come from Tether_ID where the topology carries it. A linear flow has one
+    # implicit lane, which is why an absent tether is not an error.
+    tethers: list[str] = []
+    for row in rows:
+        tether = str(row.get("Tether_ID", "") or "").strip()
+        if tether and tether not in tethers:
+            tethers.append(tether)
+
+    nodes_per_lane: dict[str, int] = {}
+    for row in rows:
+        tether = str(row.get("Tether_ID", "") or "").strip()
+        if tether:
+            nodes_per_lane[tether] = nodes_per_lane.get(tether, 0) + 1
+
+    terminals = terminal_nodes(rows) if rows else []
+
+    lane_count = len(tethers)
+    readout: dict[str, Any] = {
+        "source": source,
+        "step_index": step_index,
+        "node_count": len(node_id_values),
+        "lane_count": lane_count,
+        "lane_tether_ids": tethers,
+        "nodes_per_lane": nodes_per_lane,
+        # Specified and unbuilt — Reqs 29, 31, 32. Empty, not invented.
+        "gather_strategies": {},
+        "waits": {},
+        "cross_lane_routes": [],
+        "terminal_node_count": len(terminals),
+        "terminal_nodes": terminals,
+        # Bounded twice over: you cannot run more lanes at once than exist, and the
+        # pool will not open more threads than resolve_scatter_cap allows.
+        "expected_peak_concurrency": (
+            min(lane_count, resolve_scatter_cap(max_workers)) if lane_count else 1
+        ),
+    }
+    return readout
+
+
 class FlowStep:
     """A single step in a Linear Flow, pointing to a MacroNode."""
     def __init__(self, macronode_name: str, agent_mapping: dict[str, str] | None = None, payload_mode: str = "Unified Ledger", custom_instructions: str = "", agent_tools_overrides: dict[str, str] | None = None, config: dict[str, Any] | None = None) -> None:

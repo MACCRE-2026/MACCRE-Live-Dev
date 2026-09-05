@@ -75,6 +75,7 @@ and returns names.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 logger = logging.getLogger("maccre_core.topology_graph")
@@ -297,3 +298,205 @@ def describe(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "terminal_nodes": terminal_nodes(materialised),
         "unreachable_nodes": unreachable_nodes(materialised),
     }
+
+
+# ── Requirement 33: pre-launch paradox detection ─────────────────────────────
+#
+# Added 2026-09-04 by the topological-semantic amendment. A wait condition that no
+# execution order can satisfy must be refused *before* launch, because at runtime it
+# is indistinguishable from a slow node — and defect F3 already established what that
+# costs: a hold nobody could release ran out a 3600-second budget and then reported
+# `completed`.
+#
+# THE MECHANISM IS ONE CHECK, NOT FOUR
+# ------------------------------------
+# Requirement 33.2 lists four conditions to cover, and it would be natural to write
+# four detectors. Two of them are the same thing:
+#
+#   * a wait on a node *downstream of itself within its own lane*, and
+#   * a *cycle* of waits across two or more lanes
+#
+# are both cycles in a single **precedence graph**, once you write down both kinds of
+# ordering constraint that exist:
+#
+#   sequence edge   node[i] --> node[i+1]   within a lane, execution is ordered
+#   wait edge       target  --> waiter      a waiter cannot run before its target
+#
+# A lane `[WAIT_ON_B, B]` where `WAIT_ON_B` waits on `B` yields the sequence edge
+# `WAIT_ON_B -> B` and the wait edge `B -> WAIT_ON_B`. That is a two-node cycle. Two
+# lanes waiting on each other yield the same shape without any sequence edges. So one
+# cycle detection covers both, and it will also catch three-lane and longer cycles
+# nobody thought to enumerate — which is the argument for deriving the check from the
+# model instead of listing the cases.
+#
+# The other two conditions are reference-validity errors rather than ordering
+# contradictions, and are reported separately so a refusal can say *which* kind of
+# wrong the topology is.
+
+
+@dataclass(frozen=True)
+class ParadoxReport:
+    """Why a topology's wait conditions cannot be satisfied, if they cannot.
+
+    Attributes:
+        paradox: True when any unsatisfiable condition exists — a cycle *or* an
+            unresolvable reference. The single question a launch gate needs answered.
+        cycles: Each detected cycle, as the ordered list of participating
+            tether-qualified node references.
+        unresolvable: References that name a lane or node the topology does not
+            contain, as ``(waiter, bad_target, reason)``.
+        participants: Every node reference implicated in any finding. Requirement
+            33.3 — a refusal must name them rather than report a generic failure,
+            because a generic failure sends the author searching eight lanes for the
+            one that is wrong.
+    """
+
+    paradox: bool
+    cycles: list[list[str]] = field(default_factory=list)
+    unresolvable: list[tuple[str, str, str]] = field(default_factory=list)
+    participants: list[str] = field(default_factory=list)
+
+    def message(self) -> str:
+        """A refusal a human can act on."""
+        if not self.paradox:
+            return "No temporal paradox detected."
+        parts: list[str] = []
+        for cycle in self.cycles:
+            parts.append("unsatisfiable wait cycle: " + " -> ".join([*cycle, cycle[0]]))
+        for waiter, target, reason in self.unresolvable:
+            parts.append(f"{waiter} waits on {target}, which {reason}")
+        return "; ".join(parts)
+
+
+def _qualify(node_id: str, tether_id: str) -> str:
+    """Render a tether-qualified reference the way Requirement 31.2 states it."""
+    return f"{node_id}@{tether_id}"
+
+
+def detect_temporal_paradox(
+    lanes: Mapping[str, Sequence[str]],
+    waits: Mapping[str, Sequence[str]],
+) -> ParadoxReport:
+    """Refuse a configuration whose waits no execution order can satisfy.
+
+    Args:
+        lanes: ``{tether_id: [node_id, ...]}`` in **declared execution order** within
+            each lane. Order is the whole basis of the same-lane check, so a caller
+            passing an unordered collection would get a wrong answer — hence
+            ``Sequence`` rather than a set.
+        waits: ``{waiter_ref: [target_ref, ...]}`` using tether-qualified references
+            (``"NODE@X.2"``), as produced by ``CTRL_WAIT`` configuration and by
+            ``Wait_For`` gates that name another lane.
+
+    Returns:
+        A :class:`ParadoxReport`. ``paradox`` False means no contradiction was found —
+        which is a statement about these two inputs, not a guarantee that the flow
+        will succeed.
+    """
+    known: dict[str, set[str]] = {t: set(nodes) for t, nodes in lanes.items()}
+
+    # ── Reference validity first: an unresolvable target cannot be graphed ────
+    unresolvable: list[tuple[str, str, str]] = []
+    for waiter, targets in waits.items():
+        for target in targets:
+            if "@" not in target:
+                unresolvable.append(
+                    (waiter, target, "is not tether-qualified (expected NODE@TETHER)")
+                )
+                continue
+            node_id, _, tether_id = target.partition("@")
+            if tether_id not in known:
+                unresolvable.append(
+                    (waiter, target, f"names lane {tether_id!r}, which the topology never spawns")
+                )
+            elif node_id not in known[tether_id]:
+                unresolvable.append(
+                    (waiter, target, f"names a node absent from lane {tether_id!r}")
+                )
+
+    # ── Build the precedence graph: "must happen before" ─────────────────────
+    precedence: dict[str, set[str]] = {}
+
+    def _edge(before: str, after: str) -> None:
+        precedence.setdefault(before, set()).add(after)
+        precedence.setdefault(after, set())
+
+    for tether_id, nodes in lanes.items():
+        ordered = list(nodes)
+        for node_id in ordered:
+            precedence.setdefault(_qualify(node_id, tether_id), set())
+        for earlier, later in zip(ordered, ordered[1:]):
+            _edge(_qualify(earlier, tether_id), _qualify(later, tether_id))
+
+    resolvable_bad = {(w, t) for w, t, _ in unresolvable}
+    for waiter, targets in waits.items():
+        precedence.setdefault(waiter, set())
+        for target in targets:
+            if (waiter, target) in resolvable_bad:
+                continue  # cannot order against a node that does not exist
+            _edge(target, waiter)
+
+    cycles = _find_cycles(precedence)
+
+    participants: list[str] = []
+    for cycle in cycles:
+        participants.extend(cycle)
+    for waiter, target, _reason in unresolvable:
+        participants.extend((waiter, target))
+
+    # Preserve first-seen order while de-duplicating, so a refusal reads the same way
+    # twice. A set here would make the message non-deterministic.
+    seen: set[str] = set()
+    ordered_participants = [p for p in participants if not (p in seen or seen.add(p))]
+
+    return ParadoxReport(
+        paradox=bool(cycles or unresolvable),
+        cycles=cycles,
+        unresolvable=unresolvable,
+        participants=ordered_participants,
+    )
+
+
+def _find_cycles(graph: Mapping[str, set[str]]) -> list[list[str]]:
+    """Every cycle reachable in *graph*, as ordered node lists.
+
+    Iterative depth-first search with an explicit stack. Recursion would be shorter
+    and would blow the stack on a pathological topology, and this runs on
+    operator-authored input immediately before launch — the one moment where a
+    validator crashing is worse than the defect it was looking for.
+    """
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour: dict[str, int] = dict.fromkeys(graph, WHITE)
+    found: list[list[str]] = []
+    seen_signatures: set[frozenset[str]] = set()
+
+    for root in graph:
+        if colour[root] != WHITE:
+            continue
+        path: list[str] = []
+        stack: list[tuple[str, bool]] = [(root, False)]
+        while stack:
+            node, processed = stack.pop()
+            if processed:
+                colour[node] = BLACK
+                if path and path[-1] == node:
+                    path.pop()
+                continue
+            if colour[node] == GREY:
+                # Back edge — the cycle is the tail of the current path.
+                if node in path:
+                    cycle = path[path.index(node):]
+                    signature = frozenset(cycle)
+                    if cycle and signature not in seen_signatures:
+                        seen_signatures.add(signature)
+                        found.append(cycle)
+                continue
+            if colour[node] == BLACK:
+                continue
+            colour[node] = GREY
+            path.append(node)
+            stack.append((node, True))
+            for target in sorted(graph.get(node, ())):
+                stack.append((target, False))
+
+    return found

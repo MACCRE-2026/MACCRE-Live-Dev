@@ -4154,3 +4154,88 @@ measurement.
 
 **Related:** the demand-estimator over-provisioning fix, which removed the other load-sensitive test
 earlier the same day; UT-1 test 3; the barrier proof, which remains the authority on width.
+
+---
+
+### Feature Name: Pre-launch validation built — paradox detection as one cycle check, and a readout that stopped over-promising
+**Abstract:** Requirement 33 implemented. `detect_temporal_paradox` refuses a configuration whose waits no execution order can satisfy, as **one precedence-graph cycle detection rather than the four detectors the requirement enumerates**. `total_sum_readout` describes the whole Active Flow before launch, with `source` **checked** against the hydration suffix rather than asserted. The readout's first `expected_peak_concurrency` was an over-promise, caught by a failing test.
+**Date/Time Entered:** 2026-09-04T21:15:00-04:00
+**Status:** COMPLETED — *the mechanisms.* **Neither is wired to a launch path yet.**
+**Completed:** 2026-09-04T21:15:00-04:00
+**Completion Metric:** `detect_temporal_paradox`, `ParadoxReport`, `_find_cycles`, `_qualify` in
+`maccre_core/orchestration/topology_graph.py`; `total_sum_readout` in
+`maccre_core/orchestration/flow_engine.py`. `tests/test_prelaunch_validation.py` — **26 tests**. The
+**5 `xfail(strict=True)` markers** standing in for Requirement 33 in
+`tests/test_topological_semantic_spec.py` removed after **all five XPASSed**. Gate 2026-09-04:
+`omni clean` 20:16, `omni qa` **PASS whole project** 20:17, pytest **869 collected / 853 passed /
+16 xfailed / 0 failed** in 231.94 s, `omni smoke` **ALL CHECKS PASSED** at $0.00. Collected count
+843 → 869 reconciles exactly: `853 = 822 + 5 + 26`.
+**Prior art:** cycle detection over a precedence graph is the textbook test for whether a partial
+order is satisfiable, and iterative DFS with an explicit stack is ordinary practice. No novelty
+claimed. The design decision recorded here is *which graph to build*, not the algorithm run on it.
+
+**Description:**
+
+**One cycle check, not four detectors.** Requirement 33.2 enumerates four conditions. Two of them
+are the same thing once both kinds of ordering constraint are written as edges:
+
+```
+sequence edge   node[i] --> node[i+1]      execution within a lane is ordered
+wait edge       target  --> waiter         a waiter cannot precede its target
+```
+
+A lane `[W, B]` where `W` waits on `B` yields `W→B` and `B→W`: a two-node cycle. Two lanes waiting on
+each other yield the same shape with no sequence edges at all. One detection covers both **and covers
+three-lane and longer cycles nobody enumerated** — which is the argument for deriving the check from
+the model rather than from the requirement's list of examples. Four special-case detectors would have
+passed every test written from the requirement text and missed the shapes the requirement did not
+think of. The other two conditions are reference-validity errors rather than ordering contradictions,
+so they are reported separately and a refusal can say *which kind* of wrong the topology is.
+
+**The readout was over-promising, and a test caught it.** The first implementation computed
+`expected_peak_concurrency = resolve_scatter_cap(lane_count)`. The test asserted a 64-lane topology
+could not expect more than 8-way concurrency, and it failed with **12**. Both sides were wrong in
+different ways, and reading the engine settled it: `execute_step` passes
+`max_workers=len(scatter_agents)` when agents are slotted and `None` otherwise, and
+`DynamicSwarmPool` clamps *that*. So an unconfigured step peaks at `MAX_SCATTER_AGENTS` (8), **not**
+`SCATTER_HARD_CAP` (12) — and the lane count was never the pool's input, so resolving it as one was a
+second derivation of the sizing rule.
+
+A 64-lane topology would have read as **12-way while the run opened 8 threads**: a readout promising
+concurrency the engine was never going to deliver, in the one artifact the operator consults
+*instead of* watching the run. Fixed by handing the readout the same input the pool gets —
+`min(lane_count, resolve_scatter_cap(max_workers)) if lane_count else 1`, bounded twice over, since
+you cannot run more lanes at once than exist. The test now asserts against the imported constants
+rather than literals, so a change to either ceiling cannot leave it passing for the wrong reason.
+*Rejected: keeping the old formula and relaxing the assertion to `<= SCATTER_HARD_CAP`*, which would
+have gone green while leaving the over-promise in place.
+
+**Four decisions worth the space:**
+
+- **`source` is checked, not asserted.** Requirement 33.6 says the readout derives from the hydrated
+  topology and never the authoring surface. Hardcoding `source = "hydrated_topology"` would have made
+  33.6 decorative, so the function tests the `_S{step_index}` suffix `_hydrate_topology` applies and
+  reports `"unhydrated_topology_rows"` with a warning when it is absent. The TUI/engine `NAME_{i}`
+  vs `NAME_S{i}` split is exactly what a readout built from what was *drawn* would have reproduced.
+- **`_find_cycles` is iterative, recursion rejected.** This runs on operator input immediately before
+  launch. A validator raising `RecursionError` converts "your config is unsatisfiable" into "the tool
+  crashed", which is worse than the defect it exists to catch.
+- **An unresolvable target is excluded from the graph, not graphed against nothing.** Inventing a
+  graph node for a nonexistent target could manufacture a phantom cycle — an approximately-correct
+  identifier acted upon.
+- **Unbuilt fields are empty, not fabricated.** `gather_strategies={}`, `waits={}`,
+  `cross_lane_routes=[]` for Reqs 29/31/32, which are specified and unbuilt. The keys exist so the
+  shape is stable; a plausible default would be a success report over unperformed work, in a readout.
+
+**What is NOT true today, stated plainly.** **Nothing calls either function.** No launch path
+invokes them, so no operator sees a refusal or a readout. "Requirement 33 is implemented" and "MACCRE
+refuses paradoxical configs at launch" are different claims and only the first holds. Wiring is
+tracker #13 (TUI) and tracker #11 (`CTRL_WAIT`). Relatedly, **`waits` has no producer** — the
+argument is shaped for `CTRL_WAIT` config and `CTRL_WAIT` is still a `ComingSoon` registry row, so
+every wait in the tests is hand-constructed. And `paradox=False` is a statement about the two inputs
+given, not a guarantee the flow will succeed.
+
+**Related:** the Requirements 29–33 spec amendment, which wrote the 21 red markers this closes 5 of;
+the registry self-counts entry, whose derived constants absorbed `CTRL_WAIT` with zero count edits;
+defect F3, whose 3600-second unreleasable hold is the runtime failure 32.4–32.5 exist to detect
+before launch instead.
