@@ -2184,16 +2184,45 @@ def _generate_unified_ledger_unlocked(job_id: str, steps: list[FlowStep] | None 
     ledger_entries.sort(key=get_ledger_sort_key)
 
     # ── Collect memory pins ───────────────────────────────────────────────
+    # Read from the `memory_pins` TABLE, which is where a session's pins actually
+    # live: `CognitiveMemoryEngine.extract_from_canonized_ledger` writes them there.
+    #
+    # **What this replaced, and what it did not cost.** This used to glob
+    # ``02_Dynamic_Context/memory_pins/pin_*_{job_id}*.json``. No code anywhere
+    # writes that filename — the only pin-JSON writer emits
+    # ``global_pin_{doc_id}.json``, which cannot match a glob anchored on ``pin_*``.
+    # So the collector had never returned a row.
+    #
+    # The consequence was a **missing** section, not a broken one: the emit below is
+    # guarded by ``if memory_pins:``, so nothing rendered a heading over an empty
+    # table. Worth stating plainly because the opposite was recorded first — the
+    # defect is dead code reading a pattern nothing writes, and that is a smaller
+    # thing than a payload carrying a decorative heading.
+    #
+    # **This section is still empty during a run, and that is correct.** Pins are
+    # extracted at *canonization*, which happens after the flow finishes, so at every
+    # point this function runs mid-flow there genuinely are no pins for this job. The
+    # section now appears only when a ledger is regenerated after canonization, which
+    # is the only moment the claim would be true.
     memory_pins: list[dict[str, Any]] = []
-    pins_dir = get_datacenter_path("02_Dynamic_Context", "memory_pins")
-    if pins_dir.exists():
-        import json  # noqa: PLC0415
-        for pin_file in sorted(pins_dir.glob(f"pin_*_{job_id}*.json")):
-            try:
-                pin_data = json.loads(pin_file.read_text(encoding="utf-8"))
-                memory_pins.extend(pin_data if isinstance(pin_data, list) else [pin_data])
-            except Exception:  # noqa: BLE001
-                pass
+    _pins_db = get_datacenter_path("02_Dynamic_Context", "memory_pins.db")
+    if _pins_db.exists():
+        # Existence-checked rather than opened blindly: the store's constructor runs
+        # CREATE TABLE IF NOT EXISTS, and generating a ledger should not bring a
+        # database into being as a side effect on every node completion.
+        try:
+            from maccre_core.orchestration.memory_engine import (  # noqa: PLC0415
+                SovereignPinStore,
+            )
+
+            memory_pins = SovereignPinStore(str(_pins_db)).get_pins_by_job(job_id)
+        except Exception as _pin_err:  # noqa: BLE001
+            # Never fail ledger assembly over an optional section. The ledger is the
+            # next node's input payload; losing it to a pins lookup would be a far
+            # worse outcome than losing the pins.
+            logger.debug(
+                "[FLOW_ENGINE] Could not read memory pins for %s: %s", job_id, _pin_err
+            )
 
     # ── Calculate totals ──────────────────────────────────────────────────
     total_cost = sum(m.get("actual_cost", 0.0) for m in node_meta)

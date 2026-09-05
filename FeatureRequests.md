@@ -4940,3 +4940,185 @@ its inference is now attributed in telemetry while `task_queue.actual_cost` and
 `system_logs.cost` disagree for those nodes; and `_estimate_node_cost` remains blind to
 input size — this change supplies the data that would let it stop being, and deliberately
 does not spend it.
+
+---
+
+# ENTRIES ADDED 2026-09-05 — the disk-full incident, and a claim I overstated
+
+***
+
+### AMENDMENT to *The unified ledger's Extracted Knowledge Triplets section is permanently empty*
+**Date:** 2026-09-05T12:40:00-04:00
+**Status change:** Unfulfilled → **COMPLETED.** Era 3 tracker #19.
+**Correction — the original entry overstated the defect, and the overstatement is the
+part worth keeping.**
+
+The entry said the section rendered as *"a heading with a table header and no rows,
+always, for every swarm session"*, and on that basis called it a **dependency** of the
+step-boundary payload contract: a decorative heading inside a document about to be handed
+forward as a payload, which would be the Requirement 33 readout problem in different
+clothes.
+
+**That was false.** The emit site is guarded by `if memory_pins:`, so an empty collection
+renders **nothing at all** — no heading, no table header. The consequence was a *missing*
+section, not a broken one, and there was never a decorative heading in any payload.
+**#19 was therefore not a real dependency of #20.**
+
+The same claim was written into `.kiro_artifacts/2026-09-04_memory_embedding_and_cost_findings.md` §4.1,
+the planning map's second revision, and commit `f7a9afe`'s message. Those are append-only
+records and stand as written; this amendment is the correction, and the new tests carry it
+in code.
+
+**What was actually wrong, and is now fixed.** The collector globbed
+`02_Dynamic_Context/memory_pins/pin_*_{job_id}*.json`. No code writes that filename — the
+only pin-JSON writer emits `global_pin_{doc_id}.json`, which cannot match a glob anchored
+on `pin_*`. So it had never returned a row: **dead code reading a pattern nothing writes**,
+which is a real Principle 5 defect and a smaller one than advertised. It now reads the
+`memory_pins` **table**, which is where `CognitiveMemoryEngine.extract_from_canonized_ledger`
+actually writes.
+
+**The section is still empty during a run, and that is correct.** Pins are extracted at
+*canonization*, after the flow finishes, while this function runs on every node
+completion. At every point it executes there genuinely are no pins for that job. Fixing
+the source does not make the section appear mid-run; it makes it appear when a ledger is
+regenerated after canonization, which is the only moment the claim would be true.
+**Verified end to end**: no pins → section absent; pins present → section rendered with
+their content.
+
+**Completion Metric:** `tests/test_ledger_memory_pins.py` — **12 tests**, including
+`TestTheSectionIsAbsentRatherThanDecorative`, which is the test the overstated claim
+needed. The store is existence-checked before opening, because its constructor runs
+`CREATE TABLE IF NOT EXISTS` and generating a ledger must not bring a database into being
+on every node completion. A pins failure cannot break ledger assembly — the ledger is the
+next node's input payload, and losing it to an optional lookup would be far worse than
+losing the pins.
+
+***
+
+### Feature Name: The test suite was writing its scratch to a full system drive
+**Abstract:** Two consecutive full runs produced **26 errors**, then **49 errors and 5 failures**, in *different* test sets each time, with the same 1024 items collected and no change to the tree between them. The cause was `sqlite3.OperationalError: database or disk is full` — the system drive had **7.1 MB** free while the workspace drive had 173 GB. `TEMP` lives on the system drive, so every test building a scratch SQLite database was writing to a full disk.
+**Date/Time Entered:** 2026-09-05T12:40:00-04:00
+**Status:** COMPLETED
+**Completed:** 2026-09-05T12:40:00-04:00
+**Verified:** Reproduced and then eliminated. After redirecting scratch to the workspace
+drive: **1025 passed / 10 xfailed / 0 errors** twice consecutively, and runs got *faster*
+(163–183 s against 190–254 s). `omni qa` PASS, `omni smoke` ALL CHECKS PASSED.
+**Completion Metric:** `PREFERRED_BASETEMP` and `pytest_configure` in `tests/conftest.py`
+redirect pytest's temp root to `B:\EXO_GANS_tests`; `pytest_report_header` prints the
+scratch location and free space in **every** run header.
+`tests/test_scratch_location_contract.py` — **11 tests**.
+**Prior art:** not applicable — an environment defect.
+
+**Description:**
+
+**Why it took most of an afternoon, and why that is the lesson.** The signature was
+indistinguishable from a defect in the change under test: transient, escalating run over
+run, a different set of tests each time, and targeted subsets passing. Each run consumed a
+little more of what little space was left, and subsets passed because they create fewer
+temp directories. I chased it through the affected files (55 passed together), the
+suspected interacting pair (90 passed), and a full re-run (1014 passed, 0 errors) before
+reading the actual error text rather than the pass counts.
+
+**The error text was one grep away the whole time.** `--tb=no` had suppressed it, so three
+diagnostic runs produced pass/fail counts and no cause. Doctrine 7 says a report is a lead
+and reproduction is the finding — but reproduction without the *message* is just a louder
+lead.
+
+**The scratch location is dedicated, and this is a data-loss hazard rather than a
+preference.** **pytest deletes an explicitly-set basetemp directory at session start** —
+verified empirically before wiring anything, not taken from documentation: a sentinel file
+placed in a candidate directory was gone after one run. So the location holds nothing else,
+ever, and is deliberately a **sibling** of the repository rather than a directory inside
+it, so nothing under version control is within reach of that wipe. Three tests assert it
+is outside the repo, is not a drive root, and is named for what it is.
+
+**A conftest hook rather than `addopts` in `pyproject.toml`.** An absolute path in
+committed config would make the suite unrunnable on any machine without a `B:` drive — and
+this repository is public, with an explicit *MACCRE off the laptop* era planned. The hook
+is conditional: no drive, no redirect, and pytest's own default applies. An explicit
+`--basetemp` on the command line always wins.
+
+**Free space is now in the run header**, because the incident was invisible for hours
+partly because nothing said where the suite was writing. One line makes a recurrence a
+glance.
+
+***
+
+### Feature Name: A read-only analyzer for what can be moved off the system drive
+**Abstract:** `scripts/disk_migration_analyzer.py` reports sizable directories on the system drive, classified by how easily each can be relocated and by what mechanism. On this machine it found **~34 GB** reclaimable without an involved migration. It never moves, deletes, or changes anything, and takes no `--apply` flag.
+**Date/Time Entered:** 2026-09-05T12:40:00-04:00
+**Status:** COMPLETED — **but the tool is not under version control.** See the limit below.
+**Completed:** 2026-09-05T12:40:00-04:00
+**Completion Metric:** ~54 classification rules across caches, developer toolchains, AI
+model stores, containers, browsers, cloud sync, shell folders and games, each carrying the
+**mechanism** (environment variable name, app setting, or Windows dialog) rather than only
+a verdict. `tests/test_disk_migration_analyzer.py` — **23 tests**.
+**Prior art:** disk usage analysers are ubiquitous (WinDirStat, TreeSize, `du`). No novelty
+claimed. What is specific here is classifying findings by *relocation mechanism* rather
+than by size alone, and refusing to act on them.
+
+**Description:**
+
+**It is read-only by construction, and the tests check the AST rather than the text.** A
+tool that both finds and frees space on a system drive is one typo away from an unbootable
+machine, and the mechanism differs per item enough that a single automated action would
+have to guess. The read-only assertions parse the module and inspect actual *calls* —
+`shutil.move`, `os.remove`, `mkdir`, `open` — because the first version grepped for those
+strings and **failed on the module's own docstring**, which explains that it deliberately
+has no `--apply` flag. Prose describing an absence tripped a guard written to detect it.
+That is the **third** time in this session a source-text assertion matched its own
+explanation; the AST cannot make that mistake.
+
+**The tool produced three of its own defects, all failing in the same direction — a
+plausible report with the answer removed:**
+
+1. **`--depth` stopped above `AppData`**, reporting the largest and most relevant
+   directory on the disk as one 41.55 GB `UNKNOWN` line. Fixed by making depth a **floor,
+   not a ceiling**: `_has_rule_below` keeps the walk descending wherever a known location
+   still lies ahead, which is self-maintaining as rules are added.
+2. **`_expand` did an exact-case environment lookup.** Python **upper-cases `os.environ`
+   keys on Windows**, so every mixed-case placeholder — `{SystemRoot}`, `{ProgramFiles}`,
+   `{ProgramFiles(x86)}` — matched nothing and roughly a third of the rule table was
+   inert. The report simply listed Steam and the Windows directories as `UNKNOWN`, which
+   looks exactly like a table needing more entries rather than a table not being read.
+   Caught by noticing `{LOCALAPPDATA}` rules fired while `{ProgramFiles(x86)}` rules did
+   not — the difference being case, not correctness.
+3. **A broad rule outranked a specific one**, so `C:\Program Files (x86)` was reported
+   whole and **swallowed the 9.96 GB Steam library** — the single most actionable item on
+   the disk, hidden behind a correct-but-useless verdict on its parent.
+
+**And a fourth defect, in my own documentation of it.** A test written to enforce
+most-specific-first ordering failed, and the code was right: `_classify` matches by
+**exact equality**, so ordering cannot shadow anything. The `RULES` comment had claimed
+otherwise. Corrected, and the test replaced with the invariant that actually holds under
+equality matching — no two rules may expand to the same path, since the second would be
+unreachable.
+
+**Coverage is reported rather than assumed.** The scan states directories walked,
+permission denials with examples, and reparse points skipped — junctions and symlinks are
+**not followed**, because following them would double-count (WinSxS is largely hard links)
+and can loop. Unreadable directories are omitted from every total, and the report says so:
+real usage is *at least* what is shown.
+
+**System files are reported separately with their proper mechanism** — `hiberfil.sys`,
+`pagefile.sys` — because a size report listing them beside a movable cache invites exactly
+the wrong action.
+
+**LIMIT: `scripts/` is excluded by `.git/info/exclude`, so this tool is local-only and
+would not survive a fresh clone.** Its test is committed and skips when the module is
+absent, which is honest but leaves the tool itself unbacked. That is Era 3 tracker #16's
+subject — *"Back up Analysis/, History/, scripts/, __DATACENTER/ to version control"* — and
+this is now a concrete instance of the cost rather than a hypothetical one. **Needs an
+operator decision:** relocate the tool somewhere tracked, or accept it as disposable.
+
+**Findings on this machine, recorded because they bear on the project.** The largest
+movable item is **11.80 GB** of AnythingLLM data under the roaming profile. The Gemini CLI
+data directory in the user profile holds **2.82 GB** of Antigravity agent state including
+git worktrees — a stale one from there already appears in this repository's `git branch`
+output. Google Drive's local cache is **1.20 GB**, on a machine where the workspace already
+sits inside an active Drive sync (a recorded Doctrine 8 finding).
+
+*(Paths are described rather than written out: this register is public, and the
+project-wide convention set by the 2026-09-02 exposure audit is that user-profile paths do
+not appear in tracked files even in redacted form. The scanner flags the pattern itself,
+which is the correct behaviour and caught this on the first pass.)*
