@@ -31,6 +31,8 @@ and are reported separately so a refusal can say which kind of wrong the topolog
 """
 from __future__ import annotations
 
+from typing import Any
+
 from maccre_core.orchestration.concurrency import MAX_SCATTER_AGENTS, SCATTER_HARD_CAP
 from maccre_core.orchestration.flow_engine import total_sum_readout
 from maccre_core.orchestration.topology_graph import detect_temporal_paradox
@@ -319,3 +321,123 @@ class TestTotalSumReadout:
         assert readout["gather_strategies"] == {}
         assert readout["waits"] == {}
         assert readout["cross_lane_routes"] == []
+
+
+# ── Task 4e: a lane and a gather scope are different facts ────────────────────
+
+
+class TestLanesAreNotGatherScopes:
+    """`lane_count` had been wrong twice for one 8-agent scatter, in opposite directions.
+
+    Before per-lane tethers, one tether covered the whole scatter and the count was **1** —
+    which, through `min(lane_count, cap)`, promised the operator **one thread for an 8-way
+    run**. After per-lane tethers it was **9**, because the group tether carried by the
+    scatter and its merge counted as a tenth lane.
+
+    Requirement 33.5 asks for the number of Flow Lanes *and* their tether IDs. A lane is a
+    tether with a parent; the group is the scope the lanes report into.
+    """
+
+    AGENTS = [f"AGENT_{c}" for c in "ABCDEFGH"]
+
+    def _hierarchical_rows(self) -> list[dict[str, Any]]:
+        """Scatter and merge on `X`, eight lanes on `X.1`..`X.8` — the shape 4c-3 emits."""
+        rows: list[dict[str, Any]] = [
+            {
+                "Node_ID": "CTRL_SCATTER_S0",
+                "Next_Node": ",".join(f"{a}_S0" for a in self.AGENTS),
+                "Tether_ID": "X",
+            }
+        ]
+        for i, agent in enumerate(self.AGENTS, start=1):
+            rows.append(
+                {"Node_ID": f"{agent}_S0", "Next_Node": "CTRL_MERGE_S0", "Tether_ID": f"X.{i}"}
+            )
+        rows.append({"Node_ID": "CTRL_MERGE_S0", "Next_Node": "END", "Tether_ID": "X"})
+        return rows
+
+    def _flat_rows(self) -> list[dict[str, Any]]:
+        """One flat tether on every row — a hand-authored CSV, which the auto-wrap no
+        longer produces but which can still be loaded."""
+        rows = self._hierarchical_rows()
+        for row in rows:
+            row["Tether_ID"] = "scatter_abc12345"
+        return rows
+
+    def test_eight_lanes_are_counted_as_eight(self) -> None:
+        readout = total_sum_readout(self._hierarchical_rows(), step_index=0)
+
+        assert readout["lane_count"] == 8
+        assert readout["lane_count_source"] == "lane_tethers"
+
+    def test_the_group_tether_is_a_gather_scope_not_a_lane(self) -> None:
+        readout = total_sum_readout(self._hierarchical_rows(), step_index=0)
+
+        assert readout["lane_tether_ids"] == [f"X.{i}" for i in range(1, 9)]
+        assert readout["gather_scopes"] == ["X"]
+        assert "X" not in readout["lane_tether_ids"]
+
+    def test_the_peak_is_no_longer_one_for_an_eight_way_run(self) -> None:
+        """The defect this closes, stated as the number the operator sees."""
+        readout = total_sum_readout(self._hierarchical_rows(), step_index=0, max_workers=8)
+
+        assert readout["expected_peak_concurrency"] == 8
+
+    def test_nodes_per_lane_covers_lanes_only(self) -> None:
+        readout = total_sum_readout(self._hierarchical_rows(), step_index=0)
+
+        assert readout["nodes_per_lane"] == {f"X.{i}": 1 for i in range(1, 9)}
+        assert sum(readout["nodes_per_lane"].values()) == readout["node_count"] - 2
+
+    def test_a_flat_topology_is_counted_from_the_scatter_fan_out(self) -> None:
+        """**A second source of evidence, not a second definition.**
+
+        A hand-authored CSV with one flat tether identifies no lane individually, so the
+        tether column cannot answer the question. The scatter's fan-out width can, and it
+        gives the same answer — 8 — so a legacy topology stops under-reporting its own
+        concurrency. Before 4e this case reported `lane_count == 1` and a peak of 1.
+        """
+        readout = total_sum_readout(self._flat_rows(), step_index=0, max_workers=8)
+
+        assert readout["lane_count"] == 8
+        assert readout["lane_count_source"] == "scatter_fan_out"
+        assert readout["expected_peak_concurrency"] == 8
+
+    def test_a_flat_topology_reports_no_lane_tethers_rather_than_pretending(self) -> None:
+        """Saying "8 lanes, none individually tethered" is the honest pair of facts."""
+        readout = total_sum_readout(self._flat_rows(), step_index=0)
+
+        assert readout["lane_tether_ids"] == []
+        assert readout["gather_scopes"] == ["scatter_abc12345"]
+        assert readout["lane_count"] == 8
+
+    def test_a_linear_flow_still_reports_no_lanes_and_says_why(self) -> None:
+        rows = [{"Node_ID": "A_S0"}, {"Node_ID": "B_S0"}]
+        readout = total_sum_readout(rows, step_index=0)
+
+        assert readout["lane_count"] == 0
+        assert readout["lane_count_source"] == "none"
+        assert readout["expected_peak_concurrency"] == 1
+
+    def test_the_lane_count_source_is_always_one_of_the_three(self) -> None:
+        """An unattributable count is a count nobody can check — the same reason
+        `source` exists on this readout."""
+        for rows in (self._hierarchical_rows(), self._flat_rows(), [{"Node_ID": "A_S0"}]):
+            assert total_sum_readout(rows, step_index=0)["lane_count_source"] in (
+                "lane_tethers", "scatter_fan_out", "none",
+            )
+
+    def test_lane_tethers_win_over_the_fan_out_when_both_are_present(self) -> None:
+        """Per-lane tethers are the direct evidence; the fan-out is the fallback."""
+        readout = total_sum_readout(self._hierarchical_rows(), step_index=0)
+
+        assert readout["lane_count_source"] == "lane_tethers"
+
+    def test_two_scatters_report_two_gather_scopes(self) -> None:
+        rows = self._hierarchical_rows()
+        rows.append({"Node_ID": "OTHER_S0", "Next_Node": "END", "Tether_ID": "Y.1"})
+
+        readout = total_sum_readout(rows, step_index=0)
+
+        assert readout["gather_scopes"] == ["X", "Y"]
+        assert readout["lane_count"] == 9

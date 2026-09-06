@@ -25,7 +25,11 @@ from typing import Any
 
 import pytest
 
-from maccre_core.orchestration.flow_engine import FlowRunner, _default_tether_id
+from maccre_core.orchestration.flow_engine import (
+    FlowRunner,
+    _default_tether_id,
+    total_sum_readout,
+)
 from maccre_core.orchestration.tether import (
     TETHER_LEVEL_SEPARATOR,
     child_tether_ids,
@@ -240,8 +244,6 @@ class TestTheReadoutConsequences:
 
     @staticmethod
     def _readout(agents: list[str]) -> dict[str, Any]:
-        from maccre_core.orchestration.flow_engine import total_sum_readout
-
         rows = _wrap(agents)
         for row in rows:
             row["Node_ID"] = f"{row['Node_ID']}_S0"
@@ -258,23 +260,39 @@ class TestTheReadoutConsequences:
         assert self._readout(AGENTS)["expected_peak_concurrency"] == 8
 
     def test_the_lanes_are_now_individually_named_in_the_readout(self) -> None:
+        """Eight lanes, and the group reported separately as a gather scope.
+
+        Updated 2026-09-06 by task 4e. This asserted 9 `lane_tether_ids` — 8 lanes plus
+        the group — which described the readout's state after 4c-3 rather than what
+        Requirement 33.5 asks for. `lane_tether_ids` now holds lanes only.
+        """
         readout = self._readout(AGENTS)
 
-        assert len(readout["lane_tether_ids"]) == 9  # 8 lanes + the group
-        assert count_lanes(readout["lane_tether_ids"]) == 9
+        assert len(readout["lane_tether_ids"]) == 8
+        assert count_lanes(readout["lane_tether_ids"]) == 8
+        assert readout["gather_scopes"] == [_default_tether_id(AGENTS)]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="4e: lane_count still counts the group tether as a lane (9, not 8)",
-    )
     def test_lane_count_reports_eight_lanes_for_an_eight_lane_scatter(self) -> None:
-        """Requirement 33.5 asks for **the number of Flow Lanes**.
+        """Requirement 33.5 asks for **the number of Flow Lanes**. Closed by task 4e.
 
-        `lane_count = len(distinct Tether_ID)` was 1 before 4c-3 and is 9 after — the
-        scatter and merge share the group tether, which is a *gather scope*, not a lane.
-        So this is not fixed, only wrong differently, and the honest thing is a red marker
-        rather than a passing test asserting 9.
-
-        4e is where lanes and gather scopes become separate facts in the readout.
+        `lane_count = len(distinct Tether_ID)` had been wrong twice for this same scatter
+        and in opposite directions: **1** while one tether covered the whole thing, then
+        **9** once lanes had their own and the group counted as a tenth. A lane is now a
+        tether with a parent, and the group — carried by the scatter and its merge — is
+        reported as a gather scope instead.
         """
-        assert self._readout(AGENTS)["lane_count"] == 8
+        readout = self._readout(AGENTS)
+
+        assert readout["lane_count"] == 8
+        assert readout["lane_count_source"] == "lane_tethers"
+
+    def test_nodes_per_lane_excludes_the_control_nodes(self) -> None:
+        """The scatter and merge are on the scope, not in a lane, so they are absent.
+
+        The difference between this sum and `node_count` is exactly those two nodes — a
+        gap that is informative rather than a miscount, which is why it is asserted.
+        """
+        readout = self._readout(AGENTS)
+
+        assert sum(readout["nodes_per_lane"].values()) == 8
+        assert readout["node_count"] == 10

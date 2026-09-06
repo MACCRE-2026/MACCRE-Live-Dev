@@ -40,7 +40,7 @@ from maccre_core.orchestration.deterministic_nodes import (
 from maccre_core.orchestration.local_broker import LocalMessageBroker
 from maccre_core.orchestration.payload_modes import DEFAULT_PAYLOAD_MODE
 from maccre_core.orchestration.swarm_pool import DynamicSwarmPool
-from maccre_core.orchestration.tether import TetherIdError, child_tether_ids
+from maccre_core.orchestration.tether import TetherIdError, child_tether_ids, lane_group
 from maccre_core.orchestration.topology_engine import TopologyEngine
 from maccre_core.orchestration.topology_graph import (
     entry_nodes,
@@ -309,6 +309,15 @@ def total_sum_readout(
     if the rows do not carry it this function says so instead of labelling them
     hydrated. A constant string would have made 33.6 decorative.
 
+    ``lane_count`` counts **lanes**, not tethers, and ``gather_scopes`` reports the scopes
+    separately (task 4e). A lane is a tether with a parent; the scatter and its merge sit
+    on the *group* tether, which is a scope. Counting distinct tethers had been wrong
+    twice for the same 8-agent scatter and in opposite directions — ``1`` while one tether
+    covered the whole scatter, then ``9`` once lanes had their own and the group counted as
+    a tenth. ``lane_count_source`` names which evidence the number came from
+    (``"lane_tethers"``, ``"scatter_fan_out"`` or ``"none"``), for the same reason
+    ``source`` exists: a count nobody can attribute is a count nobody can check.
+
     Fields absent from the data model are reported **empty rather than fabricated.**
     Gather Strategy (Req 29), cross-lane routes (Req 31) and ``CTRL_WAIT`` targets
     (Req 32) are specified and unbuilt; the keys exist so consumers have a stable
@@ -361,29 +370,81 @@ def total_sum_readout(
             len(unhydrated), len(node_id_values), suffix, unhydrated[:5],
         )
 
-    # Lanes come from Tether_ID where the topology carries it. A linear flow has one
-    # implicit lane, which is why an absent tether is not an error.
+    # ── A lane and a gather scope are different facts. Task 4e. ───────────────
+    #
+    # `lane_count` was `len(distinct Tether_ID)`, which has now been wrong twice for the
+    # same 8-agent scatter and for opposite reasons:
+    #
+    #   before per-lane tethers   one tether covered the whole scatter        ->  1
+    #   after  per-lane tethers   the group tether counts as a tenth lane     ->  9
+    #
+    # The first promised the operator **one thread for an 8-way run**, because
+    # `expected_peak_concurrency` is `min(lane_count, cap)`. Requirement 33.5 asks for
+    # *the number of Flow Lanes* and separately for their tether IDs, and the group
+    # tether is neither — it is the **gather scope** the lanes report into, carried by
+    # the scatter and its merge.
+    #
+    # A lane is therefore a tether that has a parent: `lane_group(t) != t`. A flat legacy
+    # tether is its own group, so it is a scope and not a lane, which is correct — under
+    # the flat scheme no lane was individually identified at all.
     tethers: list[str] = []
     for row in rows:
         tether = str(row.get("Tether_ID", "") or "").strip()
         if tether and tether not in tethers:
             tethers.append(tether)
 
+    lane_tethers: list[str] = [t for t in tethers if lane_group(t) != t]
+
+    gather_scopes: list[str] = []
+    for tether in tethers:
+        scope = lane_group(tether)
+        if scope not in gather_scopes:
+            gather_scopes.append(scope)
+
+    # Nodes per **lane**, so the scatter and merge — which sit on the gather scope rather
+    # than in a lane — are deliberately absent. A caller summing this will get fewer than
+    # `node_count`, and that difference is the control nodes, not a miscount.
     nodes_per_lane: dict[str, int] = {}
     for row in rows:
         tether = str(row.get("Tether_ID", "") or "").strip()
-        if tether:
+        if tether and tether in lane_tethers:
             nodes_per_lane[tether] = nodes_per_lane.get(tether, 0) + 1
+
+    # A topology whose lanes are not individually tethered — a hand-authored CSV with one
+    # flat tether, which the auto-wrap no longer produces but which can still be loaded —
+    # can still be counted, from the width of its scatter's fan-out. That is a second
+    # *source of evidence* for one question, not a second definition, so the readout says
+    # which one it used rather than leaving the number unattributable.
+    scatter_prefix = DeterministicNodeType.SCATTER.value
+    fan_out_lanes: list[str] = []
+    for row in rows:
+        node_id = str(row.get("Node_ID", "") or "").strip()
+        if not node_id.upper().startswith(scatter_prefix):
+            continue
+        for target in parse_targets(row.get("Next_Node")):
+            if target not in fan_out_lanes:
+                fan_out_lanes.append(target)
+
+    if lane_tethers:
+        lane_count = len(lane_tethers)
+        lane_count_source = "lane_tethers"
+    elif fan_out_lanes:
+        lane_count = len(fan_out_lanes)
+        lane_count_source = "scatter_fan_out"
+    else:
+        lane_count = 0
+        lane_count_source = "none"
 
     terminals = terminal_nodes(rows) if rows else []
 
-    lane_count = len(tethers)
     readout: dict[str, Any] = {
         "source": source,
         "step_index": step_index,
         "node_count": len(node_id_values),
         "lane_count": lane_count,
-        "lane_tether_ids": tethers,
+        "lane_count_source": lane_count_source,
+        "lane_tether_ids": lane_tethers,
+        "gather_scopes": gather_scopes,
         "nodes_per_lane": nodes_per_lane,
         # Specified and unbuilt — Reqs 29, 31, 32. Empty, not invented.
         "gather_strategies": {},
