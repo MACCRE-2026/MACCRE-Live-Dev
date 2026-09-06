@@ -5952,3 +5952,77 @@ mechanics.
 **Related:** 4b (the seam), 4c-1 (the gather gate), 4c-2 (no re-parenting) — this completes
 the 4c sequence; Req 18.3 (nested tether shape, now producible); Req 33.5 (the readout, 4e);
 Reqs 29/31/32, whose one-tether-per-lane contract is now satisfiable by real rows.
+---
+### Feature Name: The TUI stops minting its own tether IDs — and the 28th scatter stops producing a routing delimiter
+**Abstract:** `macronode_workshop` generated `tether_a`, `tether_b`, ... from a private counter. It now calls `tether.root_tether_id`, the same generator the engine reads. **This closes the tether unification** — one source of tether IDs, and the three-way divergence is resolved. It also removes a real defect: `chr(96 + n)` walks off the alphabet, and the **28th scatter in one authoring session produced `tether_|`** — a tether containing a routing-target delimiter that `parse_targets` splits, so `Wait_For` would read one lane as two.
+**Date/Time Entered:** 2026-09-06T12:35:00-04:00
+**Status:** COMPLETED — task 4d. **No TUI was launched; the tests drive the method directly.**
+**Completed:** 2026-09-06T12:35:00-04:00
+**Completion Metric:** `root_tether_id(self._tether_counter)` in the `CTRL_SCATTER` branch of
+`_handle_node_add` in `maccre_tui/widgets/macronode_workshop.py`, importing from
+`maccre_core.orchestration.tether`. `tests/test_workshop_tether_ids.py` — **16 tests, four
+groups**, driving the real method. Gate 2026-09-06: `omni clean` 12:25 (303 bytecode),
+`omni qa` **PASS whole project** 12:27:05, pytest **1420 collected / 1417 passed / 3 xfailed
+/ 0 failed** in 206.41 s, `omni smoke` **ALL CHECKS PASSED** ($0.00). Reconciles against
+1404/1401/3: `1404 + 16 = 1420`, `1401 + 16 = 1417`, xfailed unchanged at 3.
+
+**The overflow was measured, not assumed:**
+
+| Scatter # | Old value | Problem |
+|---|---|---|
+| 27 | `tether_{` | off the end of the alphabet |
+| **28** | **`tether_\|`** | **contains a routing-target delimiter** — `parse_targets` accepts `,` and `\|`, so `Wait_For` splits one lane into two |
+| 29, 30 | `tether_}`, `tether_~` | as 27 |
+
+Remote in practice (28 scatters in one unsaved session) but **the exact defect class
+`FORBIDDEN_IN_TETHER_ID` was derived to prevent**, reached by a route nobody was watching.
+The guard asserts `chr(96 + 28) == "|"` *and* that `"|"` is forbidden, so it states the
+hazard rather than just checking a value. Revert-to-red confirmed
+`test_every_generated_tether_is_wellformed` fails under the old scheme — direct evidence it
+produced a tether `validate_tether_id` rejects.
+
+**The counter became an index, not a private encoding.** `_tether_counter` survives because
+the widget still needs to know how many scatters it has issued, but it is passed *to*
+`root_tether_id` rather than into a `chr()` expression, with the increment moved **after** the
+call so index 0 maps to `X` — Requirement 18.4's root tether. Two lines, and the TUI now has
+no opinion about what a tether looks like.
+
+**Scatter↔merge pairing was left alone, and that is correct.** The `_pending_scatters` LIFO
+already gives the merge **the same tether as its scatter**, which is exactly what 4c-3
+requires. `TestScatterMergePairingStillHolds` pins it — including LIFO across two scatters,
+and that a merge with no pending scatter stays **untethered** rather than inventing a scope.
+
+**Authoring-time validation was deliberately NOT added.** `nexus_plex`'s `#cfg-tether-id`
+Input still stores whatever is typed. 4c-3 already handles a bad value truthfully at launch
+(refused, generated tether substituted, ERROR logged naming the value and reason). Validating
+in the modal moves that feedback earlier — a real UX improvement, belonging with the TUI
+wiring task — but adding it now would mean **a second place deciding what a valid tether is,
+on the day the point is that there is one.**
+
+**Rejected:** removing TUI generation entirely (the workshop needs a handle **at authoring
+time** to pair a scatter with its merge; with no tether there is nothing to pair on); having
+the TUI call `_default_tether_id` (**at node-add time the agent slots are empty**, so the
+digest would be over nothing and every scatter would collide — the auto-wrap can use it
+because by then the agents are known); keeping the `tether_` prefix (a second naming
+convention, where `X`/`Y`/`Z` is what Req 18.4 and the design document name).
+
+**REVERT-TO-RED:** restoring the old expression failed **6 tests** including the
+well-formedness check and the 28th-scatter guard, while **all 10 pairing and cross-component
+tests stayed green** — correct, since pairing is independent of the generator.
+
+**LIMITS. No TUI was launched.** The tests call `_handle_node_add` directly with only
+`post_message` and `_emit_dict_update` stubbed (both need a running Textual app);
+`_sync_visualizer` is left alone since it already swallows its failure. Nobody has added a
+`CTRL_SCATTER` in a running workshop and seen `X` appear. **`omni qa` does not type-check
+this file** — `pyrightconfig.json` excludes `maccre_tui` entirely, so Ruff is the only static
+check and these 16 tests are the whole of its verification, which is why they drive the real
+method rather than asserting on source text. **`omni smoke` does not exercise the change**
+and is not claimed to; it confirms only that the new TUI→core import did not break the
+engine. **`_default_tether_id` and `root_tether_id` both still exist, intentionally** — the
+first names a scatter *by its agent set* (stable across the auto-wrap's two runs per step),
+the second names the *n*-th lane group an author created. **Nothing verifies a TUI-authored
+tether survives to `task_queue`**: the chain is workshop → `cfg["tether_id"]` → auto-wrap
+group tether → hydration → queue row, and only its ends are covered.
+**Related:** 4a (the divergence record this closes), 4b (the seam), 4c-1/4c-2/4c-3 (the
+engine side); Req 18.4 (root tether IDs); the `NAME_{i}` vs `NAME_S{i}` incident in
+Doctrine 4, which this is the second instance of and the first to be closed.

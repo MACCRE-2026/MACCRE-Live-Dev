@@ -30,6 +30,7 @@ import logging
 from typing import Any
 
 from maccre_core.flow_dict import FlowDictBuffer
+from maccre_core.orchestration.tether import root_tether_id
 
 from textual import on
 from textual.app import ComposeResult
@@ -268,9 +269,25 @@ class MacroNodeWorkshop(Vertical):
             step.setdefault("config", {})
 
             if event.node_id.startswith("CTRL_SCATTER"):
-                # Auto-assign tether ID
+                # ── Auto-assign a tether ID, through the one seam. Task 4d. ──
+                #
+                # This was `f"tether_{chr(96 + self._tether_counter)}"` — a private
+                # generator giving `tether_a`, `tether_b`, ... It is replaced by
+                # `tether.root_tether_id`, which the engine also reads, so the TUI and the
+                # engine stop being two sources of tether IDs. That split is Principle 4's
+                # named incident: a TUI building `NAME_{i}` while the engine built
+                # `NAME_S{i}`, harmless while the TUI only drew them and wrong the moment
+                # anything acted on what was drawn. A tether **is** acted on — it is what
+                # the fan-in gather gate scopes by.
+                #
+                # The old scheme also had a real defect past 26, not merely an ugly name.
+                # `chr(96 + n)` walks off the end of the alphabet: the 27th scatter in one
+                # session produced `tether_{`, and the **28th produced `tether_|`** — a
+                # tether containing a routing-target delimiter, which `parse_targets`
+                # splits, so `Wait_For` would read one lane as two. `root_tether_id`
+                # carries on into `AA`, `AB`, ... and is covered by a no-collision test.
+                tether_id = root_tether_id(self._tether_counter)
                 self._tether_counter += 1
-                tether_id = f"tether_{chr(96 + self._tether_counter)}"  # tether_a, tether_b, ...
                 step["tether_id"] = tether_id
                 step["config"].update({
                     "scatter_targets": [],
