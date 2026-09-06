@@ -5779,3 +5779,86 @@ stamp `CTRL_MERGE` with a lane's tether and the gate would never match.
 **Related:** the tether seam (4b), whose `lane_group` this consumes; the tether-model
 divergence record (4a); defect E1 (the 8-distinct-paths shape); the blanked-tether deadlock
 in Doctrine 2; the omni mandate's success-siloing warning, demonstrated here.
+---
+### Feature Name: A node's tether is no longer re-parented by whoever routed to it
+**Abstract:** `route_task` stamped every successor with the **router's** tether. It now stamps each successor with **its own**, as the topology declares it, via a new `target_tethers` parameter on the `MessageBroker` ABC (widened with operator approval). While one flat tether covered a whole scatter this was correct *by accident*; the moment lanes carry their own tethers it deadlocks the gather gate. This is Requirement 31.7's rule — routing does not re-parent — applied to ordinary routing, which had been violating it on every hop.
+**Date/Time Entered:** 2026-09-06T11:55:00-04:00
+**Status:** COMPLETED — task 4c-2. **No per-lane tether is produced yet; 4c-3 does that.**
+**Completed:** 2026-09-06T11:55:00-04:00
+**Completion Metric:** `target_tethers: Mapping[str, str] | None = None` added to `route_task`
+in `broker_interface.py`, `local_broker.py` and `tests/mocks/mock_broker.py`;
+`_resolve_target_tether` in `local_broker.py`; `_target_tethers` in `swarm_worker.py`, passed
+at **all five** `route_task` call sites. `tests/test_tether_is_not_reparented.py` —
+**23 tests, five groups**. Gate 2026-09-06: `omni clean` 11:44 (301 bytecode), `omni qa`
+**PASS whole project** 11:45:23, pytest **1372 collected / 1370 passed / 2 xfailed /
+0 failed** in 230.34 s, `omni smoke` **ALL CHECKS PASSED** (inference 0.9 s, $0.00).
+Reconciles against 1349/1347/2: `1349 + 23 = 1372`, `1347 + 23 = 1370`, xfailed unchanged
+at 2. **First commit in the 4c sequence where smoke exercises the changed code** — its
+single-node flow routes through `route_task` with the new parameter supplied by
+`_target_tethers`, against a real topology and a real queue.
+
+**Why it was correct by accident, and why that ends.** Only the entry task is seeded; every
+other `task_queue` row is created by whoever routes to it. With one flat tether across a
+scatter — scatter, eight lanes, merge — it did not matter who wrote it. With per-lane
+tethers, `CTRL_MERGE` is created by whichever lane finishes first and would be stamped with
+**that lane's** tether; the gather gate would look for lanes whose group matched `X.1`, find
+none, and the run would deadlock. That is the register's named incident. And
+**`swarm_worker`'s own fan-out branch already carried the live symptom in a comment**: *"a
+wrong non-empty tether makes it check a scope the predecessors are not in — so the gate
+matches zero rows and can never open. Observed live as an 8-lane merge waiting forever on
+eight completed lanes."*
+
+**BOTH SQL SITES, NOT JUST THE INSERT.** `route_task` writes the tether in the
+`INSERT ... ON CONFLICT` **and** in the `UPDATE` on the branch where the row exists and has
+not completed — which is the **fan-in path, the one every lane after the first takes**.
+Changing only the INSERT would have left lanes two through eight re-parenting the merge they
+were converging on. `test_eight_lanes_all_agree_on_the_merges_tether` routes all eight and
+asserts the last writer did not change it.
+
+**The fallback is documented as the defect, not as a default.** Any successor not named in
+the mapping falls back to `tether_id` — exactly the old behaviour — so the change cannot
+regress a caller with no topology to consult (`macro_factory`'s spawn routes, the
+`CTRL_PAUSE` resolver). Calling that "the default" would leave the next reader believing
+re-parenting is intended, so
+`test_without_the_mapping_the_merge_inherits_the_lane_and_that_is_the_bug` pins it **as a
+bug**. An empty mapped value also falls back rather than blanking: "the topology does not
+say" and "the topology says empty" want the same answer, and a blank stamped over a real
+tether is the Principle 2 incident directly.
+
+**The mock applies the resolution instead of accepting and discarding it.**
+`tests/mocks/mock_broker.py` could have taken the parameter to satisfy signature parity and
+ignored it — letting a test pass against the very re-parenting this removes, which is "the
+only thing a mock can get seriously wrong" per its own `payload_bytes` comment. It imports
+`_resolve_target_tether`, so the double and the driver agree by construction.
+
+**REVERT-TO-RED, PERFORMED.** Making `_resolve_target_tether` ignore the mapping failed
+**5 tests, including `test_the_gather_gate_then_opens_on_all_eight_lanes` — the deadlock
+itself** — while **every flat-model test and all 19 of `test_gather_scope_migration.py`
+stayed green.** The right pair: purely additive, and 4c-1's migration property does not
+depend on it.
+
+**Write-once was considered and deliberately not done.** Refusing any change to an existing
+non-empty tether is the strongest guarantee, but it is a behavioural change to a path whose
+existing `UPDATE` deliberately sets the tether, and per-target resolution already makes every
+writer agree on the same value. Rejected to keep the change minimal on the riskiest surface
+in the repo, and recorded so it is a considered omission rather than an oversight.
+
+**Rejected:** having `route_task` look the tether up itself (the broker has no topology and
+should not acquire one — it is a queue); a single resolved tether per call (the
+default-routing branch routes a multi-target string in one call and would have needed a new
+loop); a mock that accepts and ignores; doing this with 4c-3 (operator agreed the split —
+this commit produces no per-lane tethers, so nothing in it changes what a live flow writes).
+
+**LIMITS. No per-lane tether is produced yet** — every hierarchical tether in these tests is
+supplied by the test. **No 8-lane live run**: the gate opening on eight hierarchical lanes is
+proven against a real broker and a real SQLite database but on seeded rows, and `omni smoke`
+has no scatter. **Write-once is not enforced**, so correctness rests on every router
+resolving the same value from the same topology — true, but weaker than the schema refusing
+the change. **The fallback path is still live and still re-parents** for callers without a
+topology, so the guarantee is "every route the worker makes", not "every route".
+**`_target_tethers` swallows lookup failures**, so a broken topology degrades to the old
+behaviour silently rather than loudly — deliberate, since a routing call must not fail
+because a lookup did.
+**Related:** 4c-1 (the gather gate reading through `lane_group`); 4b (the seam); Req 31.7
+(`apply_cross_lane_route` refusing to re-parent, the same rule); the blanked-tether deadlock
+in Doctrine 2; defect E1's 8-distinct-outputs shape.

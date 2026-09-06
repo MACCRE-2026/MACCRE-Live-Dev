@@ -11,10 +11,11 @@ eliminating the need for SQLite during unit tests.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 
 from maccre_core.orchestration.broker_interface import MessageBroker
+from maccre_core.orchestration.local_broker import _resolve_target_tether
 
 
 class MockMessageBroker(MessageBroker):
@@ -91,6 +92,7 @@ class MockMessageBroker(MessageBroker):
         tether_id: str = "",
         output_path: str = "",
         payload_bytes: int = 0,
+        target_tethers: Mapping[str, str] | None = None,
     ) -> None:
         # Mark current task completed
         for task in self._tasks:
@@ -120,6 +122,7 @@ class MockMessageBroker(MessageBroker):
             "tether_id": tether_id,
             "output_path": output_path,
             "payload_bytes": payload_bytes,
+            "target_tethers": dict(target_tethers) if target_tethers else None,
         })
 
         # Enqueue successor nodes
@@ -137,7 +140,11 @@ class MockMessageBroker(MessageBroker):
                     "locked_by": None,
                     "flow_line_id": flow_line_id,
                     "flow_vector": flow_vector,
-                    "tether_id": tether_id,
+                    # Mirror the real broker: a successor carries ITS OWN tether where
+                    # the topology knows it, falling back to the router's. A mock that
+                    # stamped the router's tether unconditionally would let a test pass
+                    # against the re-parenting behaviour task 4c-2 removed.
+                    "tether_id": _resolve_target_tether(node, target_tethers, tether_id),
                     "created_at": "2026-01-01T00:00:00Z",
                 })
                 self._next_id += 1

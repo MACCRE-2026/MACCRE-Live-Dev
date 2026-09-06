@@ -15,7 +15,7 @@ implement this same interface without touching any consumer code.
 from __future__ import annotations
 
 import abc
-from typing import Any
+from typing import Any, Mapping
 
 
 class MessageBroker(abc.ABC):
@@ -87,6 +87,7 @@ class MessageBroker(abc.ABC):
         tether_id: str = "",
         output_path: str = "",
         payload_bytes: int = 0,
+        target_tethers: Mapping[str, str] | None = None,
     ) -> None:
         """Mark a task completed and enqueue successor node(s).
 
@@ -118,6 +119,31 @@ class MessageBroker(abc.ABC):
                 implementations **must not** overwrite a non-zero value with ``0``,
                 for the same reason as ``output_path``: a later caller that did not
                 measure must not erase a measurement an earlier one took.
+            target_tethers: ``{node_id: tether_id}`` giving each successor **its own**
+                tether, as the topology declares it. Added 2026-09-06, task 4c-2.
+
+                **This exists because ``tether_id`` alone re-parents every node it
+                routes to.** Only the entry task is seeded; every other row in
+                ``task_queue`` is created by whoever routes to it, and it was stamped
+                with the *router's* tether. While one flat tether covered a whole
+                scatter that was correct by accident — scatter, all eight lanes and the
+                merge shared one value, so it did not matter who wrote it. The moment
+                lanes carry their own tethers it is wrong: ``CTRL_MERGE`` would be
+                created by whichever lane finished first and stamped with *that lane's*
+                tether, the gather gate would look for lanes whose group matched and
+                find none, and the run would deadlock. That is the failure the register
+                already records — a scatter and its merge in different scopes, an
+                8-lane run that never gathered.
+
+                A node's tether is a property of the node, not of whoever pointed at
+                it. Requirement 31.7 states the same rule for cross-lane routes, where
+                ``topology_graph.apply_cross_lane_route`` refuses to re-parent; this is
+                that rule applied to ordinary routing.
+
+                Implementations **fall back to** ``tether_id`` for any successor not
+                named here, which preserves the pre-2026-09-06 behaviour exactly. The
+                fallback *is* the re-parenting, so a caller that can resolve the
+                topology should always pass this.
         """
 
     @abc.abstractmethod

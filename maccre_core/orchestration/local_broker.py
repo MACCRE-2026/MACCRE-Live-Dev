@@ -34,7 +34,7 @@ import os
 import json
 import sqlite3
 import threading
-from typing import Any, Collection, Literal, Optional
+from typing import Any, Collection, Literal, Mapping, Optional
 
 
 from maccre_core.utils.path_resolver import get_datacenter_path
@@ -112,6 +112,38 @@ def resolve_cross_lane_target(ref: str, known_lanes: Collection[str]) -> TetherQ
             "route is indistinguishable from a lane that ended."
         )
     return parsed
+
+
+def _resolve_target_tether(
+    node_id: str,
+    target_tethers: Mapping[str, str] | None,
+    router_tether: str,
+) -> str:
+    """The tether a successor row should carry. Requirement 31.7, applied to routing.
+
+    A node's tether is a property of **the node**, not of whoever routed to it. Every
+    row except the entry task is created by its router, and until 2026-09-06 it was
+    stamped with the router's tether — which was correct by accident while one flat
+    tether covered a whole scatter, and becomes a deadlock the moment lanes carry their
+    own: ``CTRL_MERGE`` would take the tether of whichever lane finished first, and the
+    gather gate would find no lanes whose group matched it.
+
+    Args:
+        node_id: The successor being enqueued.
+        target_tethers: What the topology says each node's tether is.
+        router_tether: The completing node's tether, used only as a fallback.
+
+    Returns:
+        The successor's own tether where the topology knows it, otherwise
+        *router_tether*. **The fallback is the re-parenting behaviour** — preserved
+        deliberately so this change cannot regress a caller that has no topology to
+        consult, and documented as such rather than presented as a default.
+    """
+    if target_tethers:
+        own = str(target_tethers.get(node_id, "") or "").strip()
+        if own:
+            return own
+    return router_tether
 
 
 class LocalMessageBroker(MessageBroker):
@@ -719,6 +751,7 @@ class LocalMessageBroker(MessageBroker):
         tether_id: str = "",
         output_path: str = "",
         payload_bytes: int = 0,
+        target_tethers: Mapping[str, str] | None = None,
     ) -> None:
         """
         Mark the current task completed and enqueue successor nodes.
@@ -746,7 +779,12 @@ class LocalMessageBroker(MessageBroker):
         ``flow_line_id`` tracks scatter fan-out lineage so downstream nodes can
         identify which branch of a parallel scatter they belong to.
 
-        ``tether_id`` isolates fan-in artifact gathering to matching scatter scopes.
+        ``tether_id`` isolates fan-in artifact gathering to matching scatter scopes. It
+        is now only the **fallback** for a successor's tether: ``target_tethers`` names
+        each successor's own tether as the topology declares it, because a node's tether
+        is a property of the node and not of whoever routed to it. See
+        :func:`_resolve_target_tether` — stamping the router's tether is what would put
+        a scatter and its merge in different scopes once lanes carry their own tethers.
 
         Special targets:
           MANUAL  — pauses the task in 'awaiting_orders'; the GUI calls
@@ -795,6 +833,8 @@ class LocalMessageBroker(MessageBroker):
              payload_bytes, payload_bytes, row_id),
         )
         for node in next_nodes:
+                # The successor's OWN tether, not the router's. Task 4c-2.
+                node_tether = _resolve_target_tether(node, target_tethers, tether_id)
                 if node.upper() not in ("DONE", "FAILED", "STOP", "TERMINATE", "END"):
                     cursor = conn.execute(
                         "SELECT loop_iteration_count, lock_status FROM task_queue "
@@ -828,7 +868,7 @@ class LocalMessageBroker(MessageBroker):
                             conn.execute(
                                 "UPDATE task_queue SET payload_path=?, source_payload_path=?, tether_id=? "
                                 "WHERE job_id=? AND current_node=?",
-                                (new_payload_path, source_payload_path, tether_id, job_id, node),
+                                (new_payload_path, source_payload_path, node_tether, job_id, node),
                             )
                             continue
 
@@ -872,7 +912,7 @@ class LocalMessageBroker(MessageBroker):
                         "flow_vector=excluded.flow_vector, "
                         "tether_id=excluded.tether_id, "
                         "loop_iteration_count=task_queue.loop_iteration_count + 1",
-                        (job_id, new_payload_path, source_payload_path, node, flow_line_id, flow_vector, tether_id),
+                        (job_id, new_payload_path, source_payload_path, node, flow_line_id, flow_vector, node_tether),
                     )
         conn.commit()
 

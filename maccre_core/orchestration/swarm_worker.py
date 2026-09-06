@@ -687,6 +687,55 @@ class UniversalSwarmWorker:
             )
         return paths
 
+    def _target_tethers(self, next_node_str: str) -> dict[str, str]:
+        """Each successor's **own** tether, as the topology declares it. Task 4c-2.
+
+        Passed to :meth:`MessageBroker.route_task` so a successor row is stamped with the
+        tether that belongs to it rather than the one belonging to whoever routed there.
+
+        **Why this is needed and not a nicety.** Only the entry task is seeded; every
+        other ``task_queue`` row is created by its router, and was stamped with the
+        router's tether. That was correct by accident while one flat tether covered a
+        whole scatter — scatter, all eight lanes and the merge shared one value. Once
+        lanes carry their own, ``CTRL_MERGE`` would be created by whichever lane finished
+        first and stamped with *that lane's* tether; the gather gate would look for lanes
+        whose group matched and find none.
+
+        The comment on the fan-out branch below already records the live symptom of
+        getting a tether wrong in this exact way: *"a wrong non-empty tether makes it
+        check a scope the predecessors are not in — so the gate matches zero rows and can
+        never open. Observed live as an 8-lane merge waiting forever on eight completed
+        lanes."* This resolves the tether from the topology so the value cannot be wrong
+        in that way.
+
+        Args:
+            next_node_str: The routing target field, ``,`` or ``|`` delimited.
+
+        Returns:
+            ``{node_id: tether_id}`` for every target the topology gives a **non-empty**
+            tether. Targets the topology does not know — terminal sentinels such as
+            ``END``, and nodes outside this topology — are simply absent, and
+            ``_resolve_target_tether`` falls back to the router's tether for them, which
+            is the pre-existing behaviour. An empty tether is omitted rather than
+            recorded, because "the topology does not say" and "the topology says empty"
+            call for the same fallback and only one of them is worth a dict entry.
+        """
+        if self.topology is None:
+            return {}
+        out: dict[str, str] = {}
+        for raw in str(next_node_str or "").replace("|", ",").split(","):
+            node = raw.strip()
+            if not node:
+                continue
+            try:
+                cfg = self.topology.get_node_config(node) or {}
+            except Exception:  # noqa: BLE001 — sentinel or unknown node; nothing to resolve
+                continue
+            own = str(cfg.get("tether_id", "") or "").strip()
+            if own:
+                out[node] = own
+        return out
+
     def execute_cycle(  # type: ignore[reportGeneralTypeIssues]
         self, 
         pause_event: Optional[Any] = None, 
@@ -926,6 +975,7 @@ class UniversalSwarmWorker:
                             flow_vector=flow_vector,
                             tether_id=tether_id,
                             output_path=det_result.output_payload_path,
+                            target_tethers=self._target_tethers(target_node),
                         )
                     logger.info(
                         "[%s] DET fan-out: %d targets on tether=%s",
@@ -945,6 +995,7 @@ class UniversalSwarmWorker:
                         flow_vector=flow_vector,
                         tether_id=tether_id,
                         output_path=det_result.output_payload_path,
+                        target_tethers=self._target_tethers(det_result.next_node),
                     )
                 else:
                     # Default topology routing
@@ -961,6 +1012,7 @@ class UniversalSwarmWorker:
                         flow_vector=flow_vector,
                         tether_id=tether_id,
                         output_path=det_result.output_payload_path,
+                        target_tethers=self._target_tethers(next_node),
                     )
                 return CycleOutcome.WORKED
             
@@ -1965,6 +2017,7 @@ All file paths must strictly resolve to these five silos:
                 # branch. Sizing it again would answer a different question with the
                 # same column name.
                 payload_bytes=payload_bytes,
+                target_tethers=self._target_tethers(next_node),
             )
             
             # Update the session with the live ledger
@@ -2021,6 +2074,13 @@ All file paths must strictly resolve to these five silos:
                     # and say so; a plausible-but-wrong one would be merged as
                     # though the lane had succeeded.
                     output_path="",
+                    # Resolved from the topology like every other route. This branch
+                    # passes no `tether_id`, so before task 4c-2 a failure target that
+                    # was a *real node* rather than a sentinel landed with an empty
+                    # tether — unscoped, which still gathers but in the wrong scope.
+                    # `_target_tethers` swallows per-node lookup failures, so it cannot
+                    # add a new way for this handler to raise.
+                    target_tethers=self._target_tethers(fail_target),
                 )
             except Exception as route_err:  # noqa: BLE001
                 logger.critical(
