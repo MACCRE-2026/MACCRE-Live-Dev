@@ -6248,3 +6248,128 @@ intermittent `test_demand_overprovisioning` suite hang is **observed and not roo
 Doctrine 5 (specifications drift unless mechanically checked — the rule this whole entry is an
 instance of, and which no test on either page enforced); 4g and the TUI wiring task (the items
 these corrections list as still open).
+---
+### Feature Name: Nested scatter is allowed and surfaced, and the 64-lane ceiling finally refuses something
+**Abstract:** `MAX_CONCURRENT_LANES = 64` and `NESTING_DEPTH_WARN_AT = 2` had sat in `tether.py` since task 4b **declared for Requirement 19 and read by nothing.** Both now have a consumer at `FlowRunner.preflight_check` — the seam `nexus_plex` actually gates launch on. The gap was reachable, not theoretical: a measured probe with **70 slotted agents produced 70 lanes and 72 topology rows, accepted in silence**, and nesting to depth 2 turns out to be reachable **today with no nested scatter node at all**, by typing `X.1` into the Tether ID box.
+**Date/Time Entered:** 2026-09-06T15:30:00-04:00
+**Status:** COMPLETED — task 4g. **Depth is reported, not refused. The lane ceiling refuses, and the operator can still override it.**
+**Completed:** 2026-09-06T15:30:00-04:00
+**Completion Metric:** `lane_tethers`, `max_nesting_depth`, `deepest_tethers` and a corrected
+`count_lanes` in `maccre_core/orchestration/tether.py`; `row_tethers`, pre-flight **check (f)**
+and four new readout keys in `maccre_core/orchestration/flow_engine.py`.
+`tests/test_nested_scatter_limits.py` — **54 tests, 9 groups**, driving the real auto-wrap and
+the real `preflight_check`. Gate 2026-09-06: `omni clean` 14:52 (304 bytecode), `omni qa`
+**PASS whole project** 15:19:57, pytest **1486 collected / 1484 passed / 2 xfailed / 0 failed**
+(172.62 s), `omni smoke` **ALL CHECKS PASSED** ($0.00). Reconciles: `1431 + 54 + 1 = 1486`.
+
+*** THE FINDING THAT CHANGED THE SHAPE OF THE TASK ***
+**`count_lanes` would have re-introduced the defect task 4e had just removed.** It counted
+**distinct tether ids**, and its docstring named Requirement 19.3's ceiling — so it was the
+obvious function to build the limit on. For the ten rows of an 8-lane scatter the distinct ids
+are `X` plus `X.1`..`X.8`: **nine**, which is exactly what `total_sum_readout` reported before
+4e corrected it.
+**Measured, not argued.** Restoring that definition failed **10 tests**, and the one that
+matters is `test_exactly_the_limit_is_allowed`: **a legal 64-lane topology was REFUSED**,
+because 64 lanes plus their gather scope counts as 65. The ceiling would have fired one lane
+early while telling the operator it had counted 64 — Principle 2, in the place a flow gets
+blocked.
+Nothing consumed the function, so no behaviour regressed. **Its own tests could not see the
+flaw**, because every one of them fed it lane tethers already stripped of the group
+(`child_tether_ids("X", 8)`).
+**Rejected:** leaving it alone and adding a correctly-defined sibling. That leaves a function
+whose docstring points at Requirement 19.3 and whose definition is wrong for it — a landmine
+with a label inviting the next reader to step on it.
+
+*** WHAT WAS MEASURED FIRST, AND WHY THAT ORDERING MATTERED HERE ***
+The previous attempt at this task was planned against a documented class that did not exist,
+so nothing was written until both halves had been reproduced:
+- `_get_macronode` takes `len(scatter_agents)` **straight from step config with no ceiling of
+  its own** → 70 lanes, 72 rows, no refusal, no warning. `MAX_SCATTER_AGENTS` (8) bounds the
+  slots the UI offers and `SCATTER_HARD_CAP` (12) bounds threads; **neither bounds the number
+  of lanes a topology may declare.**
+- The readout for that topology promised `expected_peak_concurrency = 12` and said **nothing
+  whatever about depth** — there was no key for it.
+- An operator-typed hierarchical tether nests the auto-wrap's own lanes: `X.1` → `X.1.1`,
+  `X.1.2`. **Depth 2 was already reachable and nothing warned.**
+
+*** THE LANE RULE MOVED INTO tether.py RATHER THAN BEING WRITTEN A SECOND TIME ***
+4e settled "a lane is a tether with a parent" as a comprehension inside `total_sum_readout`.
+4g needs the same rule at pre-flight. A second copy is Doctrine 4's named incident with a
+specific cost: **the ceiling would refuse one number while the readout displayed another, for
+one topology, in the same modal.** `lane_tethers` is now the single definition, both read
+through it, and `test_the_readout_reports_through_the_shared_rule` pins the agreement.
+`row_tethers` exists for the same reason one level down — two extractions of the `Tether_ID`
+column could disagree about whether a whitespace-only cell counts, which is enough to make a
+refusal and a readout report different lane counts.
+
+*** DEPTH WARNS, ONLY THE CEILING REFUSES, AND THE ASYMMETRY IS THE REQUIREMENT'S OWN ***
+Requirement 19's user story asks to nest *"until complexity becomes unmanageable"* and for the
+system to *"not artificially limit my authoring capability but naturally surface when I have
+exceeded manageable complexity."* Surfacing is a warning; a depth refusal would be the
+artificial limit the story rules out. The lane ceiling is the one refusal because it alone
+bounds a resource.
+**Revert-to-red:** promoting the depth notice to ERROR failed **6 tests**, including
+`test_no_error_anywhere_mentions_depth_or_nesting` — written against *any* error mentioning
+nesting rather than against my own message text, so it survives a rewording.
+
+*** 19.3 IS A LAUNCH BLOCK THE OPERATOR CAN STILL OVERRIDE, STATED BECAUSE THE REQUIREMENT SAYS "REJECT" ***
+`preflight_check` is genuinely wired — `nexus_plex.action_launch_flow` calls it, renders the
+report and gates on `is_ok`. On failure the TUI reveals a **Proceed Anyway** button. That
+escape hatch predates this check and is deliberate for the other checks, so 19.3 lands as
+*"refuses to launch unless the operator explicitly overrides"*, not as an absolute bar.
+The auto-wrap therefore **logs at ERROR on an over-limit run without refusing.** Failing the
+build there would take the operator's flow away *after* they had explicitly chosen to proceed
+— the same call as 4c-3's substitute-and-log for an unusable tether. But an overridden 70-lane
+run must not read like a 4-lane one, and before this the only trace was an INFO line that
+reads identically at any width.
+**Also recorded:** 19.3's wording is *"reject further scatter node **insertions**"*, which is
+an **authoring-time** action the engine cannot perform — it sees a finished topology, never an
+insertion. Refusing the launch is the engine's half; refusing the insertion belongs to the
+workshop and is **deliberately not stubbed** here, so there is one place that decides.
+
+*** PER STEP, NOT SUMMED ACROSS THE FLOW ***
+Steps run in sequence, so lanes in step 0 and step 2 are never in flight together. Summing
+would refuse a flow that never exceeds the ceiling at any instant, and 19.3 says **concurrent**.
+Two steps of 40 lanes pass; one step of 65 does not; the offending step is named when only one
+is over. Both sides of the boundary are pinned, because an off-by-one here refuses a legal flow.
+
+*** 19.4 IS SUPERSEDED BY REQUIREMENT 29 — RECORDED AS A TEST, NOT A COMMENT ***
+19.4 demands unconditionally that every nested branch have a corresponding `CTRL_MERGE`. 29.1
+permits a lane to terminate with no gather node, and 29.3 makes the refusal conditional on the
+declared Gather Strategy. **Building 19.4 as written would refuse topologies Requirement 29
+explicitly allows.** `TestRequirement194IsSupersededNotForgotten` exists so that reviving 19.4
+has to argue with 29 first, which is the argument that matters.
+
+*** DEPTH IS PUBLISHED IN ONE UNIT, WITH THE TWO READINGS KEPT APART ***
+`max_nesting_depth` counts **separators** — the design's only precise statement of the number
+(`parse_depth("X.1.2") → 2`). The operator-facing warning speaks in **levels** (`depth + 1`),
+which is 19.2's wording. `level_count` already existed for exactly this and a pre-existing test
+pins `level_count == depth + 1`, so the two readings cannot drift into independent definitions.
+Published on the readout so **the visualizer work reads the engine's number instead of counting
+dots in a label it drew itself** — the `NAME_{i}` / `NAME_S{i}` divergence avoided in advance
+rather than repaired afterwards.
+
+*** ONE PRE-EXISTING TEST CORRECTED, AND THE FULL SUITE CAUGHT IT ***
+`test_tether.py::test_a_legacy_scatters_ten_rows_do_not_read_as_ten_lanes` asserted
+`count_lanes(["scatter_84fe89ba"] * 10) == 1`; it is now `== 0`, with a dated note.
+**Intent preserved and sharpened** — the original point was that repetition must not inflate
+the count, which still holds. What changed is the definition: a flat tether has no parent, so
+ten identical flat rows name **no lane at all** rather than one. Not a lost fact — under the
+flat scheme no lane was ever individually identified, and the readout answers that exact case
+from the scatter's fan-out width, reporting `lane_count_source == "scatter_fan_out"` so the
+number stays attributable. `test_it_counts_distinct_ids` was renamed `test_it_counts_lanes`,
+because the old name described the defect. **The first full-suite run failed exactly this one
+test and nothing else**, and it was fixed by correcting the assertion, not by loosening it.
+
+**LIMITS — the same ones task 4f wrote into the design docs, unchanged by this work.**
+**No live 8-lane run has ever been performed.** `omni smoke` runs a single-node flow with no
+scatter, so it exercises no lane at all; every number here comes from the real auto-wrap and
+the real `preflight_check` called directly, or from hand-built rows. **`total_sum_readout` still
+has no caller** — the four new keys are read by nothing yet. **19.2's icon and 19.5's
+indentation are not built.** **The `#cfg-tether-id` Input still does not validate.** **The 64 is
+Requirement 19.3 as written and is not validated against evidence** — nobody has measured where
+a topology actually becomes unmanageable, and this task does not claim to have.
+**Related:** 4e (the lane-vs-scope distinction this reads through, and the defect `count_lanes`
+would have revived); 4c-3 (the auto-wrap that produces the lanes, and the substitute-and-log
+precedent for the override decision); Req 29 (which supersedes 19.4); Req 18.3 (the nesting
+shape); the TUI wiring task, which owns 19.2, 19.5 and the authoring-time half of 19.3.

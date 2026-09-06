@@ -104,13 +104,16 @@ __all__ = [
     "TetherIdError",
     "child_tether_ids",
     "count_lanes",
+    "deepest_tethers",
     "depth",
     "in_gather_scope",
     "is_descendant_of",
     "is_hierarchical",
     "lane_group",
+    "lane_tethers",
     "lanes_by_group",
     "level_count",
+    "max_nesting_depth",
     "root_tether_id",
     "validate_tether_id",
 ]
@@ -148,6 +151,18 @@ FORBIDDEN_IN_TETHER_ID: frozenset[str] = frozenset({"@", ">", ",", "|"})
 #: :func:`depth` counts separators, because that is the spec's only precise statement
 #: of the number. This constant is therefore 2, and :func:`level_count` exists for the
 #: prose sense so neither reading has to be re-derived at a call site.
+#:
+#: **Consumed since 2026-09-06 (task 4g)** by ``flow_engine.FlowRunner.preflight_check``,
+#: which raises a **WARN — never an ERROR**. Requirement 19.2 asks the *visualizer* for an
+#: icon, and 19's user story asks the system to "naturally surface" unmanageable complexity
+#: rather than "artificially limit" authoring; a refusal would be that limit. The depth is
+#: also published on ``total_sum_readout`` as ``max_nesting_depth`` so the visualizer work
+#: reads the engine's number instead of counting separators itself.
+#:
+#: Depth 2 is reachable **today**, without nested scatter nodes: an operator who types a
+#: hierarchical value such as ``X.1`` into the Tether ID box gets lanes ``X.1.1``..``X.1.N``
+#: from the auto-wrap, measured. Nothing warned about that before this constant had a
+#: consumer.
 NESTING_DEPTH_WARN_AT: int = 2
 
 #: Requirement 19.3's ceiling on total concurrent lanes.
@@ -157,6 +172,13 @@ NESTING_DEPTH_WARN_AT: int = 2
 #: declare more lanes than the pool will ever run at once; ``flow_engine``'s readout
 #: already draws that distinction and it is correct. This number is an authoring
 #: limit and is **not** validated against evidence — it is Requirement 19.3 as written.
+#:
+#: **Enforced since 2026-09-06 (task 4g)** by ``flow_engine.FlowRunner.preflight_check``,
+#: which records an ERROR and blocks launch. Until then it was declared with no consumer,
+#: and the gap was reachable rather than theoretical: the auto-wrap takes
+#: ``len(scatter_agents)`` straight from step config with no ceiling of its own, so a
+#: measured probe with 70 slotted agents produced **70 lanes and 72 rows, accepted
+#: silently**, while the readout promised a peak of 12 threads.
 MAX_CONCURRENT_LANES: int = 64
 
 #: Root tether IDs in order, as Requirement 18.4 and ``design.md`` name them.
@@ -429,23 +451,116 @@ def child_tether_ids(parent: str, count: int) -> list[str]:
     return [f"{base}{TETHER_LEVEL_SEPARATOR}{i}" for i in range(1, count + 1)]
 
 
-def count_lanes(tether_ids: Iterable[str]) -> int:
-    """How many distinct lanes *tether_ids* names. For Requirement 19.3's ceiling.
+def lane_tethers(tether_ids: Iterable[str]) -> list[str]:
+    """The subset of *tether_ids* that name **lanes**. The one definition of a lane.
 
-    Counts **distinct** ids, so the ten rows of an 8-lane scatter (scatter + 8 lanes +
-    merge) do not read as ten lanes. Malformed ids are skipped and logged rather than
-    raising, because this is a count for a limit check and a validator elsewhere is the
-    thing that should refuse a bad id by name.
+    **A lane is a tether that has a parent** — ``lane_group(t) != t``. Everything else is
+    a *gather scope*: the value the scatter and its ``CTRL_MERGE`` carry, which the lanes
+    report into.
+
+    This function exists because that rule was about to be written twice. Task 4e settled
+    it inside ``flow_engine.total_sum_readout``; task 4g needs the same rule at pre-flight
+    to enforce Requirement 19.3. Two derivations of one definition is Doctrine 4's named
+    incident — a TUI building ``NAME_{i}`` while the engine built ``NAME_S{i}`` — and the
+    cost here would be a limit that refuses a different number than the readout displays.
+
+    Distinct and order-preserving, so a refusal message and a readout list the same lanes
+    in the same order twice running. Malformed ids are skipped with a warning rather than
+    raising: this feeds a count, and refusing a bad id *by name* is a validator's job.
+
+    ==================================  ==================  ==========================
+    Input                               Returns             Why
+    ==================================  ==================  ==========================
+    ``["X", "X.1", "X.2"]``             ``["X.1", "X.2"]``  ``X`` is the scope
+    ``["X.1", "X.1.1", "X.1.2"]``       all three           a nested lane is still a lane
+    ``["scatter_ab12cd34"]``            ``[]``              flat: names no lane at all
+    ==================================  ==================  ==========================
+
+    The flat case returning nothing is correct rather than a gap: under the flat scheme no
+    lane was ever individually identified. ``flow_engine`` answers that case from the
+    scatter's fan-out width instead, and reports which evidence it used.
     """
-    seen: set[str] = set()
+    lanes: list[str] = []
     for raw in tether_ids:
         try:
-            seen.add(validate_tether_id(raw))
+            tether = validate_tether_id(raw)
         except TetherIdError as exc:
             logger.warning(
-                "[TETHER] Skipping unusable tether id while counting lanes: %s", exc
+                "[TETHER] Skipping unusable tether id while selecting lanes: %s", exc
             )
-    return len(seen)
+            continue
+        if lane_group(tether) != tether and tether not in lanes:
+            lanes.append(tether)
+    return lanes
+
+
+def count_lanes(tether_ids: Iterable[str]) -> int:
+    """How many lanes *tether_ids* names. Requirement 19.3's ceiling counts this.
+
+    **Corrected 2026-09-06 (task 4g). This function used to count distinct tether ids,
+    which is not a lane count and would have re-introduced the exact defect task 4e had
+    just removed from the readout.** For the ten rows of an 8-lane scatter the distinct
+    ids are ``X`` plus ``X.1``..``X.8`` — nine — because the group tether is one of them.
+    Nine was the number ``total_sum_readout`` reported before 4e, and building
+    Requirement 19.3's ceiling on it would have refused a 64-lane topology at 63 real
+    lanes while telling the operator it had counted 64.
+
+    Nothing consumed this function at the time, so no behaviour regressed; the definition
+    was simply written before "a lane is a tether with a parent" was settled. It now reads
+    through :func:`lane_tethers`, so the ceiling and the readout cannot disagree.
+    """
+    return len(lane_tethers(tether_ids))
+
+
+def max_nesting_depth(tether_ids: Iterable[str]) -> int:
+    """The deepest nesting level present in *tether_ids*, in **separators**.
+
+    ``[]`` → 0. ``["X", "X.1"]`` → 1. ``["X.1.1"]`` → 2, which is
+    :data:`NESTING_DEPTH_WARN_AT` — Requirement 19.2's "3 levels (root → child →
+    grandchild)" counted the way :func:`depth` counts.
+
+    Reported rather than refused, deliberately, and the requirement's own user story is
+    the argument: the author wants to nest *"until complexity becomes unmanageable"* and
+    asks the system to *"not artificially limit my authoring capability but naturally
+    surface when I have exceeded manageable complexity."* Surfacing is a warning. Only
+    the lane ceiling (19.3) is a refusal, because that one bounds a resource.
+
+    Unusable ids are skipped with a warning, matching :func:`lane_tethers`, so one bad
+    row cannot make a whole topology look flat.
+    """
+    deepest = 0
+    for raw in tether_ids:
+        try:
+            deepest = max(deepest, depth(raw))
+        except TetherIdError as exc:
+            logger.warning(
+                "[TETHER] Skipping unusable tether id while measuring depth: %s", exc
+            )
+    return deepest
+
+
+def deepest_tethers(tether_ids: Iterable[str]) -> list[str]:
+    """The tethers sitting at :func:`max_nesting_depth`, distinct and in first-seen order.
+
+    Exists so a nesting warning can **name** the tethers that caused it. A warning that
+    reports only a number leaves the operator to find the nesting themselves, and on a
+    72-row topology that is the difference between an actionable message and a noticed
+    one.
+
+    A flat-only input returns every id, because a flat tether is depth 0 and 0 is then
+    the maximum. That is intentional and harmless — the caller checks the depth against
+    :data:`NESTING_DEPTH_WARN_AT` before it has anything to say.
+    """
+    target = max_nesting_depth(tether_ids)
+    found: list[str] = []
+    for raw in tether_ids:
+        try:
+            tether = validate_tether_id(raw)
+        except TetherIdError:
+            continue  # already warned about by max_nesting_depth
+        if depth(tether) == target and tether not in found:
+            found.append(tether)
+    return found
 
 
 def lanes_by_group(tether_ids: Sequence[str]) -> dict[str, list[str]]:

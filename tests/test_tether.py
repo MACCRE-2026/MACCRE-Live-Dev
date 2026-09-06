@@ -441,14 +441,36 @@ class TestATetherIdCannotCollideWithAnotherSeam:
 
 
 class TestCountLanes:
-    def test_it_counts_distinct_ids(self) -> None:
+    def test_it_counts_lanes(self) -> None:
         assert count_lanes(child_tether_ids("X", 8)) == 8
 
+    def test_the_group_tether_is_not_counted_as_a_lane(self) -> None:
+        """Added 2026-09-06 (task 4g). The whole tether column of an 8-lane scatter is
+        **nine** distinct ids, because the scatter and its merge carry the group. Nine is
+        what `total_sum_readout` reported before task 4e corrected it, and it is what this
+        function answered until 4g gave Requirement 19.3 a consumer: the ceiling would have
+        refused a legal 64-lane topology at 64 real lanes plus their scope."""
+        column = ["X"] + [f"X.{i}" for i in range(1, 9)] + ["X"]
+
+        assert len(set(column)) == 9
+        assert count_lanes(column) == 8
+
     def test_a_legacy_scatters_ten_rows_do_not_read_as_ten_lanes(self) -> None:
-        """The defect this replaces: `len(distinct Tether_ID)` over the rows of an
-        8-lane scatter gives 1, and over per-lane rows it must give 8 — but the ten
-        rows of one legacy scatter must still give 1, not 10."""
-        assert count_lanes(["scatter_84fe89ba"] * 10) == 1
+        """Ten rows of one flat scatter must not read as ten lanes.
+
+        **Corrected 2026-09-06 (task 4g): this asserted `== 1`.** The intent is preserved
+        and sharpened — the original point was that repetition must not inflate the count,
+        and that still holds. What changed is the definition it is measured against: a lane
+        is now a tether with a parent, and a flat tether has none, so ten identical flat
+        rows name **no lane at all** rather than one.
+
+        That is not a lost fact. Under the flat scheme no lane was ever individually
+        identified, and `flow_engine.total_sum_readout` answers this exact case from the
+        width of the scatter's fan-out instead, reporting
+        `lane_count_source == "scatter_fan_out"` so the number stays attributable.
+        Counting the group as a lane here is the 4e defect, and building 19.3's ceiling on
+        it would have refused legal topologies."""
+        assert count_lanes(["scatter_84fe89ba"] * 10) == 0
 
     def test_it_counts_lanes_across_two_scatters(self) -> None:
         assert count_lanes(child_tether_ids("X", 8) + child_tether_ids("Y", 4)) == 12

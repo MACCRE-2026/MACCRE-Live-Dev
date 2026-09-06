@@ -40,7 +40,16 @@ from maccre_core.orchestration.deterministic_nodes import (
 from maccre_core.orchestration.local_broker import LocalMessageBroker
 from maccre_core.orchestration.payload_modes import DEFAULT_PAYLOAD_MODE
 from maccre_core.orchestration.swarm_pool import DynamicSwarmPool
-from maccre_core.orchestration.tether import TetherIdError, child_tether_ids, lane_group
+from maccre_core.orchestration.tether import (
+    MAX_CONCURRENT_LANES,
+    NESTING_DEPTH_WARN_AT,
+    TetherIdError,
+    child_tether_ids,
+    deepest_tethers,
+    lane_group,
+    lane_tethers,
+    max_nesting_depth,
+)
 from maccre_core.orchestration.topology_engine import TopologyEngine
 from maccre_core.orchestration.topology_graph import (
     entry_nodes,
@@ -76,6 +85,29 @@ def _default_tether_id(scatter_agents: Sequence[str]) -> str:
     """
     digest = hashlib.sha1("|".join(scatter_agents).encode("utf-8")).hexdigest()[:8]
     return f"scatter_{digest}"
+
+
+def row_tethers(topology_rows: list[dict[str, Any]]) -> list[str]:
+    """Every distinct ``Tether_ID`` in *topology_rows*, in first-seen order.
+
+    The one place that reads the tether column off a topology row. Both
+    :func:`total_sum_readout` and :meth:`FlowRunner.preflight_check` need it — the readout
+    to report lanes, pre-flight to enforce Requirement 19.3's ceiling — and if they
+    extracted it separately they could disagree about something as small as whether a
+    whitespace-only cell counts, which is enough to make a refusal and a readout report
+    different lane counts for one topology.
+
+    Blank and whitespace-only cells are dropped, because a row with no tether is a row
+    with no lane, not a lane called ``""``. Validity is **not** judged here:
+    :func:`tether.lane_tethers` and its neighbours warn and skip unusable ids, and this
+    function's job is to say what the rows contain rather than to referee it.
+    """
+    seen: list[str] = []
+    for row in topology_rows or []:
+        tether = str(row.get("Tether_ID", "") or "").strip()
+        if tether and tether not in seen:
+            seen.append(tether)
+    return seen
 
 
 #: ``FlowStep.config`` keys whose values name routing targets, and so must carry
@@ -318,6 +350,17 @@ def total_sum_readout(
     (``"lane_tethers"``, ``"scatter_fan_out"`` or ``"none"``), for the same reason
     ``source`` exists: a count nobody can attribute is a count nobody can check.
 
+    ``max_nesting_depth`` and ``deepest_lane_tethers`` report Requirement 19's nesting
+    (task 4g), counted in **separators** — the unit :func:`tether.depth` uses, so ``X.1.1``
+    is ``2``, which is 19.2's "3 levels (root → child → grandchild)". Published here so the
+    visualizer work reads the engine's number rather than counting dots in a label it drew
+    itself, which is how the ``NAME_{i}`` / ``NAME_S{i}`` divergence started.
+    ``exceeds_lane_limit`` and ``lane_limit`` state 19.3's ceiling, and
+    :meth:`FlowRunner.preflight_check` refuses on the same comparison over the same
+    :func:`tether.lane_tethers` rule — so the number that blocks a launch is the number
+    shown here. **Depth is reported, never refused**: 19's user story asks the system to
+    surface unmanageable complexity rather than limit authoring.
+
     Fields absent from the data model are reported **empty rather than fabricated.**
     Gather Strategy (Req 29), cross-lane routes (Req 31) and ``CTRL_WAIT`` targets
     (Req 32) are specified and unbuilt; the keys exist so consumers have a stable
@@ -387,13 +430,13 @@ def total_sum_readout(
     # A lane is therefore a tether that has a parent: `lane_group(t) != t`. A flat legacy
     # tether is its own group, so it is a scope and not a lane, which is correct — under
     # the flat scheme no lane was individually identified at all.
-    tethers: list[str] = []
-    for row in rows:
-        tether = str(row.get("Tether_ID", "") or "").strip()
-        if tether and tether not in tethers:
-            tethers.append(tether)
+    tethers: list[str] = row_tethers(rows)
 
-    lane_tethers: list[str] = [t for t in tethers if lane_group(t) != t]
+    # `lane_tethers` is imported from `tether`, not written here. Task 4g needed the same
+    # rule at pre-flight for Requirement 19.3's ceiling, and a second copy of "a lane is a
+    # tether with a parent" would let the limit refuse a different number than this readout
+    # displays — Doctrine 4, in the two places whose numbers the operator compares.
+    lanes: list[str] = lane_tethers(tethers)
 
     gather_scopes: list[str] = []
     for tether in tethers:
@@ -407,7 +450,7 @@ def total_sum_readout(
     nodes_per_lane: dict[str, int] = {}
     for row in rows:
         tether = str(row.get("Tether_ID", "") or "").strip()
-        if tether and tether in lane_tethers:
+        if tether and tether in lanes:
             nodes_per_lane[tether] = nodes_per_lane.get(tether, 0) + 1
 
     # A topology whose lanes are not individually tethered — a hand-authored CSV with one
@@ -425,8 +468,8 @@ def total_sum_readout(
             if target not in fan_out_lanes:
                 fan_out_lanes.append(target)
 
-    if lane_tethers:
-        lane_count = len(lane_tethers)
+    if lanes:
+        lane_count = len(lanes)
         lane_count_source = "lane_tethers"
     elif fan_out_lanes:
         lane_count = len(fan_out_lanes)
@@ -443,9 +486,21 @@ def total_sum_readout(
         "node_count": len(node_id_values),
         "lane_count": lane_count,
         "lane_count_source": lane_count_source,
-        "lane_tether_ids": lane_tethers,
+        "lane_tether_ids": lanes,
         "gather_scopes": gather_scopes,
         "nodes_per_lane": nodes_per_lane,
+        # ── Nesting, Requirement 19. Task 4g. ─────────────────────────────────
+        # Counted in separators, the unit `tether.depth` uses: `X.1.1` is 2, which is
+        # Requirement 19.2's "3 levels (root -> child -> grandchild)". Published here so
+        # the visualizer work (19.2's warning icon, 19.5's indentation) reads the engine's
+        # number instead of counting dots in a label it drew itself.
+        "max_nesting_depth": max_nesting_depth(tethers),
+        "deepest_lane_tethers": [t for t in deepest_tethers(tethers) if t in lanes],
+        # Requirement 19.3, stated so a reader of the readout does not need to know the
+        # constant. `preflight_check` refuses on the same comparison, over the same
+        # `lane_tethers` rule, so the number that blocks a launch is the number shown here.
+        "lane_limit": MAX_CONCURRENT_LANES,
+        "exceeds_lane_limit": lane_count > MAX_CONCURRENT_LANES,
         # Specified and unbuilt — Reqs 29, 31, 32. Empty, not invented.
         "gather_strategies": {},
         "waits": {},
@@ -641,8 +696,11 @@ class FlowRunner:
                 # either propagating a corrupting value or failing the flow build. The
                 # substitution is loud and the result is well-formed; propagating would be
                 # the approximately-correct identifier Principle 2 forbids.
+                # Named `lane_ids`, not `lane_tethers`: the module now imports a
+                # `lane_tethers` function from `tether`, and a local list shadowing it here
+                # would be one name meaning two things in one file.
                 try:
-                    lane_tethers: list[str] = child_tether_ids(group_tether, len(scatter_agents))
+                    lane_ids: list[str] = child_tether_ids(group_tether, len(scatter_agents))
                 except TetherIdError as exc:
                     fallback = _default_tether_id(scatter_agents)
                     logger.error(
@@ -652,7 +710,7 @@ class FlowRunner:
                         group_tether, exc.reason, fallback,
                     )
                     group_tether = fallback
-                    lane_tethers = child_tether_ids(group_tether, len(scatter_agents))
+                    lane_ids = child_tether_ids(group_tether, len(scatter_agents))
 
                 topo_rows: list[dict[str, Any]] = []
 
@@ -686,7 +744,7 @@ class FlowRunner:
                         # `X.1`, `X.2`, ... — one per lane, in declared order, so a lane is
                         # addressable as `AGENT_A@X.1`. `lane_group` maps each back to
                         # `group_tether`, which is what the merge gathers by.
-                        "Tether_ID": lane_tethers[lane_index],
+                        "Tether_ID": lane_ids[lane_index],
                     })
 
                 # 3. CTRL_MERGE fan-in — waits for all agents
@@ -708,8 +766,32 @@ class FlowRunner:
                 logger.info(
                     "[FLOW_ENGINE] Auto-wrapped CTRL_SCATTER with %d agents on group "
                     "tether %s; lanes %s .. %s",
-                    len(scatter_agents), group_tether, lane_tethers[0], lane_tethers[-1],
+                    len(scatter_agents), group_tether, lane_ids[0], lane_ids[-1],
                 )
+
+                # Requirement 19.3 is refused at pre-flight, where the operator can see and
+                # override it. By the time execution reaches here that override has already
+                # been given — or pre-flight was skipped by an exception — so this does
+                # **not** refuse: failing the build mid-flow would take the operator's flow
+                # away after they had explicitly chosen to proceed.
+                #
+                # It does record. An overridden 70-lane run should not be indistinguishable
+                # in the log from a 4-lane one, and before this the only trace was the INFO
+                # line above, which reads the same at any width.
+                if len(lane_ids) > MAX_CONCURRENT_LANES:
+                    # Deferred for the same reason `total_sum_readout` defers it, and only
+                    # paid on the over-limit path.
+                    from maccre_core.orchestration.concurrency import (  # noqa: PLC0415
+                        resolve_scatter_cap,
+                    )
+                    logger.error(
+                        "[FLOW_ENGINE] This scatter declares %d lanes, over the limit of "
+                        "%d (Req 19.3). Pre-flight refuses this, so it is running because "
+                        "the refusal was overridden or pre-flight did not run. The pool "
+                        "will open at most %d threads, so the remaining lanes queue.",
+                        len(lane_ids), MAX_CONCURRENT_LANES,
+                        resolve_scatter_cap(len(scatter_agents)),
+                    )
                 return {
                     "name": name,
                     "description": f"Dynamic scatter: {len(scatter_agents)} agents",
@@ -782,6 +864,29 @@ class FlowRunner:
           c) Topology schema — hydrate, write, and validate each step's DAG.
           d) Model health — non-blocking WARN via ModelSentinel (if available).
           e) Cost estimation — sum estimated API costs across all topology rows.
+          f) Nested scatter — lane ceiling (ERROR) and nesting depth (WARN), Req 19.
+
+        **Check (f) is the first consumer of** ``tether.MAX_CONCURRENT_LANES`` **and**
+        ``tether.NESTING_DEPTH_WARN_AT``, both of which were declared with no consumer.
+        The gap was reachable, not theoretical: the auto-wrap takes
+        ``len(scatter_agents)`` straight from step config with no ceiling of its own, and
+        a measured probe with 70 slotted agents produced 70 lanes and 72 rows, accepted
+        in silence.
+
+        **The refusal is a launch block the operator can still override.**
+        ``nexus_plex.action_launch_flow`` gates on :attr:`PreflightReport.is_ok` and, on
+        failure, reveals a *Proceed Anyway* button. That escape hatch predates this check
+        and is deliberate for the other checks, so Requirement 19.3 is enforced as
+        "refuses to launch unless the operator explicitly overrides", not as an absolute
+        bar. Stated here rather than left for a reader to discover, because the
+        requirement says *reject*. The auto-wrap logs at ERROR on an overridden run so
+        the count is still on the record.
+
+        Requirement 19.3's own wording is *"reject further scatter node insertions"*,
+        which is an **authoring-time** action this class cannot perform — an engine sees
+        a finished topology, never an insertion. Refusing the launch is the engine's half;
+        refusing the insertion belongs to the workshop, and is deliberately not stubbed
+        here so there is one place that decides.
 
         Returns:
             PreflightReport with collected issues and estimated cost.
@@ -872,6 +977,61 @@ class FlowRunner:
                     model = str(row.get('Model_Override', 'none')).strip()
                     if model and model.lower() != 'none':
                         all_models.append(model)
+
+            # ── (f) Nested scatter: lane ceiling and nesting depth ────────────
+            # Requirement 19. Both numbers come from this step's own rows, read through
+            # `tether.lane_tethers` — the same rule `total_sum_readout` reports through,
+            # so a refusal here cannot name a different count than the readout shows.
+            #
+            # Counted PER STEP, and that is a decision rather than an oversight. Steps
+            # execute in sequence, so lanes in step 0 and step 2 are never in flight at
+            # once; summing them would refuse a flow that never exceeds the limit at any
+            # instant. 19.3 says "concurrent".
+            step_tethers = row_tethers(topo_rows)
+            step_lanes = lane_tethers(step_tethers)
+            if len(step_lanes) > MAX_CONCURRENT_LANES:
+                # The message text is Requirement 19.3 verbatim, then the evidence. The
+                # requirement's wording is what an operator may have been told to expect,
+                # so it leads; the actual count and the step follow, because "you are over
+                # the limit" without "by how much, and where" is not actionable on a flow
+                # with several scatters.
+                report.issues.append({
+                    'severity': 'ERROR',
+                    'detail': (
+                        f"Exceeded maximum concurrent lane limit ({MAX_CONCURRENT_LANES}) "
+                        f"— step {step_idx} '{macro_name}' declares {len(step_lanes)} "
+                        f"lanes across {len({lane_group(t) for t in step_lanes})} gather "
+                        f"scope(s). Reduce the scatter width or split the step."
+                    ),
+                })
+                logger.error(
+                    "[PREFLIGHT] Step %d '%s' declares %d lanes, over the limit of %d.",
+                    step_idx, macro_name, len(step_lanes), MAX_CONCURRENT_LANES,
+                )
+
+            step_depth = max_nesting_depth(step_tethers)
+            if step_depth >= NESTING_DEPTH_WARN_AT:
+                # WARN, never ERROR. Requirement 19's user story asks the system to
+                # "not artificially limit my authoring capability but naturally surface
+                # when I have exceeded manageable complexity" — so depth surfaces and
+                # only the lane ceiling refuses. 19.2 wants the visualizer to show an
+                # icon; that is the TUI task, and it reads `max_nesting_depth` off the
+                # readout rather than re-deriving depth from a drawn label.
+                nested = [t for t in deepest_tethers(step_tethers) if t in step_lanes]
+                report.issues.append({
+                    'severity': 'WARN',
+                    'detail': (
+                        f"Nested scatter depth {step_depth + 1} levels in step {step_idx} "
+                        f"'{macro_name}' (tether{'s' if len(nested) != 1 else ''}: "
+                        f"{', '.join(nested[:5]) or '—'}"
+                        f"{f', +{len(nested) - 5} more' if len(nested) > 5 else ''}). "
+                        "Nesting is permitted; this is a complexity notice, not a block."
+                    ),
+                })
+                logger.warning(
+                    "[PREFLIGHT] Step %d '%s' nests %d levels deep (%s).",
+                    step_idx, macro_name, step_depth + 1, nested[:5],
+                )
 
         # ── (d) Model health — non-blocking WARN ─────────────────────────────
         try:
