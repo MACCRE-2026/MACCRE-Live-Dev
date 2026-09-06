@@ -5693,3 +5693,89 @@ indefinite CI stall into a diagnosable failure.
 **Related:** the first two occurrences and the withdrawn `omni clean` attribution; defect F3
 (a hold nobody could release that ran out a 3600 s budget and then reported `completed`);
 defect F2 (the construction storm this test's module guards).
+---
+### Feature Name: The gather gate reads through `lane_group` — three copies of one rule become one, and the 8-lane hierarchical gather is observed closing
+**Abstract:** `local_broker` held **three** copies of `AND tether_id = ?`: the gather gate, the merge's input collector, and the tether-scoped completed-task query. All three now go through one tested function, `tether.in_gather_scope`, and the gate's two SQL branches collapse into one. **Deliberately a no-op for every topology on disk** — for a flat tether `lane_group(t) == t`, so "in scope" reduces to the equality that was already there. What it adds is a merge scoped to `X` gathering lanes `X.1`..`X.8`, which SQL cannot express because that is a *parent* test.
+**Date/Time Entered:** 2026-09-06T09:55:00-04:00
+**Status:** COMPLETED — task 4c-1. **No hierarchical tether exists at runtime yet; 4c-2 is the blocker for 4c-3.**
+**Completed:** 2026-09-06T09:55:00-04:00
+**Completion Metric:** `in_gather_scope` in `maccre_core/orchestration/tether.py`; three call
+sites converted in `maccre_core/orchestration/local_broker.py` (`_gather_gate_state`,
+`get_completed_payload_paths`, `get_completed_by_tether`). `TestInGatherScope` in
+`tests/test_tether.py` (**16 tests**) and `tests/test_gather_scope_migration.py`
+(**19 tests against a real `LocalMessageBroker`**). Gate observed 2026-09-05 and
+**re-verified 2026-09-06 after a session crash**: `omni clean` 09:38 (300 bytecode),
+`omni qa` **PASS whole project** 09:41:03, pytest **1349 collected / 1347 passed /
+2 xfailed / 0 failed** in 211.99 s, `omni smoke` **ALL CHECKS PASSED** (inference 1.3 s,
+$0.00) — run because `local_broker.py` is an execution path. Reconciles against
+1314/1312/2: `1314 + 16 + 19 = 1349`, `1312 + 16 + 19 = 1347`, xfailed unchanged at 2.
+
+**The rule left SQL because SQL cannot express it.** A merge scoped to `X` must accept
+`X.1` through `X.8` — a parent test. A plain `WHERE` clause can only do equality, short of
+registering a custom SQLite callback on every connection, in the one module whose
+connection handling has already been a defect source. Selecting `tether_id` as a column and
+filtering in Python puts the rule where it is testable and where all three call sites reach
+it. A side benefit that is really the main one: **the gate stopped needing a branch** — the
+`if task_tether_id: ... else: ...` pair existed only so the filter could be absent for
+tetherless flows.
+
+**Skipping an out-of-scope row is equivalent to never selecting it.** The gate keeps the
+latest status per node by letting later rows (`id ASC`) overwrite earlier ones; a skipped
+row cannot overwrite an in-scope one, which is exactly what the old `WHERE` achieved by not
+returning it.
+
+*** THE 8-LANE HIERARCHICAL GATHER IS NOW A TEST RESULT, NOT AN ARGUMENT ***
+In 4b the migration property was reasoning. `tests/test_gather_scope_migration.py` runs
+against a real `LocalMessageBroker` on a throwaway database, seeding `task_queue` rows
+directly so the tethers are controlled exactly: flat 8 lanes open the gate, **7 of 8 keeps
+it shut**, a failed lane reports `upstream_failed`, another scatter's lanes do not open it;
+hierarchical `X.1`..`X.8` open a merge at `X`; a nested merge at `X.1` gathers `X.1.*` while
+`X.2.*` is present; and **`X.10` does not satisfy `X.1`**. Integration rather than unit
+**because of the failure mode**: a wrong scope rule means the gate never opens, the task
+stays `open`, the pool spawns workers that cannot claim it and each retires idle, and the
+run burns its wall-clock budget with nothing in the log. That is the named Principle 2
+incident, and it is invisible to a stubbed test.
+
+**REVERT-TO-RED, PERFORMED.** Removing the `lane_group` clause failed **8 tests — and only
+the hierarchical ones**: 5 integration (root gather, nested gather, both other call sites,
+the sizing hint) and 3 unit. **All 128 remaining tests passed, including every flat/legacy
+assertion.** That is the right pair: it shows the new clause is purely additive and that the
+migration property does not depend on it.
+
+**`omni qa` earned its keep.** It failed with a real defect —
+`get_completed_payload_paths`'s `tether_id` is `str | None`, and passing it straight into
+`in_gather_scope(scope_tether: str)` is a type error the old `if tether_id:` guard had made
+invisible. Fixed with `tether_id or ""`, which also states that `None` means unscoped.
+**A scoped check on `tether.py` would have passed** — precisely the success-siloing the
+omni mandate describes.
+
+**One behavioural difference, recorded rather than special-cased.**
+`get_completed_by_tether`'s old SQL applied `tether_id = ?` unconditionally, so an **empty**
+tether matched only rows whose tether was also empty; `in_gather_scope` treats an empty
+scope as unscoped. That path is **unreachable from the only caller** —
+`swarm_worker`'s fan-in guards it with `if _tether_id and _wait_for_nodes and ...` and
+intersects the result with its `Wait_For` list regardless — and the other two sites already
+treated empty as unscoped, so this makes all three agree. A second empty-scope convention
+in this module is exactly what 4c-1 removes.
+
+**Rejected:** a custom SQLite function (a Python callback registered per connection, here of
+all places); computing the acceptable tether set for an `IN` clause (needs the lane count
+before querying, which the gate does not have); leaving `get_completed_by_tether` on
+equality to dodge the empty-scope change (three call sites and two conventions is the
+defect); doing 4c-1 together with 4c-2/4c-3 — **the operator agreed to the split**, because
+it would put the riskiest edit in the repo and a change to what a tether *means* into one
+reviewable unit, so a later gather-gate misbehaviour would have two candidate causes.
+
+**LIMITS. No hierarchical tether exists at runtime.** Every `X.1` in these tests is seeded
+by the test; the engine still writes one flat tether per scatter group until 4c-3, so the
+capability is proven against a real broker and a real database but on **synthetic rows**.
+**No live flow has run** — `omni smoke` is a single-node flow with no scatter, so it proves
+the change did not break the ordinary path, not that an 8-lane gather closes in production.
+**The gate is the only consumer proven end-to-end**: the other two functions are covered
+here, but their production callers (`_handle_merge`, the worker's fan-in) were not exercised
+with hierarchical tethers. **4c-2 remains the blocker** — until a node's tether comes from
+the topology rather than from whoever routed to it, per-lane tethers would have `route_task`
+stamp `CTRL_MERGE` with a lane's tether and the gate would never match.
+**Related:** the tether seam (4b), whose `lane_group` this consumes; the tether-model
+divergence record (4a); defect E1 (the 8-distinct-paths shape); the blanked-tether deadlock
+in Doctrine 2; the omni mandate's success-siloing warning, demonstrated here.

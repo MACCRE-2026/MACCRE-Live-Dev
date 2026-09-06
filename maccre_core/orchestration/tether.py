@@ -105,6 +105,7 @@ __all__ = [
     "child_tether_ids",
     "count_lanes",
     "depth",
+    "in_gather_scope",
     "is_descendant_of",
     "is_hierarchical",
     "lane_group",
@@ -290,6 +291,50 @@ def lane_group(tether_id: str) -> str:
     if TETHER_LEVEL_SEPARATOR not in text:
         return text
     return text.rsplit(TETHER_LEVEL_SEPARATOR, 1)[0]
+
+
+def in_gather_scope(row_tether: str, scope_tether: str) -> bool:
+    """True when a row carrying *row_tether* belongs to *scope_tether*'s gather.
+
+    **This is the rule the fan-in gate turns on, and it lives here so there is exactly
+    one of it.** Before this function the rule was `tether_id = ?` written into three
+    separate SQL statements in ``local_broker``, which is three places to keep in step.
+
+    Two things are in scope, and they are different questions:
+
+    * ``row_tether == scope_tether`` — the row is in the waiter's **own** lane. This is
+      what a chain inside one lane needs, where a later node waits on an earlier one and
+      both carry ``X.1``.
+    * ``lane_group(row_tether) == scope_tether`` — the row is a **lane of** the waiter's
+      scatter. This is what a ``CTRL_MERGE`` at ``X`` needs in order to gather ``X.1``
+      through ``X.8``.
+
+    For every tether ID already on disk both clauses reduce to the same equality test,
+    because ``lane_group(t) == t`` for a flat id. **That is what makes replacing the SQL
+    filter with this function a no-op for every saved topology**, and
+    ``test_it_is_a_no_op_for_every_legacy_id`` is the assertion.
+
+    Args:
+        row_tether: The tether on the candidate row. Empty means the row carries no
+            tether.
+        scope_tether: The tether of the node doing the gathering. **Empty means
+            unscoped**, and everything is in scope — matching the ``else`` branch the
+            gate has always had for tetherless flows.
+
+    Returns:
+        Whether the row counts toward this gather.
+    """
+    if not str(scope_tether or "").strip():
+        return True  # unscoped: a linear flow has no lanes to confuse
+    try:
+        row = validate_tether_id(row_tether)
+        scope = validate_tether_id(scope_tether)
+    except TetherIdError:
+        # An unusable tether is not silently admitted to a gather scope. Under the old
+        # SQL an empty `tether_id` also failed to match a non-empty filter, so this
+        # preserves that behaviour rather than widening it.
+        return False
+    return row == scope or lane_group(row) == scope
 
 
 def is_descendant_of(tether_id: str, ancestor: str) -> bool:

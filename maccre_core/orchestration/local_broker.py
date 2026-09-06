@@ -40,6 +40,7 @@ from typing import Any, Collection, Literal, Optional
 from maccre_core.utils.path_resolver import get_datacenter_path
 from maccre_core.orchestration.broker_interface import MessageBroker
 from maccre_core.orchestration.concurrency import DEFAULT_HEARTBEAT_SECONDS
+from maccre_core.orchestration.tether import in_gather_scope
 from maccre_core.orchestration.topology_graph import (
     TetherQualifiedRef,
     is_terminal_target,
@@ -463,35 +464,43 @@ class LocalMessageBroker(MessageBroker):
         placeholders = ",".join(["?"] * len(required_nodes))
         task_tether_id = str(task.get("tether_id", "") or "")
 
-        # Tether-scoped gather: when the current task carries a tether_id, only
-        # check predecessor completion within the same scatter scope. Without
-        # this, lane 2 of one scatter could satisfy lane 1's gate.
-        if task_tether_id:
-            cursor.execute(
-                f"""
-                SELECT current_node, lock_status
-                FROM task_queue
-                WHERE job_id = ? AND current_node IN ({placeholders})
-                      AND tether_id = ?
-                ORDER BY id ASC
-                """,  # noqa: S608 - placeholders are generated '?' marks, not user data
-                [task["job_id"], *required_nodes, task_tether_id],
-            )
-        else:
-            cursor.execute(
-                f"""
-                SELECT current_node, lock_status
-                FROM task_queue
-                WHERE job_id = ? AND current_node IN ({placeholders})
-                ORDER BY id ASC
-                """,  # noqa: S608 - placeholders are generated '?' marks, not user data
-                [task["job_id"], *required_nodes],
-            )
+        # Tether-scoped gather: only count predecessor completion within the same
+        # scatter scope. Without it, lane 2 of one scatter could satisfy lane 1's gate.
+        #
+        # ONE QUERY, AND THE SCOPE RULE IN PYTHON — 2026-09-05, task 4c-1
+        # --------------------------------------------------------------
+        # This was two SQL statements differing only by `AND tether_id = ?`, and that
+        # same equality was written into two further queries in this module. The rule now
+        # lives in one tested function, `tether.in_gather_scope`, and the SQL stops
+        # needing a branch: the tether comes back as a column and the filter applies to
+        # it.
+        #
+        # **SQL could not express the rule anyway.** A merge scoped to `X` must accept
+        # lanes `X.1` through `X.8`, which is a *parent* test, and equality is the only
+        # thing a plain `WHERE` clause can do here short of registering a custom SQLite
+        # function on every connection.
+        #
+        # This is a no-op for every topology on disk: `lane_group(t) == t` for a flat
+        # tether, so "in scope" reduces to exactly the equality that was here before.
+        # An empty scope admits everything, which is what the deleted `else` branch did.
+        cursor.execute(
+            f"""
+            SELECT current_node, lock_status, tether_id
+            FROM task_queue
+            WHERE job_id = ? AND current_node IN ({placeholders})
+            ORDER BY id ASC
+            """,  # noqa: S608 - placeholders are generated '?' marks, not user data
+            [task["job_id"], *required_nodes],
+        )
 
         # Keep only the latest status for each node (ordered by id ASC above, so
-        # later rows overwrite earlier ones).
+        # later rows overwrite earlier ones). Out-of-scope rows are skipped rather than
+        # allowed to overwrite an in-scope one — which is what the old WHERE clause did
+        # by never returning them.
         latest_status: dict[str, str] = {}
         for r in cursor.fetchall():
+            if not in_gather_scope(str(r[2] or ""), task_tether_id):
+                continue
             latest_status[r[0]] = r[1]
 
         if not latest_status and task_tether_id:
@@ -1207,15 +1216,16 @@ class LocalMessageBroker(MessageBroker):
 
         placeholders = ",".join(["?"] * len(nodes))
         sql = (
-            "SELECT current_node, COALESCE(NULLIF(output_path, ''), payload_path) "
+            "SELECT current_node, COALESCE(NULLIF(output_path, ''), payload_path), tether_id "
             "FROM task_queue "
             f"WHERE job_id = ? AND current_node IN ({placeholders}) "  # noqa: S608
             "AND lock_status = 'completed'"
         )
         params: list[Any] = [job_id, *nodes]
-        if tether_id:
-            sql += " AND tether_id = ?"
-            params.append(tether_id)
+        # Scope filtering moved out of the WHERE clause into `tether.in_gather_scope`
+        # (2026-09-05, task 4c-1), so this query and the gather gate share one rule
+        # rather than two copies of `tether_id = ?`. A merge scoped to `X` must accept
+        # lanes `X.1`..`X.8` — a parent test SQL cannot express. No-op for flat tethers.
         # id ASC so a re-queued node's latest row wins, matching the convention in
         # _gather_gate_state.
         sql += " ORDER BY id ASC"
@@ -1223,6 +1233,10 @@ class LocalMessageBroker(MessageBroker):
         conn = self._get_conn()
         found: dict[str, str] = {}
         for row in conn.execute(sql, tuple(params)).fetchall():
+            # `tether_id` is `str | None` on this signature, and `None` means unscoped —
+            # the same thing the old `if tether_id:` guard did before adding the filter.
+            if not in_gather_scope(str(row[2] or ""), tether_id or ""):
+                continue
             node_id = str(row[0] or "")
             path = str(row[1] or "")
             if node_id and path:
@@ -1264,13 +1278,35 @@ class LocalMessageBroker(MessageBroker):
     # ── Tether-Scoped Queries ──────────────────────────────────────────────────
 
     def get_completed_by_tether(self, job_id: str, tether_id: str) -> list[dict[str, Any]]:
-        """Get all completed tasks for a given job that share the same tether_id."""
+        """Completed tasks for *job_id* inside *tether_id*'s **gather scope**.
+
+        Scope rather than equality, through ``tether.in_gather_scope`` (2026-09-05, task
+        4c-1), so this shares one rule with the gather gate instead of holding a third
+        copy of ``tether_id = ?``. A merge scoped to ``X`` sees lanes ``X.1``..``X.8`` as
+        well as rows carrying ``X`` itself.
+
+        **No-op for every topology on disk**: for a flat tether ``lane_group(t) == t``, so
+        "in scope" reduces to the equality this used to perform in SQL.
+
+        One behavioural difference, unreachable from the only caller: an **empty**
+        *tether_id* now admits every completed row, where the old SQL matched only rows
+        whose tether was also empty. ``swarm_worker``'s fan-in guards the call with
+        ``if _tether_id and ...``, so it never asks with an empty scope, and it
+        intersects the result with its ``Wait_For`` list regardless. Recorded rather than
+        special-cased, because a second empty-scope convention in this module is what
+        4c-1 exists to remove.
+        """
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT * FROM task_queue WHERE job_id = ? AND tether_id = ? AND lock_status = 'completed'",
-            (job_id, tether_id),
+            "SELECT * FROM task_queue WHERE job_id = ? AND lock_status = 'completed' "
+            "ORDER BY id ASC",
+            (job_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            row_dict
+            for row_dict in (dict(row) for row in rows)
+            if in_gather_scope(str(row_dict.get("tether_id", "") or ""), tether_id)
+        ]
 
     # ── Stream 4: ZMQ PUB/SUB Live Event Bus ──────────────────────────────────
     def broadcast_topology_event(self, event_type: str, payload: dict[str, str]) -> None:

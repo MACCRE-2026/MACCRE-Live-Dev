@@ -30,6 +30,7 @@ from maccre_core.orchestration.tether import (
     child_tether_ids,
     count_lanes,
     depth,
+    in_gather_scope,
     is_descendant_of,
     is_hierarchical,
     lane_group,
@@ -106,6 +107,81 @@ class TestLaneGroupIsBackwardCompatible:
 
 
 # ── Hierarchy ────────────────────────────────────────────────────────────────
+
+
+class TestInGatherScope:
+    """The rule the fan-in gate turns on. One function, three call sites in the broker.
+
+    Before task 4c-1 this was `AND tether_id = ?` written into three separate SQL
+    statements in `local_broker`. The first group below is the one that licenses the
+    change: it must be a no-op for everything already on disk.
+    """
+
+    @pytest.mark.parametrize("legacy", LEGACY_TETHER_IDS)
+    def test_it_is_a_no_op_for_every_legacy_id(self, legacy: str) -> None:
+        """Identical to the equality test it replaced, for every id format on disk."""
+        assert in_gather_scope(legacy, legacy) is True
+        assert in_gather_scope(legacy, "scatter_ffffffff") is False
+
+    def test_a_legacy_scatter_gathers_exactly_what_equality_gathered(self) -> None:
+        """The ten rows of a legacy 8-lane scatter, filtered both ways."""
+        merge_tether = "scatter_84fe89ba"
+        rows = [merge_tether] * 10
+
+        by_equality = [t for t in rows if t == merge_tether]
+        by_scope = [t for t in rows if in_gather_scope(t, merge_tether)]
+
+        assert by_scope == by_equality
+        assert len(by_scope) == 10
+
+    def test_a_merge_at_the_root_gathers_all_eight_lanes(self) -> None:
+        """The capability equality could not express."""
+        lanes = child_tether_ids("X", 8)
+
+        assert [lane for lane in lanes if in_gather_scope(lane, "X")] == lanes
+
+    def test_a_merge_does_not_gather_another_scatters_lanes(self) -> None:
+        """The whole reason the gate is tether-scoped at all."""
+        others = child_tether_ids("Y", 8)
+
+        assert [lane for lane in others if in_gather_scope(lane, "X")] == []
+
+    def test_a_node_in_its_own_lane_is_in_scope(self) -> None:
+        """A chain inside one lane: a later node waits on an earlier one, both `X.1`."""
+        assert in_gather_scope("X.1", "X.1") is True
+
+    def test_a_nested_merge_gathers_its_own_lanes_only(self) -> None:
+        assert in_gather_scope("X.1.1", "X.1") is True
+        assert in_gather_scope("X.2.1", "X.1") is False
+
+    def test_a_grandchild_is_not_in_the_roots_scope(self) -> None:
+        """Gathering is one level, not transitive — `X`'s merge waits on `X.n`, and a
+        nested scatter's lanes are gathered by the merge inside `X.1`."""
+        assert in_gather_scope("X.1.1", "X") is False
+
+    def test_lane_ten_is_not_in_lane_ones_scope(self) -> None:
+        """The prefix trap, at the level that would actually corrupt a gather."""
+        assert in_gather_scope("X.10", "X.1") is False
+
+    def test_an_empty_scope_admits_everything(self) -> None:
+        """What the deleted `else` branch of the gather gate did for tetherless flows."""
+        assert in_gather_scope("X.1", "") is True
+        assert in_gather_scope("", "") is True
+        assert in_gather_scope("scatter_84fe89ba", "   ") is True
+
+    def test_an_empty_row_tether_is_not_admitted_to_a_real_scope(self) -> None:
+        """Preserves the old SQL: an empty `tether_id` never matched a non-empty filter."""
+        assert in_gather_scope("", "X") is False
+
+    def test_an_unusable_row_tether_is_not_admitted(self) -> None:
+        """Not silently swept into a gather scope."""
+        assert in_gather_scope("X@1", "X") is False
+
+    def test_it_agrees_with_lane_group_by_construction(self) -> None:
+        """The two must not drift: in_gather_scope is defined in terms of lane_group."""
+        for lane in child_tether_ids("X", 4) + ["X", "scatter_84fe89ba", "X.1.2"]:
+            expected = lane == "X" or lane_group(lane) == "X"
+            assert in_gather_scope(lane, "X") is expected
 
 
 class TestLaneGroupHierarchy:
