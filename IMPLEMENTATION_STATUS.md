@@ -5,6 +5,17 @@
 **Total Phases:** 10  
 **Estimated Timeline:** 8-12 weeks
 
+> **⚠ CORRECTIONS INSERTED 2026-09-06.** Two claims in this document were false when
+> written and are marked in place: **"In Progress Phases: None"** and the whole of
+> **"Phase 4: Semantic Tether IDs (ALREADY IMPLEMENTED)"**, which described a
+> `TetherIDGenerator` class that has never existed in any Python file. Nothing has been
+> deleted; corrections sit adjacent to what they contradict, per the append-only rule.
+>
+> **Scope of this audit, stated so it is not over-read:** only the tether-related claims
+> were checked. Phases 1, 2, 3 and 5–10 on this page have **not** been verified and are
+> neither endorsed nor disputed here. An unqualified ✅ elsewhere in this file means
+> nobody has looked, not that somebody has.
+
 ---
 
 ## ✅ Completed Phases
@@ -168,6 +179,22 @@
 
 None - All active phases complete
 
+> **CORRECTION 2026-09-06.** False, and false in the same shape as the Phase 4 block
+> immediately below: it asserts the *absence* of outstanding work, which nothing can
+> verify. Phase 4 was listed as complete on the strength of a class that did not exist,
+> so "all active phases complete" was resting on it.
+>
+> **Actually in progress as of 2026-09-06:**
+> - **Era 3 tether unification**, tasks 4a–4g (`151e972` … `b882d27`). Tasks 4a–4f are
+>   done; 4g (Requirement 19 depth and lane limits) is not started.
+> - **Phase 4.99 user testing is paused**, not complete. Resuming it is the goal the Era 3
+>   work exists to serve; see
+>   `.kiro_artifacts/2026-08-31_phase_4_99_user_testing_handover.md`.
+> - **Phase 6.13 multi-flow-lane** — `.kiro/specs/phase-6-13-multi-flow-lane/` carries its
+>   own corrections; its Phases 4, 7, 8 and 9 are untouched.
+>
+> Retained per the append-only rule.
+
 ---
 
 ### Phase 4: Semantic Tether IDs (ALREADY IMPLEMENTED)
@@ -181,6 +208,50 @@ None - All active phases complete
 - Grandchild IDs: X.1.1, X.1.2, ...
 - Thread-safe counter management
 - Depth parsing: `parse_depth("X.1.2")` → 2
+
+> ## ⚠ CORRECTION — 2026-09-06 · the block above was FALSE when written
+>
+> **`TetherIDGenerator` never existed.** `grep TetherIDGenerator **/*.py` returned zero
+> matches on 2026-09-05, and `parse_depth` likewise. The status `✅ Complete
+> (Pre-existing)` and the stated `Location: flow_engine.py` were both wrong. Retained
+> above rather than deleted, per the append-only rule — a deleted claim takes its
+> reasoning with it, and this one caused real harm worth keeping visible.
+>
+> **What it cost.** Era 3 tracker task #4 (*nested scatter with depth and lane limits*)
+> was planned against this block. Requirements 19 and 18.3 define nesting depth and the
+> 64-lane limit in terms of exactly this hierarchy, so the task was scheduled as
+> straightforward and turned out to be unbuildable: the engine wrote one flat
+> `scatter_<sha1[:8]>` per scatter *group* and the TUI minted `tether_a`/`tether_b` from
+> a widget counter. Three representations of one identifier, and the documented one was
+> the fiction. This is Doctrine 5 — *"specifications drift from implementations unless
+> mechanically checked"* — and it is the `--smart` incident at larger scale: a named
+> 88-line class at a named import path is a much more convincing fiction than a flag.
+>
+> ### Line-by-line status as of 2026-09-06
+>
+> | Claim above | Verdict | Where it actually lives |
+> |---|---|---|
+> | `TetherIDGenerator` class | **WITHDRAWN — never existed** | replaced by pure functions; see below |
+> | Root IDs X, Y, Z, AA, AB | **now true** (2026-09-05) | `tether.root_tether_id(index)` |
+> | Child IDs X.1, X.2, X.3 | **now true** (2026-09-05) | `tether.child_tether_ids(parent, count)` |
+> | Grandchild IDs X.1.1, X.1.2 | **now true** (2026-09-05) | same function on a hierarchical parent |
+> | Thread-safe counter management | **WITHDRAWN — deliberately not built** | generation is pure: no counter, no lock |
+> | `parse_depth("X.1.2") → 2` | **now true** (2026-09-05) | `tether.depth("X.1.2") → 2`, different name |
+>
+> **Correct location:** `maccre_core/orchestration/tether.py`, not `flow_engine.py`.
+>
+> **Why there is no thread-safe counter, and this is not a shortfall.**
+> `_default_tether_id`'s own docstring records that its predecessor was keyed on a CPython
+> object address, and that **the scatter auto-wrap runs twice per step — once for
+> pre-flight, once for execution — so the tether validated was not necessarily the tether
+> executed.** A locked counter reintroduces the same class of problem in milder form: the
+> id a lane receives depends on how many times the generator has been called.
+> `root_tether_id(index)` and `child_tether_ids(parent, count)` derive their answers, so
+> they need no counter, no lock, and give the same result every time.
+>
+> Delivered by tasks 4b–4e of the Era 3 tracker (commits `151e972`, `61c7409`, `ab1e32e`,
+> `dba7016`, `e6fa402`, `b882d27`). Rationale for the task-list revision:
+> `.kiro_artifacts/2026-09-05_tether_model_divergence_and_task_revision.md`.
 
 ---
 
@@ -398,6 +469,13 @@ CREATE TABLE node_history (
 
 ### Internal Modules:
 - `maccre_core.orchestration.flow_engine`: TetherIDGenerator
+  <!-- CORRECTION 2026-09-06: false. `TetherIDGenerator` has never existed in any Python
+       file. Tether ID generation lives in `maccre_core.orchestration.tether` as pure
+       functions (`root_tether_id`, `child_tether_ids`, `depth`, `lane_group`,
+       `in_gather_scope`). See the correction block under "Phase 4: Semantic Tether IDs".
+       Retained rather than deleted per the append-only rule. -->
+- `maccre_core.orchestration.tether`: tether ID hierarchy — root/child generation, depth,
+  `lane_group` (the gather-scope rule the fan-in gate turns on). Added 2026-09-05.
 - `maccre_core.agent_library`: Agent profiles
 - `maccre_core.macronode_registry`: MacroNode definitions
 - `maccre_core.paths`: Project directory management

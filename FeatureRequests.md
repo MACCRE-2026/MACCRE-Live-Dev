@@ -6114,3 +6114,137 @@ module's private helper for an alias the auto-wrap never emits was the worse tra
 `X.1.2` counts 4 lanes across 2 scopes, true but silent about depth (4g).
 **Related:** 4c-3 (which made the count 9 and fixed the peak); Req 33.5 (the criterion);
 4g (depth reporting); the TUI wiring task, which will give this readout its first consumer.
+---
+### Feature Name: The false completion claims in the design docs are corrected in place — including the test file that was cited but never written
+**Abstract:** Two `IMPLEMENTATION_STATUS.md` files marked a hierarchical tether ID system **complete**, named its location, sized it at 88 lines, gave it an hour estimate, and cited **21 passing tests in `tests/unit/test_flow_step_multi_lane.py`**. `TetherIDGenerator` has never existed in any Python file; that test file has never existed anywhere; `tests/unit/` exists and is **empty**. Corrections are now appended adjacent to each false claim, marking it **WITHDRAWN** (never existed) or **now true** (delivered later, under a different name or in a different file). Nothing was deleted.
+**Date/Time Entered:** 2026-09-06T13:55:00-04:00
+**Status:** COMPLETED — task 4f. **Documentation only: no code changed, so no behaviour is claimed to have moved.**
+**Completed:** 2026-09-06T13:55:00-04:00
+**Completion Metric:** `IMPLEMENTATION_STATUS.md` (root, +78) and
+`.kiro/specs/phase-6-13-multi-flow-lane/IMPLEMENTATION_STATUS.md` (+298). **376 insertions,
+zero deletions**, both files `.md` — verified mechanically, not asserted:
+`git diff --name-only | Where-Object { $_ -notmatch '\.md$' }` returned empty and the
+diffstat reports insertions only. Gate 2026-09-06: `omni qa` **PASS whole project**
+13:46:04. PII scan of both files: **0 findings**.
+
+*** THE GATE THAT WAS DELIBERATELY NOT RUN, AND WHY ***
+**pytest and `omni smoke` were not re-run.** No `.py` file changed, and that was established
+by the diff before the gate rather than remembered. The standing evidence is the full gate on
+the last code commit, `b882d27` (4e): **1431 collected / 1429 passed / 2 xfailed / 0 failed**,
+`omni smoke` ALL CHECKS PASSED. Stated rather than glossed, per the reporting standard: **this
+entry's evidence is a lint-and-type pass over unchanged code plus a diff proving no behaviour
+moved. Nothing stronger is claimed.**
+
+*** WHAT WAS FALSE, AND HOW IT WAS ESTABLISHED FALSE RATHER THAN DOUBTED ***
+`grep TetherIDGenerator **/*.py` → **zero matches** repo-wide. `parse_depth`,
+`generate_root_id` and `generate_child_ids` appear only inside `tether.py` docstrings and one
+`test_tether.py` docstring — never as definitions. **No legacy-tether migration code of any
+kind** exists; the only `_MIGRATE_*` statements in the tree are unrelated SQLite column
+additions in `macronode_registry.py`. And `tests/unit/test_flow_step_multi_lane.py` does not
+exist anywhere, while `tests/unit/` exists and is empty.
+
+*** THE FABRICATED EVIDENCE CITATION IS THE MOST SERIOUS ENTRY ON EITHER PAGE ***
+The ticks were unsupported. The test file was **cited with specificity** — a path, a test
+count, a line count, and a seven-category breakdown including *"Tether Generation: 4 tests"*
+and *"Migration: 3 tests"*. **Specific numbers read as though somebody counted something.**
+An empty `tests/unit/` is what it looks like when a directory is created for tests that are
+then documented instead of written. This is why the task's scope was widened from the
+completion ticks to the evidence offered *for* them.
+
+*** WHY THE CLAIMS WERE RETAINED RATHER THAN FIXED OR DELETED ***
+A deleted claim takes its reasoning with it, and this one has reasoning worth keeping:
+**Era 3 tracker task #4 was scoped directly against the Phase 2 block.** Requirements 19 and
+18.3 define nesting depth and the 64-lane limit in terms of exactly the hierarchy that page
+said was already built, so the task was scheduled as straightforward and proved **unbuildable
+as scoped** — three divergent representations of one identifier, and the documented one was
+the fiction. **Doctrine 5 at larger scale than its own `--smart` incident: a named 88-line
+class at a named import path, with an hour estimate and a tick, is a far more convincing
+fiction than an accepted-but-unread flag.**
+
+*** THE TWO BANNERS ARE PLACED WHERE THEY ARE ON PURPOSE ***
+The spec's banner sits **above the `---`**, because the header itself carries *"Foundation
+Complete"* and *"21/21 tests passing (100%)"*, and a reader who skims only the header would
+otherwise leave with the false version — **which is how this page did its damage.** The root
+file's banner **states what was *not* audited**: only tether claims were checked, Phases 1–3
+and 5–10 are neither endorsed nor disputed, and an unqualified ✅ elsewhere in that file means
+nobody has looked, not that somebody has.
+
+*** ELEVEN BLOCKS IN THE SPEC, TWO IN THE ROOT FILE ***
+Spec: the top banner; Phase 2 Tasks 2.1–2.3 task-by-task; the Critical Path ticks; the Test
+Coverage citation; the `flow_engine.py` line counts; the new `tether.py` entry; `nexus_plex.py`;
+the Tests section; Key Achievements 2 and 4; Design Decision 5 and **"Technical Debt: None
+identified"**; the Progress Metrics; the Success Criteria ticks; and a closing block on
+*"complete and production-ready"*. Root: **"In Progress Phases: None — All active phases
+complete"**, and the Phase 4 block with a six-row claim-by-claim table plus the corrected
+location (`maccre_core/orchestration/tether.py`, **not** `flow_engine.py`).
+
+**Two of those claims share one shape worth naming:** *"In Progress Phases: None"* and
+*"Technical Debt: None identified"* both assert the **absence** of outstanding work. **No test
+can produce that**, which makes it the one claim shape to distrust on sight. The debt line was
+answered with the seven items that were all present and unrecorded when it was written.
+
+*** THE REAL COVERAGE, COUNTED BY RUNNING IT ***
+**208 tests across five files** replace the 21 that never existed: `test_tether.py` **117**,
+`test_gather_scope_migration.py` 19, `test_tether_is_not_reparented.py` 23,
+`test_scatter_lane_tethers.py` 33, `test_workshop_tether_ids.py` 16.
+
+*** THE MISATTRIBUTION THAT HAD A MEASURABLE COST ***
+The spec credited `nexus_plex.py` with *"TetherIDGenerator integration"* and *"Migration
+support"*. Counted 2026-09-06, **every tether reference in that file is a pass-through**: the
+`#cfg-tether-id` `Input` (L2134 read, L2400 write), four `config.get("tether_id", "")` copies
+into step dicts, and one log line printing a tether raised elsewhere. No generation, no
+migration, no lane assignment. **The divergence hunt looked for the TUI's generator in
+`nexus_plex.py` first, on the strength of that entry** — it lives in
+`macronode_workshop._handle_node_add`.
+
+*** TWO CORRECTIONS STATE A DESIGN REJECTION, NOT A SHORTFALL ***
+Both look like gaps and are not. *Thread-safe counter management* is **WITHDRAWN as
+deliberately not built**: generation is pure, and `_default_tether_id`'s own docstring records
+that the auto-wrap runs **twice per step**, so a locked counter would hand those two runs
+different ids for the same lane — the predecessor's `id()`-keyed defect in milder form.
+*Migration for legacy flows* is **WITHDRAWN as unnecessary**: `lane_group(t)` returns the id
+itself for a flat tether, so every tether already on disk satisfies the new gather rule
+unchanged (19 tests), and gains per-lane tethers in place on next load. **The absent migration
+was not a gap; it was a requirement the design dissolved.**
+
+*** PRECISION HELD WHERE THE EVIDENCE STOPS ***
+Four Success Criteria ticks — data model, scatter config, highlighting and **per-lane
+insertion** — are marked **Unverified, not disproved.** They are TUI behaviours that may well
+work, and nothing in this pass tested them; **asserting them false would be principle 3
+inverted.** Per-lane insertion is flagged as the one to re-test first: it is the criterion
+Phase 4.99 leans on, and its cited evidence was the nonexistent file.
+
+*** THE "0 TYPE ERRORS" CLAIM COULD NEVER HAVE BEEN EVIDENCE FOR THAT PAGE ***
+`pyrightconfig.json` **excludes `maccre_tui` entirely**, and **both TUI files in the spec's own
+"Files Modified" list are never type-checked by the gate** — while most of the work claimed
+there is TUI work. Doctrine 6, in the variant where the gate did not merely pass: **it did not
+look.**
+
+*** TWO STRUCTURAL DEFECTS IN MY OWN FIRST PASS, FOUND BY RE-READING THE DIFF ***
+A correction block had been inserted **into the middle of the Task 2.3 bullet list**,
+orphaning `- 100% backward compatible` below it; and the new `tether.py` entry had been
+numbered `3.` **between existing items 1 and 2**. Both fixed before gating, with the stale
+`(2 files)` section header corrected in place rather than edited. Recorded because **an
+append-only correction that mangles the structure of the text it corrects makes the original
+harder to read, which is the opposite of the intent.**
+
+**No `.oracle_artifacts/` artifact was written, deliberately.** The orchestration oracle
+mandate attaches to changes in `maccre_core/orchestration/`, and this task changed no code.
+Inventing an analysis artifact for a documentation pass would put a second, thinner account of
+the tether work beside `2026-09-06_lanes_are_not_gather_scopes.md` — **the `NAME_{i}` /
+`NAME_S{i}` shape applied to prose.** A ledger entry was written instead.
+
+**UNCHANGED BY THIS TASK, and the honest reason the corrected documents still refuse to say
+*production-ready*: no live 8-lane run has ever been performed.** `omni smoke` runs a
+single-node flow with no scatter, so 4c-1's gather-scope rule, 4c-2's per-target stamping,
+4c-3's lane tethers and 4d's TUI seam are each revert-to-red verified and **jointly unproven**
+— they compose only on a real scatter. Also named in the corrections so they cannot be lost:
+`total_sum_readout` has no caller; `NESTING_DEPTH_WARN_AT` and `MAX_CONCURRENT_LANES` are
+declared with no consumer (4g); `lane_count` for a nested scatter is a flat total, silent
+about depth; the `#cfg-tether-id` `Input` does not validate operator input, held for 4g rather
+than adding a second decision about tether validity outside `validate_tether_id`; and the
+intermittent `test_demand_overprovisioning` suite hang is **observed and not root-caused**.
+**Related:** 4a (the divergence record); 4b–4e (the work that made half these claims true);
+Doctrine 5 (specifications drift unless mechanically checked — the rule this whole entry is an
+instance of, and which no test on either page enforced); 4g and the TUI wiring task (the items
+these corrections list as still open).
