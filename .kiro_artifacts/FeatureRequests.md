@@ -5862,3 +5862,93 @@ because a lookup did.
 **Related:** 4c-1 (the gather gate reading through `lane_group`); 4b (the seam); Req 31.7
 (`apply_cross_lane_route` refusing to re-parent, the same rule); the blanked-tether deadlock
 in Doctrine 2; defect E1's 8-distinct-outputs shape.
+---
+### Feature Name: The scatter auto-wrap assigns per-lane tethers — the hierarchy becomes real at runtime
+**Abstract:** **This is the commit where the tether hierarchy stops being a capability and starts being a value a live flow writes.** 4b built the seam, 4c-1 taught the gather gate to read through it, 4c-2 stopped routing from re-parenting nodes — none of those altered a single value the engine emits. An 8-agent scatter now produces `CTRL_SCATTER` on the group tether, eight lanes on `group.1`..`group.8`, and `CTRL_MERGE` back on the group. The merge sitting on the **group** is the load-bearing line: a merge on a lane tether is the deadlock 4c-2 exists to prevent.
+**Date/Time Entered:** 2026-09-06T12:20:00-04:00
+**Status:** COMPLETED — task 4c-3. **NO LIVE 8-LANE RUN HAS HAPPENED; that is the real proof and it is an operator action.**
+**Completed:** 2026-09-06T12:20:00-04:00
+**Completion Metric:** `group_tether` + `lane_tethers` via `child_tether_ids` in the
+`CTRL_SCATTER` auto-wrap in `maccre_core/orchestration/flow_engine.py`; agent rows take
+`lane_tethers[i]`, scatter and merge keep `group_tether`.
+`tests/test_scatter_lane_tethers.py` — **32 tests, five groups**, driving the real auto-wrap.
+Three pre-existing tests in `tests/test_topology_graph.py` updated with dated notes. Gate
+2026-09-06: `omni clean` 12:01 (302 bytecode), `omni qa` **PASS whole project** 12:08:51,
+pytest **1404 collected / 1401 passed / 3 xfailed / 0 failed** in 176.10 s, `omni smoke`
+**ALL CHECKS PASSED** ($0.00). Reconciles against 1372/1370/2: `1372 + 32 = 1404`,
+`1370 + 31 = 1401`, xfailed `2 + 1 = 3`.
+
+**Verified by driving the real auto-wrap**, not by inspection:
+
+```
+CTRL_SCATTER   scatter_ef3031e2       the group, and its own gather scope
+AGENT_A        scatter_ef3031e2.1     \
+...                                    |  eight individually addressable lanes
+AGENT_H        scatter_ef3031e2.8     /
+CTRL_MERGE     scatter_ef3031e2       the gather scope those lanes belong to
+```
+
+**REVERT-TO-RED proved the merge's tether is the assertion that matters.** Putting a lane
+tether on the merge row reddened **6 tests including
+`test_every_lane_is_in_the_merges_gather_scope` — the deadlock itself** — while the
+lane-shape tests stayed green. A mistake there fails loudly rather than producing a
+plausible-looking topology.
+
+**An operator-typed tether is validated, substituted and reported — not propagated, not
+fatal.** The Tether ID box accepts any text, and a value containing `,` `|` `@` or `>` would
+be re-split by another parser so `Wait_For` reads one lane as two. **That was already true
+and merely silent.** Three options were weighed: propagate it (the old behaviour — rejected,
+an approximately-correct identifier downstream logic acts on); fail the build (loudest, but
+takes an operator's flow away over a fixable field, and the value was already broken); or
+**substitute the generated tether and log at ERROR naming the value and the reason** —
+taken. `test_the_substituted_group_still_gathers_its_lanes` checks the fallback did not break
+the gather, because a fallback that broke it would be worse than the bad tether.
+
+*** ONE READOUT NUMBER IS NOW RIGHT AND ONE IS STILL WRONG ***
+Measured against the real auto-wrap's rows:
+
+| Field | Before | After | Verdict |
+|---|---|---|---|
+| `expected_peak_concurrency` | **1** | **8** | **Correct now** — `min(lane_count, resolve_scatter_cap(8))` had been `min(1, 8)`, so the pre-launch readout promised **one thread for an 8-way run** |
+| `lane_count` | **1** | **9** | **Still wrong, differently** — it counts the group tether as a lane |
+
+The peak-concurrency fix is a **side effect, not one I designed**, and it is pinned by a test
+so it cannot regress silently. `lane_count == 9` is **not progress dressed as a fix**:
+Requirement 33.5 asks for the number of Flow Lanes and the group is a *gather scope*. Rather
+than assert 9 and call it done, the gap is a **red `xfail(strict=True)` marker** that breaks
+the gate the moment 4e makes it true.
+
+**Three pre-existing tests updated rather than worked around.** `test_topology_graph.py`
+asserted `len(tethers) == 1` — *"scatter, lanes and merge must agree"* — correct while one
+flat tether covered a scatter. The intent survives and is now stated through `lane_group`:
+every row belongs to one **gather scope**. That is **strictly stronger** than the string
+equality it replaced, because it would still fail if a lane were tethered under a different
+group, which string equality could not distinguish from a rename. The hydration test also now
+asserts group + 2 lanes survive, since the half that still matters is that hydration carries
+lane identity **through to the CSV column** rather than flattening it — `Tether_ID` was once
+dropped entirely by the flatten step. **The first full-suite run failed exactly these 3
+tests**, and they were fixed by correcting the assertions, not loosening them.
+
+**Rejected:** giving the merge its own child tether (it is not a lane, and a scope with a
+parent needs a second rule for where gathering stops); one tether plus a separate lane-index
+column (a second representation of lane identity — the divergence this sequence removes);
+rewriting saved topologies (unnecessary — a saved flat topology re-wraps through this same
+path on load, and `lane_group` keeps the flat form working regardless).
+
+**LIMITS. No live 8-lane run has happened.** `omni smoke` is a single-node flow with no
+scatter, so it proves this did not break the ordinary path but **exercises not one per-lane
+tether**. Every hierarchical tether seen so far comes from the auto-wrap in isolation or a
+test-seeded queue row. **The whole 4c chain is now live but jointly unproven in production** —
+4c-1's scope rule, 4c-2's per-target stamping and 4c-3's lane tethers only interact on a real
+scatter; each was revert-to-red verified individually, but their *composition* has been
+exercised only by tests. **`lane_count` is still wrong** (4e). **The TUI still mints its own
+tether IDs** — `macronode_workshop`'s `tether_a`/`tether_b` can become the group tether; it
+is *accepted* (well-formed, lanes become `tether_a.1`..) but there are still two generators
+(4d). **Nested scatter is reachable but untested end to end** — an operator tether of `X.1`
+yields `X.1.1`..`X.1.8`, and nothing yet limits depth or total lanes (4g).
+**`_default_tether_id` deliberately stays in `flow_engine`** — it is a digest over the agent
+set, a *naming* decision specific to the auto-wrap, whereas `tether.py` owns hierarchy
+mechanics.
+**Related:** 4b (the seam), 4c-1 (the gather gate), 4c-2 (no re-parenting) — this completes
+the 4c sequence; Req 18.3 (nested tether shape, now producible); Req 33.5 (the readout, 4e);
+Reqs 29/31/32, whose one-tether-per-lane contract is now satisfiable by real rows.

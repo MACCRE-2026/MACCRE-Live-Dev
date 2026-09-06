@@ -34,6 +34,7 @@ from typing import Any
 
 import pytest
 
+from maccre_core.orchestration.tether import lane_group
 from maccre_core.orchestration.topology_graph import (
     TERMINAL_SENTINELS,
     build_edges,
@@ -551,11 +552,21 @@ class TestD3BlankTetherFallback:
             "CTRL_SCATTER",
             {"scatter_agents": ["A", "B"], "tether_id": ""},
         )
-        tethers = {r.get("Tether_ID") for r in macro["topology_rows"]}
+        tethers = {str(r.get("Tether_ID") or "") for r in macro["topology_rows"]}
 
         assert tethers, "auto-wrap produced no rows"
         assert "" not in tethers, "a blank tether disables tether-scoped fan-in"
-        assert len(tethers) == 1, f"scatter, lanes and merge must agree: {tethers}"
+        # Updated 2026-09-06 (task 4c-3). This asserted `len(tethers) == 1` — "scatter,
+        # lanes and merge must agree" — which was the right test while one flat tether
+        # covered a whole scatter. Lanes now carry their own (`X.1`, `X.2`), so the
+        # strings no longer match and were never the point: the intent is that every row
+        # belongs to ONE gather scope, which is what the fan-in actually depends on.
+        # `lane_group` collapses a lane to its group and a group to itself, so this is the
+        # same claim stated in terms of the thing that matters, and it is strictly
+        # stronger — it would still fail if a lane were tethered under a different group.
+        assert {lane_group(t) for t in tethers} == {lane_group(next(iter(tethers)))}, (
+            f"scatter, lanes and merge must share one gather scope: {tethers}"
+        )
 
     def test_a_missing_tether_key_also_falls_back(self) -> None:
         runner = _autowrap_runner()
@@ -578,7 +589,16 @@ class TestD3BlankTetherFallback:
             "CTRL_SCATTER",
             {"scatter_agents": ["A", "B"], "tether_id": "tether_a"},
         )
-        assert {r.get("Tether_ID") for r in macro["topology_rows"]} == {"tether_a"}
+        # Updated 2026-09-06 (task 4c-3): the operator's name becomes the **group**
+        # tether, carried by the scatter and the merge, and the lanes are its children.
+        # Previously every row carried the literal string.
+        rows = macro["topology_rows"]
+        tethers = {str(r.get("Tether_ID") or "") for r in rows}
+
+        assert {lane_group(t) for t in tethers} == {"tether_a"}
+        assert {str(r["Tether_ID"]) for r in rows if r["Node_ID"] in ("A", "B")} == {
+            "tether_a.1", "tether_a.2",
+        }
 
     def test_the_generated_tether_is_stable_across_calls(self) -> None:
         """The previous default was keyed on ``id()`` of a freshly built list.
@@ -611,9 +631,14 @@ class TestD3BlankTetherFallback:
             macro["topology_rows"], {}, step_index=0
         )
 
-        tethers = {r[15] for r in hydrated}
-        assert len(tethers) == 1
+        tethers = {str(r[15] or "") for r in hydrated}
         assert "" not in tethers
+        # Updated 2026-09-06 (task 4c-3): per-lane tethers, one gather scope. Hydration
+        # must carry the lane identity through to the CSV column, not flatten it — which
+        # is the half of this test that still matters, since Tether_ID was once dropped
+        # entirely by the flatten step.
+        assert {lane_group(t) for t in tethers} == {lane_group(next(iter(tethers)))}
+        assert len(tethers) == 3, f"group + 2 lanes should survive hydration: {tethers}"
 
     def test_the_worker_scatter_route_never_stamps_a_blank_tether(self) -> None:
         """Structural guard on the route that tethers every lane.

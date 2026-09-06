@@ -40,6 +40,7 @@ from maccre_core.orchestration.deterministic_nodes import (
 from maccre_core.orchestration.local_broker import LocalMessageBroker
 from maccre_core.orchestration.payload_modes import DEFAULT_PAYLOAD_MODE
 from maccre_core.orchestration.swarm_pool import DynamicSwarmPool
+from maccre_core.orchestration.tether import TetherIdError, child_tether_ids
 from maccre_core.orchestration.topology_engine import TopologyEngine
 from maccre_core.orchestration.topology_graph import (
     entry_nodes,
@@ -556,10 +557,42 @@ class FlowRunner:
                 # value never applies. Measured live: every task_queue row carried
                 # an empty tether, which left the tether-scoped fan-in unreachable
                 # and an 8-lane CTRL_MERGE gathering 1 source instead of 8.
-                tether_id: str = (
+                group_tether: str = (
                     str(cfg.get("tether_id") or "").strip()
                     or _default_tether_id(scatter_agents)
                 )
+
+                # ── Per-lane tethers. Task 4c-3. ──────────────────────────────
+                #
+                # The scatter and the merge keep the **group** tether; each lane gets its
+                # own child of it. `tether.lane_group` maps a lane back to the group, and
+                # that is what the fan-in gate matches on (task 4c-1), so the merge still
+                # gathers exactly these lanes — while the lanes are now individually
+                # addressable, which is what Requirements 29, 31, 32 and 19 all needed and
+                # none of them could have while one value covered the whole scatter.
+                #
+                # An operator-typed tether reaches here unvalidated: the Tether ID box
+                # accepts any text, and a value containing `,` `|` `@` or `>` would be
+                # re-split by another parser — `Wait_For` would read one lane as two. That
+                # was already true before this change and merely silent; `child_tether_ids`
+                # refuses it. So it is caught, reported at ERROR naming the offending value
+                # and the reason, and **replaced with the generated tether** rather than
+                # either propagating a corrupting value or failing the flow build. The
+                # substitution is loud and the result is well-formed; propagating would be
+                # the approximately-correct identifier Principle 2 forbids.
+                try:
+                    lane_tethers: list[str] = child_tether_ids(group_tether, len(scatter_agents))
+                except TetherIdError as exc:
+                    fallback = _default_tether_id(scatter_agents)
+                    logger.error(
+                        "[FLOW_ENGINE] Tether ID %r cannot be used: it %s. Falling back to "
+                        "the generated tether %r for this scatter. Fix the Tether ID field "
+                        "to keep your own name.",
+                        group_tether, exc.reason, fallback,
+                    )
+                    group_tether = fallback
+                    lane_tethers = child_tether_ids(group_tether, len(scatter_agents))
+
                 topo_rows: list[dict[str, Any]] = []
 
                 # 1. CTRL_SCATTER entry node → fans out to all agents
@@ -572,11 +605,12 @@ class FlowRunner:
                     "Instruction_Override": f"scatter_mode={scatter_mode}",
                     "Wait_For": "none",
                     "Failure_Target": "FAILED",
-                    "Tether_ID": tether_id,
+                    # The scatter sits at the group level, and is its own gather scope.
+                    "Tether_ID": group_tether,
                 })
 
-                # 2. One row per slotted agent with profile overrides
-                for agent_name in scatter_agents:
+                # 2. One row per slotted agent, each on ITS OWN lane tether
+                for lane_index, agent_name in enumerate(scatter_agents):
                     ovr = agent_overrides.get(agent_name, {})
                     topo_rows.append({
                         "Node_ID": agent_name,
@@ -588,7 +622,10 @@ class FlowRunner:
                         "Wait_For": "none",
                         "Failure_Target": "FAILED",
                         "Tools_Allowed": str(ovr.get("tools_allowed", "")),
-                        "Tether_ID": tether_id,
+                        # `X.1`, `X.2`, ... — one per lane, in declared order, so a lane is
+                        # addressable as `AGENT_A@X.1`. `lane_group` maps each back to
+                        # `group_tether`, which is what the merge gathers by.
+                        "Tether_ID": lane_tethers[lane_index],
                     })
 
                 # 3. CTRL_MERGE fan-in — waits for all agents
@@ -601,12 +638,16 @@ class FlowRunner:
                     "Instruction_Override": "",
                     "Wait_For": "|".join(scatter_agents),
                     "Failure_Target": "FAILED",
-                    "Tether_ID": tether_id,
+                    # The merge sits at the group level too — it IS the gather scope the
+                    # lanes below it belong to. Giving it a lane tether is the deadlock
+                    # task 4c-2 exists to prevent.
+                    "Tether_ID": group_tether,
                 })
 
                 logger.info(
-                    "[FLOW_ENGINE] Auto-wrapped CTRL_SCATTER with %d agents: %s",
-                    len(scatter_agents), scatter_agents,
+                    "[FLOW_ENGINE] Auto-wrapped CTRL_SCATTER with %d agents on group "
+                    "tether %s; lanes %s .. %s",
+                    len(scatter_agents), group_tether, lane_tethers[0], lane_tethers[-1],
                 )
                 return {
                     "name": name,
